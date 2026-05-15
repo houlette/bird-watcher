@@ -13,7 +13,8 @@ from pathlib import Path
 import cv2
 from sqlalchemy.orm import Session
 
-from db.models import Detection, Visit
+from db.models import Detection, Species, Visit
+from pipeline.classify import SpeciesPrediction, classify_bird
 from pipeline.detect import detect_birds
 from pipeline.frames import extract_frames
 from pipeline.track import Track, Tracker
@@ -61,14 +62,26 @@ def process_visit(visit: Visit, db: Session) -> int:
     for track in tracks:
         if not track.detections:
             continue
-        crop_rel_path = _save_best_crop(track, frames_by_index, visit_id=visit.id)
+        crop_rel_path, crop_image = _save_best_crop(track, frames_by_index, visit_id=visit.id)
         best = track.best_detection
+
+        # Phase 3: classify the best per-track crop. Top-5 stored on the
+        # detection so the Phase 4 fusion step can re-rank with priors.
+        predictions = classify_bird(crop_image)
+        species_id = _resolve_species(db, predictions[0].species) if predictions else None
+        classifier_confidence = predictions[0].probability if predictions else 0.0
+
         db.add(
             Detection(
                 visit_id=visit.id,
-                species_id=None,  # filled by Phase 3
-                confidence=best.confidence,
-                raw_predictions=[],
+                species_id=species_id,
+                # We use the classifier's top-1 probability as the headline
+                # confidence rather than the detector's; YOLO's "is a bird"
+                # score is rarely the user's question.
+                confidence=classifier_confidence,
+                raw_predictions=[
+                    {"species": p.species, "p": p.probability} for p in predictions
+                ],
                 audio_confirmed=False,
                 crop_path=str(crop_rel_path),
                 bbox=list(best.bbox),
@@ -83,8 +96,17 @@ def process_visit(visit: Visit, db: Session) -> int:
     return len(tracks)
 
 
-def _save_best_crop(track: Track, frames_by_index: dict, *, visit_id: int) -> Path:
-    """Write the best-crop image for a track to disk; return its path relative to DATA_DIR."""
+def _save_best_crop(
+    track: Track,
+    frames_by_index: dict,
+    *,
+    visit_id: int,
+) -> tuple[Path, "cv2.Mat"]:
+    """Write the best-crop image for a track to disk and return (relative_path, crop_array).
+
+    Returning the crop array as well as the path lets the caller hand the same
+    image to the classifier without re-decoding it from JPEG.
+    """
     best = track.best_detection
     frame_image = frames_by_index[best.frame_index]
     x, y, w, h = best.bbox
@@ -102,4 +124,21 @@ def _save_best_crop(track: Track, frames_by_index: dict, *, visit_id: int) -> Pa
     filename = f"v{visit_id:08d}_t{track.track_id:04d}.jpg"
     out_path = CROPS_DIR / filename
     cv2.imwrite(str(out_path), crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
-    return out_path.relative_to(DATA_DIR)
+    return out_path.relative_to(DATA_DIR), crop
+
+
+def _resolve_species(db: Session, common_name: str) -> int:
+    """Get-or-create a Species row by its common name and return its id.
+
+    Classifier labels arrive with whatever casing the model uses; we normalize
+    by trimming whitespace and storing the label as-is. The scientific_name
+    field is left empty until Phase 6 (active learning) or a manual import.
+    """
+    name = common_name.strip()
+    species = db.query(Species).filter(Species.common_name == name).one_or_none()
+    if species:
+        return species.id
+    species = Species(common_name=name, scientific_name="", is_rare=False)
+    db.add(species)
+    db.flush()  # populate species.id before we attach it to a Detection
+    return species.id
