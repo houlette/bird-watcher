@@ -27,6 +27,12 @@ class Visit(Base):
     ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     clip_path: Mapped[str | None] = mapped_column(String, nullable=True)
 
+    # Pipeline state. processed_at is set by the worker when the clip has been
+    # extracted + detected + tracked. processing_error captures the last failure
+    # so we can retry or surface bad clips.
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    processing_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     detections: Mapped[list["Detection"]] = relationship(back_populates="visit", cascade="all, delete-orphan")
 
 

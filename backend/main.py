@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from db.session import init_db
+from pipeline.worker import start_worker
 from routers import corrections, detections, ingest, push
 
 DATA_DIR = Path(__file__).parent / "data"
@@ -16,8 +17,12 @@ DATA_DIR.mkdir(exist_ok=True)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    # TODO Phase 4: start Haikubox poller via APScheduler here
-    yield
+    scheduler = start_worker()
+    # TODO Phase 4: also start Haikubox poller on the same scheduler.
+    try:
+        yield
+    finally:
+        scheduler.shutdown(wait=False)
 
 
 app = FastAPI(title="BirdWatcher", lifespan=lifespan)
