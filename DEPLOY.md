@@ -10,12 +10,19 @@ The whole deploy takes about 30 minutes of clock time, most of it waiting for ML
 
 ## 1. Provision the VM
 
-Pick one. Both are fine; specs are equivalent.
+Pick one. All three are fine for this workload.
 
-| Provider | Plan | Cost | Specs |
+| Provider / plan | Cost | Specs | Why pick it |
 |---|---|---|---|
-| Hetzner | **CCX13** (AMD) | ~$15/mo | 2 vCPU, 8 GB RAM, 80 GB SSD, US-east |
-| Contabo | **Cloud VPS S** | ~$7/mo | 4 vCPU, 8 GB RAM, 200 GB NVMe, US |
+| Hetzner **CAX21** (ARM shared) | ~$6/mo | 4 vCPU, 8 GB RAM, 80 GB SSD | **Recommended.** All our deps have ARM64 wheels; we're already running ARM Docker images during dev. Best price/perf for bursty inference. |
+| Contabo **Cloud VPS S** | ~$7/mo | 4 vCPU, 8 GB RAM, 200 GB NVMe | If you want more disk for clip retention; US-based. |
+| Hetzner **CPX31** (x86 shared) | ~$13/mo | 4 vCPU, 8 GB RAM, 80 GB SSD | x86 if you ever need a closed-source binary that doesn't ship ARM. |
+
+Notes on what to skip:
+
+- **Hetzner CCX (dedicated)**: noisy-neighbor protection isn't worth the 2.5× price for a bird camera that does ~20 minutes of CPU/day. Easy to upgrade to later if you ever see contention.
+- **AWS Spot**: termination = data loss.
+- **AWS Lambda**: wrong shape (cold starts + always-on polling).
 
 Whichever you choose:
 
