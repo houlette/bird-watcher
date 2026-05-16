@@ -1,10 +1,11 @@
-"""Web Push subscription management (Phase 5 wiring; stubbed for Phase 1)."""
+"""Web Push subscription management + VAPID public key endpoint."""
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from db.models import PushSubscription
 from db.session import get_db
+from settings import settings
 
 router = APIRouter()
 
@@ -17,7 +18,17 @@ class SubscriptionKeys(BaseModel):
 class SubscribeRequest(BaseModel):
     endpoint: str
     keys: SubscriptionKeys
-    rare_threshold: int = 5
+    notify_window_days: int = 30
+
+
+@router.get("/vapid_public_key")
+async def vapid_public_key() -> dict:
+    """Return the VAPID public key so the browser can subscribe via PushManager.
+
+    Empty string when push hasn't been configured yet — the frontend should
+    show a 'push not available' state in that case rather than failing hard.
+    """
+    return {"public_key": settings.vapid_public_key}
 
 
 @router.post("/subscribe")
@@ -26,14 +37,14 @@ async def subscribe(req: SubscribeRequest, db: Session = Depends(get_db)) -> dic
     if existing:
         existing.p256dh = req.keys.p256dh
         existing.auth = req.keys.auth
-        existing.rare_threshold = req.rare_threshold
+        existing.notify_window_days = req.notify_window_days
     else:
         db.add(
             PushSubscription(
                 endpoint=req.endpoint,
                 p256dh=req.keys.p256dh,
                 auth=req.keys.auth,
-                rare_threshold=req.rare_threshold,
+                notify_window_days=req.notify_window_days,
             )
         )
     db.commit()

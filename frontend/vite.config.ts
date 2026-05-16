@@ -5,9 +5,18 @@ import { VitePWA } from "vite-plugin-pwa";
 export default defineConfig({
   plugins: [
     react(),
+    // injectManifest strategy: vite-plugin-pwa builds + precaches the assets,
+    // but our own src/sw.ts owns the service worker so we can implement
+    // push + notificationclick handlers (which generateSW doesn't expose).
     VitePWA({
+      strategies: "injectManifest",
+      srcDir: "src",
+      filename: "sw.ts",
       registerType: "autoUpdate",
       includeAssets: ["icons/*.png"],
+      injectManifest: {
+        globPatterns: ["**/*.{js,css,html,ico,png,svg}"],
+      },
       manifest: {
         name: "BirdWatcher",
         short_name: "Birds",
@@ -20,20 +29,6 @@ export default defineConfig({
           { src: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
           { src: "/icons/icon-512.png", sizes: "512x512", type: "image/png" },
           { src: "/icons/icon-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
-        ],
-      },
-      workbox: {
-        globPatterns: ["**/*.{js,css,html,ico,png,svg}"],
-        // Push notification handler is in src/sw-push.ts; Workbox will inject it.
-        runtimeCaching: [
-          {
-            urlPattern: /^https:\/\/birdwatcher\.ryanhoulette\.com\/media\//,
-            handler: "CacheFirst",
-            options: {
-              cacheName: "birdwatcher-media",
-              expiration: { maxEntries: 500, maxAgeSeconds: 60 * 60 * 24 * 7 },
-            },
-          },
         ],
       },
     }),

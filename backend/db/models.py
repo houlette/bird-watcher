@@ -79,7 +79,10 @@ class PushSubscription(Base):
     endpoint: Mapped[str] = mapped_column(Text, unique=True)
     p256dh: Mapped[str] = mapped_column(Text)
     auth: Mapped[str] = mapped_column(Text)
-    rare_threshold: Mapped[int] = mapped_column(Integer, default=5)  # notify if seen <N times/month
+    # Push when this species has not been seen in the last N days.
+    # Default 30: a typical Baltimore Oriole arriving in May after winter
+    # absence pings; a House Sparrow showing up for the hundredth time doesn't.
+    notify_window_days: Mapped[int] = mapped_column(Integer, default=30)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

@@ -18,6 +18,7 @@ from pipeline.classify import SpeciesPrediction, classify_bird
 from pipeline.detect import detect_birds
 from pipeline.frames import extract_frames
 from pipeline.fuse import fuse
+from pipeline.notify import dispatch_for_detection
 from pipeline.track import Track, Tracker
 
 log = logging.getLogger(__name__)
@@ -100,27 +101,34 @@ def process_visit(visit: Visit, db: Session) -> int:
         crop_rel_path, _ = _save_best_crop(track, frames_by_index, visit_id=visit.id)
         species_id = _resolve_species(db, top.species)
 
-        db.add(
-            Detection(
-                visit_id=visit.id,
-                species_id=species_id,
-                confidence=top.probability,
-                raw_predictions=[
-                    {
-                        "species": f.species,
-                        "raw": raw_labels.get(f.species, ""),
-                        "p": f.probability,
-                        "audio": f.audio_confirmed,
-                    }
-                    for f in fused
-                ],
-                audio_confirmed=bool(top.audio_confirmed),
-                crop_path=str(crop_rel_path),
-                bbox=list(best.bbox),
-                track_id=track.track_id,
-            )
+        detection = Detection(
+            visit_id=visit.id,
+            species_id=species_id,
+            confidence=top.probability,
+            raw_predictions=[
+                {
+                    "species": f.species,
+                    "raw": raw_labels.get(f.species, ""),
+                    "p": f.probability,
+                    "audio": f.audio_confirmed,
+                }
+                for f in fused
+            ],
+            audio_confirmed=bool(top.audio_confirmed),
+            crop_path=str(crop_rel_path),
+            bbox=list(best.bbox),
+            track_id=track.track_id,
         )
+        db.add(detection)
+        db.flush()  # populate detection.id + created_at before push dispatch
         persisted += 1
+
+        # Phase 5: notify subscribers if this species hasn't been seen recently.
+        # Failures here are non-fatal — push is a nice-to-have, not a blocker.
+        try:
+            dispatch_for_detection(db, detection)
+        except Exception:  # noqa: BLE001
+            log.exception("Push dispatch failed for detection %d", detection.id)
     log.info("visit %d: %d tracks persisted (after not_a_bird filter)", visit.id, persisted)
 
     visit.processed_at = datetime.utcnow()
