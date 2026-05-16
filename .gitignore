@@ -33,3 +33,4 @@ vapid_*.pem
 
 # Claude local settings
 .claude/settings.local.json
+.claude/scheduled_tasks.lock

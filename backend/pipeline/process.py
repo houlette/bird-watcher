@@ -60,10 +60,10 @@ def process_visit(visit: Visit, db: Session) -> int:
     tracks = tracker.finalize()
     log.info("visit %d: %d tracks", visit.id, len(tracks))
 
+    persisted = 0
     for track in tracks:
         if not track.detections:
             continue
-        crop_rel_path, crop_image = _save_best_crop(track, frames_by_index, visit_id=visit.id)
         best = track.best_detection
 
         # Multi-frame voting: classify up to 3 crops from this track (best
@@ -71,6 +71,16 @@ def process_visit(visit: Visit, db: Session) -> int:
         # frames). Average their softmax distributions before fusion.
         crops_to_classify = _select_voting_crops(track, frames_by_index)
         per_crop_predictions = [classify_bird(c) for c in crops_to_classify]
+
+        # Drop empty per-crop predictions (the classifier's not_a_bird gate
+        # returns an empty list for crops it doesn't think are birds). If
+        # every crop in this track was rejected, the track was a false
+        # positive from YOLO and we skip it entirely — no Detection, no crop.
+        per_crop_predictions = [p for p in per_crop_predictions if p]
+        if not per_crop_predictions:
+            log.info("track %d: all crops rejected as not_a_bird, skipping", track.track_id)
+            continue
+
         averaged = _average_predictions(per_crop_predictions)
 
         # Phase 4: fuse averaged visual predictions with audio + seasonal priors.
@@ -79,27 +89,39 @@ def process_visit(visit: Visit, db: Session) -> int:
             db=db,
             when=visit.started_at,
         )
+        if not fused:
+            continue
 
-        top = fused[0] if fused else None
-        species_id = _resolve_species(db, top.species) if top else None
-        headline_confidence = top.probability if top else 0.0
-        audio_confirmed = bool(top.audio_confirmed) if top else False
+        # Build a lookup of base species -> representative raw plumage label
+        # from the best (top-1) per-crop prediction set for that species.
+        raw_labels = {p.species: p.raw_label for preds in per_crop_predictions for p in preds}
+
+        top = fused[0]
+        crop_rel_path, _ = _save_best_crop(track, frames_by_index, visit_id=visit.id)
+        species_id = _resolve_species(db, top.species)
 
         db.add(
             Detection(
                 visit_id=visit.id,
                 species_id=species_id,
-                confidence=headline_confidence,
+                confidence=top.probability,
                 raw_predictions=[
-                    {"species": f.species, "p": f.probability, "audio": f.audio_confirmed}
+                    {
+                        "species": f.species,
+                        "raw": raw_labels.get(f.species, ""),
+                        "p": f.probability,
+                        "audio": f.audio_confirmed,
+                    }
                     for f in fused
                 ],
-                audio_confirmed=audio_confirmed,
+                audio_confirmed=bool(top.audio_confirmed),
                 crop_path=str(crop_rel_path),
                 bbox=list(best.bbox),
                 track_id=track.track_id,
             )
         )
+        persisted += 1
+    log.info("visit %d: %d tracks persisted (after not_a_bird filter)", visit.id, persisted)
 
     visit.processed_at = datetime.utcnow()
     visit.ended_at = datetime.utcnow()

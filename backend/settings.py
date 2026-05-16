@@ -19,7 +19,12 @@ class Settings(BaseSettings):
     # detections to count a bird as "audio-confirmed."
     audio_correlation_window_seconds: int = 90
 
-    # Bird species classifier override (also read directly in classify.py).
+    # Bird species classifier (HuggingFace transformers image-classification).
+    # Default: dennisjooo/Birds-Classifier-EfficientNetB2 (525-class gpiosenka
+    # dataset), post-filtered to an eastern-NA backyard species allow-list
+    # inside pipeline/classify.py. Override to swap models entirely; if your
+    # replacement is already North-America-only, you can disable the allow-list
+    # by editing classify.NA_BACKYARD_ALLOWLIST.
     bird_classifier_model: str = os.getenv(
         "BIRD_CLASSIFIER_MODEL",
         "dennisjooo/Birds-Classifier-EfficientNetB2",
