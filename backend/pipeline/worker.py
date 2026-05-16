@@ -18,6 +18,8 @@ from sqlalchemy import select
 
 from db.models import Visit
 from db.session import SessionLocal
+from ingest.haikubox import POLL_INTERVAL_SECONDS as HAIKUBOX_POLL_SECONDS
+from ingest.haikubox import poll_once as poll_haikubox
 from pipeline.process import process_visit
 
 log = logging.getLogger(__name__)
@@ -66,6 +68,18 @@ def start_worker() -> BackgroundScheduler:
         coalesce=True,
         id="process_pending_visits",
     )
+    scheduler.add_job(
+        poll_haikubox,
+        "interval",
+        seconds=HAIKUBOX_POLL_SECONDS,
+        max_instances=1,
+        coalesce=True,
+        id="poll_haikubox",
+    )
     scheduler.start()
-    log.info("Pipeline worker started (poll every %ds)", POLL_INTERVAL_SECONDS)
+    log.info(
+        "Workers started: pipeline every %ds, Haikubox poller every %ds",
+        POLL_INTERVAL_SECONDS,
+        HAIKUBOX_POLL_SECONDS,
+    )
     return scheduler
