@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from db.session import init_db
 from pipeline.worker import start_worker
-from routers import corrections, detections, ingest, push
+from routers import corrections, detections, ingest, push, species
 
 DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
@@ -39,6 +39,7 @@ app.include_router(ingest.router, prefix="/api/ingest", tags=["ingest"])
 app.include_router(detections.router, prefix="/api/detections", tags=["detections"])
 app.include_router(push.router, prefix="/api/push", tags=["push"])
 app.include_router(corrections.router, prefix="/api/corrections", tags=["corrections"])
+app.include_router(species.router, prefix="/api/species", tags=["species"])
 
 # Serve uploaded clips/crops at /media (the PWA reads from here)
 app.mount("/media", StaticFiles(directory=DATA_DIR), name="media")

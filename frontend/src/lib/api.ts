@@ -20,3 +20,22 @@ export async function fetchDetections(params: { limit?: number; species_id?: num
   if (!r.ok) throw new Error(`fetchDetections: ${r.status}`);
   return (await r.json()) as Detection[];
 }
+
+export type SpeciesEntry = { name: string; total: number };
+export type SpeciesList = { source: "calibration" | "fallback"; species: SpeciesEntry[] };
+
+export async function fetchSpecies(): Promise<SpeciesList> {
+  const r = await fetch("/api/species");
+  if (!r.ok) throw new Error(`fetchSpecies: ${r.status}`);
+  return (await r.json()) as SpeciesList;
+}
+
+export async function submitCorrection(detection_id: number, correct_species_name: string) {
+  const r = await fetch("/api/corrections", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ detection_id, correct_species_name }),
+  });
+  if (!r.ok) throw new Error(`submitCorrection: ${r.status}`);
+  return (await r.json()) as { ok: boolean; species_id: number; species: string };
+}
