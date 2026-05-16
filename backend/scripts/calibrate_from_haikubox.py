@@ -55,8 +55,10 @@ INTER_REQUEST_SLEEP_SECONDS = 0.20  # polite to the API; well under any plausibl
 
 OUTPUT_PATH = Path(__file__).resolve().parent.parent / "data" / "calibration" / "yard_priors.json"
 
-# Field-name fallbacks shared with the live poller (ingest/haikubox.py).
-_SPECIES_KEYS = ("common_name", "commonName", "species", "name")
+# Field-name fallbacks. The Haikubox v2 yearly-count / daily-count endpoints
+# return [{"bird": <name>, "count": <int>}, ...] at the top level. We keep
+# the longer-form keys as fallbacks for forward compatibility.
+_SPECIES_KEYS = ("bird", "cn", "common_name", "commonName", "species", "name")
 _COUNT_KEYS = ("count", "n", "total", "detections")
 _DATE_KEYS = ("date", "day")
 

@@ -38,9 +38,13 @@ BASE_URL = "https://api.haikubox.com"
 REQUEST_TIMEOUT_SECONDS = 15
 POLL_INTERVAL_SECONDS = 30
 
-# Field-name fallbacks. First match wins.
-_SPECIES_KEYS = ("common_name", "commonName", "species", "name")
-_TIMESTAMP_KEYS = ("detected_at", "detectedAt", "timestamp", "time", "observed_at")
+# Field-name fallbacks. First match wins. The Haikubox v2 API actually
+# returns 'cn' (common name) + 'dt' (ISO timestamp) — confirmed by probing
+# /haikubox/<serial>/detections. The longer-form keys are kept as fallbacks
+# in case the API ever returns alternate names (e.g. if BirdWeather PUC
+# integration ever lands).
+_SPECIES_KEYS = ("cn", "common_name", "commonName", "species", "name")
+_TIMESTAMP_KEYS = ("dt", "detected_at", "detectedAt", "timestamp", "time", "observed_at")
 _CONFIDENCE_KEYS = ("confidence", "score", "probability")
 
 
