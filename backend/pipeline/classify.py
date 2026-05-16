@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from transformers import PreTrainedModel  # type: ignore
     from transformers.image_processing_utils import BaseImageProcessor  # type: ignore
 
+from pipeline import calibration
 from settings import settings
 
 log = logging.getLogger(__name__)
@@ -201,9 +202,18 @@ def _load() -> tuple["PreTrainedModel", "BaseImageProcessor"]:
             _model.eval()
 
             id2label = _model.config.id2label
-            # Hyphen-insensitive allow-list for matching against the model's
-            # labels (the gpiosenka dataset is inconsistent about hyphens).
-            allowlist_normalized = {_hyphen_insensitive(name) for name in NA_BACKYARD_ALLOWLIST}
+            # Prefer the yard-specific allow-list (from yard_priors.json built
+            # by scripts/calibrate_from_haikubox.py — species the Haikubox has
+            # actually heard at this site). Fall back to the hand-coded
+            # NA_BACKYARD_ALLOWLIST if no calibration exists.
+            calibrated = calibration.get_allowlist()
+            if calibrated:
+                source_list = calibrated
+                log.info("Allow-list source: yard calibration (%d species)", len(calibrated))
+            else:
+                source_list = NA_BACKYARD_ALLOWLIST
+                log.info("Allow-list source: hand-coded eastern-NA fallback (%d species)", len(source_list))
+            allowlist_normalized = {_hyphen_insensitive(name) for name in source_list}
             allowed = [
                 int(idx)
                 for idx, label in id2label.items()

@@ -29,6 +29,7 @@ from typing import Iterable
 from sqlalchemy.orm import Session
 
 from db.models import HaikuboxDetection
+from pipeline import calibration
 from settings import settings
 
 log = logging.getLogger(__name__)
@@ -98,6 +99,15 @@ _SEASONAL_PRIORS: dict[str, dict[int, float]] = {
 
 
 def _seasonal_multiplier(species: str, month: int) -> float:
+    """Pick the seasonal prior multiplier for `species` in `month`.
+
+    Prefer the yard-calibrated monthly distribution (built from real Haikubox
+    detections). Fall back to the hand-coded eastern-NA table when no
+    calibration is present.
+    """
+    calibrated = calibration.get_monthly_multiplier(species, month)
+    if calibrated is not None:
+        return calibrated
     return _SEASONAL_PRIORS.get(species, {}).get(month, 1.0)
 
 
