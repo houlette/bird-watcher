@@ -70,7 +70,11 @@ export async function subscribe(notify_window_days: number): Promise<PushState> 
   if (!sub) {
     sub = await reg.pushManager.subscribe({
       userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(publicKey),
+      // Cast: TS's newer lib.dom types declare BufferSource as needing an
+      // ArrayBuffer-backed view specifically (not ArrayBufferLike). At
+      // runtime our Uint8Array is always ArrayBuffer-backed; the cast tells
+      // the type system so without forcing every caller to widen.
+      applicationServerKey: urlBase64ToUint8Array(publicKey) as BufferSource,
     });
   }
 
