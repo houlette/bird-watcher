@@ -55,6 +55,13 @@ chown -R ryan:ryan /home/ryan/.ssh
 chmod 700 /home/ryan/.ssh
 chmod 600 /home/ryan/.ssh/authorized_keys
 
+# Allow ryan to sudo without a password (because --disabled-password above
+# means there IS no password to type, and bootstrap_server.sh runs sudo
+# non-interactively). Safe given SSH-key-only auth: anyone with sudo here
+# already has SSH access.
+echo 'ryan ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/ryan
+chmod 0440 /etc/sudoers.d/ryan
+
 # Lock down SSH
 sed -i 's/^#*PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config
 sed -i 's/^#*PasswordAuthentication .*/PasswordAuthentication no/' /etc/ssh/sshd_config
