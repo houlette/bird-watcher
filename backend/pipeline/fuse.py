@@ -29,6 +29,7 @@ from typing import Iterable
 from sqlalchemy.orm import Session
 
 from db.models import HaikuboxDetection
+from db.utils import utcnow
 from pipeline import calibration
 from settings import settings
 
@@ -122,7 +123,7 @@ def fuse(
     `predictions` is the top-K from the classifier as (species, probability).
     Returns a list of FusedPrediction sorted by posterior probability desc.
     """
-    when = when or datetime.utcnow()
+    when = when or utcnow()
     audio_heard = _audio_species_set(db, when) if (settings.haikubox_serial and settings.haikubox_api_key) else set()
     month = when.month
 

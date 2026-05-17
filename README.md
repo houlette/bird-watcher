@@ -7,7 +7,10 @@ AI-powered bird-feeder camera that complements a Haikubox (audio bird-ID) with v
 - **Frontend**: Vite/React/TS PWA with Web Push for rare-species notifications
 - **Host**: `birdwatcher.ryanhoulette.com`
 
-See `/Users/ryan/.claude/plans/my-wife-has-many-buzzing-noodle.md` for the full design.
+- **Design plan**: `/Users/ryan/.claude/plans/my-wife-has-many-buzzing-noodle.md`
+- **How the code fits together**: [`DEVELOPING.md`](./DEVELOPING.md)
+- **Cloud-VM provisioning runbook**: [`DEPLOY.md`](./DEPLOY.md)
+- **Common dev tasks**: `make help`
 
 ## Development
 

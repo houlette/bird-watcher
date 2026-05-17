@@ -12,6 +12,7 @@ from sqlalchemy.pool import StaticPool
 
 from db.models import Correction, Detection, Species, Visit
 from db.session import Base, get_db
+from db.utils import utcnow
 from main import app
 from pipeline import calibration
 
@@ -92,7 +93,7 @@ def _seed_detection(db, species_name: str = "Northern Cardinal") -> int:
     species = Species(common_name=species_name, scientific_name="", is_rare=False)
     db.add(species)
     db.flush()
-    visit = Visit(started_at=datetime.utcnow(), clip_path="clips/test.webm")
+    visit = Visit(started_at=utcnow(), clip_path="clips/test.webm")
     db.add(visit)
     db.flush()
     det = Detection(
@@ -116,7 +117,7 @@ def test_correction_updates_detection_species(client, db):
     assert body["species"] == "White-throated Sparrow"
 
     # Detection now points at the new species
-    det = db.query(Detection).get(det_id)
+    det = db.get(Detection, det_id)
     db.refresh(det)
     assert det.species.common_name == "White-throated Sparrow"
 

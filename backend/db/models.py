@@ -5,6 +5,7 @@ from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.session import Base
+from db.utils import utcnow
 
 
 class Species(Base):
@@ -23,7 +24,7 @@ class Visit(Base):
     __tablename__ = "visits"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     clip_path: Mapped[str | None] = mapped_column(String, nullable=True)
 
@@ -55,7 +56,7 @@ class Detection(Base):
     bbox: Mapped[list] = mapped_column(JSON)  # [x, y, w, h]
     track_id: Mapped[int] = mapped_column(Integer)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     visit: Mapped[Visit] = relationship(back_populates="detections")
     species: Mapped[Species | None] = relationship()
@@ -83,7 +84,7 @@ class PushSubscription(Base):
     # Default 30: a typical Baltimore Oriole arriving in May after winter
     # absence pings; a House Sparrow showing up for the hundredth time doesn't.
     notify_window_days: Mapped[int] = mapped_column(Integer, default=30)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class Correction(Base):
@@ -94,4 +95,4 @@ class Correction(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     detection_id: Mapped[int] = mapped_column(ForeignKey("detections.id"), index=True)
     correct_species_id: Mapped[int] = mapped_column(ForeignKey("species.id"))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

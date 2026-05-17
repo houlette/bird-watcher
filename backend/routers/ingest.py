@@ -7,7 +7,6 @@ Reolink HTTP push: configured in the camera's web UI under
 Settings → Surveillance → HTTP push, pointing at:
   https://birdwatcher.ryanhoulette.com/api/ingest/motion
 """
-from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, UploadFile
@@ -15,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from db.models import Visit
 from db.session import get_db
+from db.utils import utcnow
 
 router = APIRouter()
 
@@ -28,7 +28,7 @@ async def receive_motion(
     db: Session = Depends(get_db),
 ) -> dict:
     """Receive a motion-event clip from the camera and queue it for processing."""
-    now = datetime.utcnow()
+    now = utcnow()
     filename = f"{now:%Y%m%d_%H%M%S_%f}_{file.filename}"
     dest = CLIPS_DIR / filename
 

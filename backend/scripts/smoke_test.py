@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 import sys
-from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -27,6 +26,7 @@ log = logging.getLogger("smoke")
 def main() -> int:
     from db.models import Detection, Visit
     from db.session import SessionLocal, init_db
+    from db.utils import utcnow
     from pipeline.process import DATA_DIR, process_visit
 
     clip_arg = sys.argv[1] if len(sys.argv) > 1 else "clips/smoke_test.webm"
@@ -48,15 +48,15 @@ def main() -> int:
     db = SessionLocal()
     try:
         log.info("Creating Visit pointing at %s", clip_rel)
-        visit = Visit(started_at=datetime.utcnow(), clip_path=clip_rel)
+        visit = Visit(started_at=utcnow(), clip_path=clip_rel)
         db.add(visit)
         db.commit()
         db.refresh(visit)
 
         log.info("Running pipeline (this loads YOLO + classifier on first call)…")
-        t0 = datetime.utcnow()
+        t0 = utcnow()
         n_tracks = process_visit(visit, db)
-        elapsed = (datetime.utcnow() - t0).total_seconds()
+        elapsed = (utcnow() - t0).total_seconds()
         log.info("Pipeline done: %d tracks in %.1fs", n_tracks, elapsed)
 
         # Refresh and print the resulting Detection rows.

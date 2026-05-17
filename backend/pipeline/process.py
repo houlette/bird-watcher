@@ -7,13 +7,13 @@ and `_persist_detections()`.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from pathlib import Path
 
 import cv2
 from sqlalchemy.orm import Session
 
 from db.models import Detection, Species, Visit
+from db.utils import utcnow
 from pipeline.classify import SpeciesPrediction, classify_bird
 from pipeline.detect import detect_birds
 from pipeline.frames import extract_frames
@@ -53,7 +53,7 @@ def process_visit(visit: Visit, db: Session) -> int:
 
     if last_frame_image is None:
         # Empty/corrupted clip — mark processed so we don't retry forever.
-        visit.processed_at = datetime.utcnow()
+        visit.processed_at = utcnow()
         visit.processing_error = "no frames decoded"
         db.commit()
         return 0
@@ -131,8 +131,8 @@ def process_visit(visit: Visit, db: Session) -> int:
             log.exception("Push dispatch failed for detection %d", detection.id)
     log.info("visit %d: %d tracks persisted (after not_a_bird filter)", visit.id, persisted)
 
-    visit.processed_at = datetime.utcnow()
-    visit.ended_at = datetime.utcnow()
+    visit.processed_at = utcnow()
+    visit.ended_at = utcnow()
     visit.processing_error = None
     db.commit()
     return len(tracks)

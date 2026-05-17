@@ -65,7 +65,7 @@ def dispatch_for_detection(db: Session, detection: Detection) -> int:
     whose `notify_window_days` makes this detection rare for them."""
     if not detection.species_id:
         return 0
-    species = db.query(Species).get(detection.species_id)
+    species = db.get(Species, detection.species_id)
     if species is None:
         return 0
 

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from db.models import Detection, Species, Visit
 from db.session import Base
+from db.utils import utcnow
 from pipeline.notify import is_rare
 
 
@@ -33,7 +34,7 @@ def _seed(db: Session, species_name: str = "Northern Cardinal") -> tuple[int, Vi
     species = Species(common_name=species_name, scientific_name="", is_rare=False)
     db.add(species)
     db.flush()
-    visit = Visit(started_at=datetime.utcnow(), clip_path="clips/test.webm")
+    visit = Visit(started_at=utcnow(), clip_path="clips/test.webm")
     db.add(visit)
     db.flush()
     return species.id, visit
