@@ -116,8 +116,8 @@ nano backend/.env
 Fill in `backend/.env`:
 
 ```
-HAIKUBOX_API_KEY=weft_REDACTED
-HAIKUBOX_SERIAL=SERIAL_REDACTED
+HAIKUBOX_API_KEY=weft_xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx   # from haikubox.com → settings → API keys
+HAIKUBOX_SERIAL=XXXXXXXXXXXX                                  # 12 hex chars; emailed when you registered
 VAPID_SUBJECT=mailto:you@example.com
 # VAPID_PUBLIC_KEY filled in by step 6
 ```

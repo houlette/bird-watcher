@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     )
     # 'sub' claim for the VAPID JWT — push services require either a mailto:
     # or an https URL so they can contact the app owner if abuse happens.
+    # Set VAPID_SUBJECT in .env to your real contact; the default is a no-op
+    # placeholder so the repo doesn't ship a personal email address.
     vapid_subject: str = os.getenv("VAPID_SUBJECT", "mailto:you@example.com")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
