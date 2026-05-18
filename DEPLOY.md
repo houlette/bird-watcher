@@ -107,7 +107,7 @@ docker --version  # sanity check
 ## 5. Deploy the code
 
 ```bash
-git clone https://github.com/<your-account>/BirdWatcher.git  # or whatever the repo URL is
+git clone https://github.com/houlette/bird-watcher.git
 cd BirdWatcher
 cp backend/.env.example backend/.env
 nano backend/.env
