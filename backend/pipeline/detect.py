@@ -23,10 +23,20 @@ if TYPE_CHECKING:  # avoid importing torch at module import time
 # we hard-code to make the intent explicit and to avoid a startup-time lookup.
 COCO_BIRD_CLASS = 14
 
-# Confidence threshold below which we ignore detections. YOLO11-nano on
-# unfamiliar feeders tends to produce some low-conf phantoms — 0.30 cuts most
-# of them while keeping small birds.
-BIRD_CONFIDENCE_THRESHOLD = 0.30
+# Confidence threshold below which we ignore detections. Lowered from 0.30
+# after real-world testing: a male cardinal at ~100 px on a 4K frame was
+# scoring around 0.18-0.22 and getting dropped. 0.15 catches small/distant
+# birds at the cost of more phantom detections — but those get re-filtered
+# downstream by classify_bird's not_a_bird gate against the NA allow-list,
+# so cheap to be lenient here.
+BIRD_CONFIDENCE_THRESHOLD = 0.15
+
+# YOLO downsamples to imgsz×imgsz before inference. Default 640 on our 4K
+# frames means a 100-px bird collapses to ~17 px after downsample —
+# borderline detectable. 1280 preserves enough detail to actually see them,
+# at ~4× the CPU cost (acceptable; we're not real-time critical and
+# processing one frame per JPG takes well under a second either way).
+YOLO_IMGSZ = 1280
 
 # Where the YOLO weights live (auto-downloaded on first run by ultralytics).
 DEFAULT_WEIGHTS_PATH = Path(__file__).parent.parent / "models" / "yolo11n.pt"
@@ -67,6 +77,7 @@ def detect_birds(frame_image: np.ndarray, frame_index: int) -> list[BirdDetectio
         frame_image,
         classes=[COCO_BIRD_CLASS],
         conf=BIRD_CONFIDENCE_THRESHOLD,
+        imgsz=YOLO_IMGSZ,
         verbose=False,
     )
     if not results:
