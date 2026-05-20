@@ -28,7 +28,7 @@ Whichever you choose:
 
 - **OS**: Ubuntu 24.04 LTS
 - **SSH**: paste in your public key during creation; password auth off
-- **Firewall**: allow 22 (SSH), 80 (HTTP), 443 (HTTPS) only
+- **Firewall**: allow 22 (SSH), 80 (HTTP), 443 (HTTPS), and **22222 (SFTP for Reolink snapshots)**. On Hetzner this is the Cloud Firewall in the dashboard, applied at the project level — it sits in front of the VM's own UFW rules and blocks anything the dashboard doesn't allow regardless of UFW state.
 - Note the public IPv4 address — you'll need it in the next step
 
 ## 2. Point DNS
