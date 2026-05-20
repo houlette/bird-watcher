@@ -115,6 +115,37 @@ generate_vapid() {
 }
 
 # ────────────────────────────────────────────────────────────────────────────
+# 4b. SFTP password (skip if .env already has one)
+# ────────────────────────────────────────────────────────────────────────────
+generate_sftp_password() {
+  if grep -qE '^SFTP_PASSWORD=.{8,}' backend/.env 2>/dev/null; then
+    log "SFTP_PASSWORD already set — leaving as-is."
+    return
+  fi
+  # Strip slashes and equals from base64 so the password is safe in URLs /
+  # config fields. 30 chars of random base64 → ~180 bits of entropy.
+  PASS=$(openssl rand -base64 30 | tr -d '/+=' | head -c 30)
+  if grep -q '^SFTP_PASSWORD=' backend/.env 2>/dev/null; then
+    sed -i.bak "s|^SFTP_PASSWORD=.*|SFTP_PASSWORD=${PASS}|" backend/.env
+  else
+    echo "SFTP_PASSWORD=${PASS}" >> backend/.env
+  fi
+  log "Generated SFTP password (write into Reolink: backend/.env SFTP_PASSWORD)"
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+# 4c. Open UFW port 22222 for the SFTP container
+# ────────────────────────────────────────────────────────────────────────────
+open_sftp_port() {
+  if sudo ufw status 2>/dev/null | grep -q '22222/tcp'; then
+    log "UFW already allows 22222/tcp — leaving as-is."
+    return
+  fi
+  log "Opening UFW 22222/tcp for SFTP (Reolink → camera uploads)…"
+  sudo ufw allow 22222/tcp comment 'SFTP for Reolink snapshots'
+}
+
+# ────────────────────────────────────────────────────────────────────────────
 # 5. Frontend build
 # ────────────────────────────────────────────────────────────────────────────
 build_frontend() {
@@ -176,6 +207,8 @@ install_docker
 install_node
 build_api
 generate_vapid
+generate_sftp_password
+open_sftp_port
 build_frontend
 start_stack
 verify_tls

@@ -181,15 +181,29 @@ The pipeline picks up the file live — no restart needed.
 
 ## 10. Configure the Reolink RLC-811WA
 
+Reolink's webhook is metadata-only (no clip body), and its FTP upload
+doesn't support motion-triggered MP4 — only motion-triggered JPG
+snapshots. So we use FTP/SFTP for the actual media transport, and treat
+the webhook as a "Test" connectivity ping only.
+
 In the Reolink web client (the camera's IP on your LAN):
 
 1. **Settings → Network → WiFi**: connect to your 5GHz WiFi. Confirm signal strength is ≥ −65 dBm at the mount point.
 2. **Settings → Detection → Motion**: enable basic motion detection. **Disable** AI Person/Vehicle/Animal — they're tuned for security cameras and miss small birds.
-3. **Settings → Recording → Schedule**: motion-triggered, 24/7.
-4. **Settings → Network → HTTP push** (or "Webhook"):
+3. **Settings → Network → FTP** (this is the SFTP destination for snapshots):
+   - Type / Protocol: **SFTP**
+   - Server: `birdwatcher.ryanhoulette.com`
+   - Port: `22222`
+   - Username: `birdcam`
+   - Password: value of `SFTP_PASSWORD` from `backend/.env` (bootstrap generated it)
+   - Remote directory: `/upload`
+   - **File Type**: **Picture (JPG)** — not Video. Reolink doesn't actually do motion-triggered MP4 upload.
+   - **Schedule**: Alarm only (uncheck Timer) — uploads on motion, not continuously.
+   - **Capture interval / count**: 1–2 s, 3–5 frames per event if your firmware supports it (gives the classifier multiple stills per visit).
+   - Hit **Test** — the camera should report success.
+4. **Settings → Network → Webhook / HTTP push** (optional but useful):
    - URL: `https://birdwatcher.ryanhoulette.com/api/ingest/motion`
-   - Method: POST, multipart upload of the motion clip
-   - Trigger: on motion event
+   - Body: anything; our endpoint returns 200 to any POST. We just keep this so the camera's Test button works, and so we have a fast signal in logs that motion fired.
 5. **Live view**: confirm framing. Adjust the varifocal lens until a typical bird at the feeder is ≥ 200 px wide. (At 4K, this is roughly the lens set to 6–10 mm depending on distance.)
 
 ## 11. End-to-end smoke test
