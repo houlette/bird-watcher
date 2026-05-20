@@ -1,4 +1,5 @@
 """BirdWatcher FastAPI entrypoint."""
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -9,6 +10,14 @@ from fastapi.staticfiles import StaticFiles
 from db.session import init_db
 from pipeline.worker import start_worker
 from routers import corrections, detections, ingest, push, species
+
+# uvicorn sets up its own loggers (uvicorn, uvicorn.access) but does NOT
+# configure the root logger. Our app modules use logging.getLogger(__name__)
+# — without this basicConfig their log.info(...) calls drop on the floor.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
