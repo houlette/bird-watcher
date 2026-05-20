@@ -119,6 +119,37 @@ def test_scan_picks_up_mp4_too(db, clips_dir, monkeypatch):
     assert worker._scan_clips_dir() == 1
 
 
+def test_capture_time_parsed_from_reolink_filename():
+    """The Reolink filename embeds the UTC capture time; we must extract it
+    so audio correlation in fuse.py uses photo-time, not worker-process-time."""
+    from datetime import datetime
+    parse = worker._capture_time_from_filename
+
+    assert parse("Birdfeeder_00_20260520123029.jpg") == datetime(2026, 5, 20, 12, 30, 29)
+    assert parse("Birdfeeder_00_20260520123029.mp4") == datetime(2026, 5, 20, 12, 30, 29)
+    # No timestamp suffix — None so the caller falls back to file mtime.
+    assert parse("RecS_random.jpg") is None
+    assert parse("notimestamp.jpg") is None
+
+
+def test_scan_uses_filename_timestamp_for_started_at(db, clips_dir, monkeypatch):
+    """A visit row created from a Reolink upload should carry the camera's
+    capture time, not the worker's `now`."""
+    from datetime import datetime
+    monkeypatch.setattr(worker, "SessionLocal", db)
+    nested = clips_dir / "upload" / "2026" / "05" / "20"
+    nested.mkdir(parents=True)
+    _make_file(nested / "Birdfeeder_00_20260520123029.jpg")
+    worker._scan_clips_dir()
+
+    session = db()
+    try:
+        v = session.query(Visit).one()
+        assert v.started_at == datetime(2026, 5, 20, 12, 30, 29)
+    finally:
+        session.close()
+
+
 def test_skipfile_marks_visit_processed_without_retry(db, clips_dir, monkeypatch):
     """When process_visit raises SkipFile, the worker should set processed_at
     so the visit doesn't get re-queued forever. Failure mode this protects

@@ -12,7 +12,9 @@ container in docker-compose using the same image with a different CMD.
 from __future__ import annotations
 
 import logging
+import re
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -48,6 +50,26 @@ MIN_FILE_AGE_SECONDS = 90
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 CLIPS_DIR = DATA_DIR / "clips"
 INGESTIBLE_EXTS = IMAGE_EXTS | VIDEO_EXTS
+
+# Reolink encodes the capture time in the upload filename:
+#   Birdfeeder_00_20260520123029.jpg → 2026-05-20 12:30:29 UTC
+# Webhook ground truth confirms the timestamp is UTC (alarmTime: ...+0000).
+# We parse this rather than using file mtime / worker time so the audio
+# correlation window in fuse.py aligns with when the photo was actually
+# taken — which can be hours earlier than when we process it if we're
+# working through a backlog.
+_CAPTURE_TIME_RE = re.compile(r"_(\d{14})\.[A-Za-z0-9]+$")
+
+
+def _capture_time_from_filename(name: str) -> datetime | None:
+    """Parse Reolink's `..._YYYYMMDDHHMMSS.ext` filename into a naive UTC datetime."""
+    m = _CAPTURE_TIME_RE.search(name)
+    if not m:
+        return None
+    try:
+        return datetime.strptime(m.group(1), "%Y%m%d%H%M%S")
+    except ValueError:
+        return None
 
 
 def _scan_clips_dir() -> int:
@@ -87,7 +109,13 @@ def _scan_clips_dir() -> int:
             rel = str(f.relative_to(DATA_DIR))
             if rel in existing:
                 continue
-            visit = Visit(started_at=utcnow(), clip_path=rel)
+            # Prefer the camera-encoded capture time from the filename;
+            # fall back to file mtime (the moment the FTP upload completed,
+            # close enough on a healthy live system); last resort is now.
+            started_at = _capture_time_from_filename(f.name)
+            if started_at is None:
+                started_at = datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc).replace(tzinfo=None)
+            visit = Visit(started_at=started_at, clip_path=rel)
             db.add(visit)
             new_count += 1
         if new_count:
