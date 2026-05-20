@@ -35,11 +35,14 @@ def db():
 def clips_dir(tmp_path, monkeypatch):
     d = tmp_path / "clips"
     d.mkdir()
+    # Patch both CLIPS_DIR (where to look) and DATA_DIR (the prefix the
+    # worker strips when computing clip_path values stored in the DB).
     monkeypatch.setattr(worker, "CLIPS_DIR", d)
+    monkeypatch.setattr(worker, "DATA_DIR", tmp_path)
     return d
 
 
-def _make_file(path, age_seconds: float = 60.0) -> None:
+def _make_file(path, age_seconds: float = 120.0) -> None:
     path.write_bytes(b"\xff\xd8\xff\xe0fake jpg payload")
     mtime = time.time() - age_seconds
     os.utime(path, (mtime, mtime))
@@ -47,7 +50,7 @@ def _make_file(path, age_seconds: float = 60.0) -> None:
 
 def test_scan_creates_visit_for_new_jpg(db, clips_dir, monkeypatch):
     monkeypatch.setattr(worker, "SessionLocal", db)
-    _make_file(clips_dir / "RecS_20260520_001234.jpg", age_seconds=60)
+    _make_file(clips_dir / "RecS_20260520_001234.jpg")
     n = worker._scan_clips_dir()
     assert n == 1
 
@@ -64,7 +67,9 @@ def test_scan_creates_visit_for_new_jpg(db, clips_dir, monkeypatch):
 def test_scan_skips_files_still_being_written(db, clips_dir, monkeypatch):
     """A file with a very recent mtime might still be uploading; skip it."""
     monkeypatch.setattr(worker, "SessionLocal", db)
-    _make_file(clips_dir / "partial.jpg", age_seconds=1)
+    # 60 s < the 90 s MIN_FILE_AGE_SECONDS threshold (a 100 MB MP4 can still
+    # be uploading at that point on residential bandwidth).
+    _make_file(clips_dir / "partial.jpg", age_seconds=60)
     n = worker._scan_clips_dir()
     assert n == 0
 
@@ -72,7 +77,7 @@ def test_scan_skips_files_still_being_written(db, clips_dir, monkeypatch):
 def test_scan_skips_files_already_tracked(db, clips_dir, monkeypatch):
     """Running scan twice on the same file should only create one Visit."""
     monkeypatch.setattr(worker, "SessionLocal", db)
-    _make_file(clips_dir / "RecS_repeat.jpg", age_seconds=60)
+    _make_file(clips_dir / "RecS_repeat.jpg")
     assert worker._scan_clips_dir() == 1
     assert worker._scan_clips_dir() == 0
 
@@ -86,15 +91,15 @@ def test_scan_skips_files_already_tracked(db, clips_dir, monkeypatch):
 def test_scan_ignores_non_media_files(db, clips_dir, monkeypatch):
     """A README.txt sitting in the clips dir shouldn't become a Visit."""
     monkeypatch.setattr(worker, "SessionLocal", db)
-    _make_file(clips_dir / "README.txt", age_seconds=60)
-    _make_file(clips_dir / "RecS.jpg", age_seconds=60)
+    _make_file(clips_dir / "README.txt")
+    _make_file(clips_dir / "RecS.jpg")
     assert worker._scan_clips_dir() == 1
 
 
 def test_scan_handles_multiple_files_in_one_tick(db, clips_dir, monkeypatch):
     monkeypatch.setattr(worker, "SessionLocal", db)
     for i in range(4):
-        _make_file(clips_dir / f"RecS_{i}.jpg", age_seconds=60)
+        _make_file(clips_dir / f"RecS_{i}.jpg")
     n = worker._scan_clips_dir()
     assert n == 4
 
@@ -107,8 +112,28 @@ def test_scan_handles_multiple_files_in_one_tick(db, clips_dir, monkeypatch):
 
 def test_scan_picks_up_mp4_too(db, clips_dir, monkeypatch):
     """Video uploads from the webhook path also work even though scan is
-    primarily for SFTP — they don't have a Visit row at scan time only if
+    primarily for FTPS — they don't have a Visit row at scan time only if
     something else races; defensive coverage."""
     monkeypatch.setattr(worker, "SessionLocal", db)
-    _make_file(clips_dir / "motion.mp4", age_seconds=60)
+    _make_file(clips_dir / "motion.mp4")
     assert worker._scan_clips_dir() == 1
+
+
+def test_scan_recurses_into_subdirectories(db, clips_dir, monkeypatch):
+    """Reolink uploads under upload/YYYY/MM/DD/ — the scan must descend."""
+    monkeypatch.setattr(worker, "SessionLocal", db)
+    nested = clips_dir / "upload" / "2026" / "05" / "20"
+    nested.mkdir(parents=True)
+    _make_file(nested / "Birdfeeder_00_20260520102329.jpg")
+    _make_file(nested / "Birdfeeder_00_20260520102329.mp4")
+    assert worker._scan_clips_dir() == 2
+
+    session = db()
+    try:
+        paths = sorted(v.clip_path for v in session.query(Visit).all())
+        assert paths == [
+            "clips/upload/2026/05/20/Birdfeeder_00_20260520102329.jpg",
+            "clips/upload/2026/05/20/Birdfeeder_00_20260520102329.mp4",
+        ]
+    finally:
+        session.close()
