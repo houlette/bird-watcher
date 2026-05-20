@@ -64,8 +64,17 @@ async def receive_motion(
 
     if upload is None:
         # Connectivity test — Reolink's Test button fires an empty request
-        # to verify the URL responds. Return 200 so the camera's UI is happy.
-        log.info("ingest ping: %s from %s", request.method, request.client.host if request.client else "?")
+        # to verify the URL responds. Also: some Reolink firmwares send
+        # motion notifications without the clip body (intended to be paired
+        # with FTP upload elsewhere); we log content-type and length to make
+        # which-flavor-of-POST diagnosis easy from the logs.
+        log.info(
+            "ingest ping: %s from %s ct=%r len=%s",
+            request.method,
+            request.client.host if request.client else "?",
+            request.headers.get("content-type"),
+            request.headers.get("content-length"),
+        )
         return {"ok": True, "kind": "ping"}
 
     now = utcnow()
