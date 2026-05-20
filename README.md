@@ -10,6 +10,7 @@ AI-powered bird-feeder camera that complements a Haikubox (audio bird-ID) with v
 - **Design plan**: `/Users/ryan/.claude/plans/my-wife-has-many-buzzing-noodle.md`
 - **How the code fits together**: [`DEVELOPING.md`](./DEVELOPING.md)
 - **Cloud-VM provisioning runbook**: [`DEPLOY.md`](./DEPLOY.md)
+- **Lessons learned the hard way**: [`LESSONS.md`](./LESSONS.md)
 - **Common dev tasks**: `make help`
 
 ## Development
