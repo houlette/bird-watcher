@@ -16,7 +16,7 @@ httpx==0.27.2
 # Video / image
 opencv-python-headless==4.10.0.84
 pillow==11.0.0
-numpy==2.1.3
+numpy==1.26.4  # pinned below 2.0 because sahi 0.11 still requires numpy<2; revisit when sahi updates
 
 # ML
 torch==2.5.1
