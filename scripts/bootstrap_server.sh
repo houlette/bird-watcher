@@ -146,6 +146,23 @@ open_sftp_port() {
 }
 
 # ────────────────────────────────────────────────────────────────────────────
+# 4d. Sync backend/.env → project-root .env for docker compose interpolation
+#
+# docker compose's ${VAR} interpolation in compose YAML resolves against the
+# .env file in the SAME DIRECTORY as docker-compose.yml (project root), not
+# the env_file directive on a service. Our application config lives in
+# backend/.env (which the api service loads via env_file at runtime). To make
+# values like SFTP_PASSWORD resolvable in the sftp service's `command:`, we
+# copy backend/.env → ./.env. Backend/.env stays authoritative; this is a
+# one-way mirror regenerated on every bootstrap.
+# ────────────────────────────────────────────────────────────────────────────
+sync_env_for_compose() {
+  cp -f backend/.env .env
+  chmod 600 .env
+  log "Mirrored backend/.env → ./.env so compose interpolation resolves \${SFTP_PASSWORD} etc."
+}
+
+# ────────────────────────────────────────────────────────────────────────────
 # 5. Frontend build
 # ────────────────────────────────────────────────────────────────────────────
 build_frontend() {
@@ -209,6 +226,7 @@ build_api
 generate_vapid
 generate_sftp_password
 open_sftp_port
+sync_env_for_compose
 build_frontend
 start_stack
 verify_tls

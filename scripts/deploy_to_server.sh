@@ -47,7 +47,13 @@ rsync -avz --delete-after \
   --exclude='.pytest_cache/' \
   --exclude='*.pyc' \
   --exclude='.DS_Store' \
+  --exclude='/.env' \
   ./ "$TARGET:~/BirdWatcher/"
+
+# Note on /.env: that's the project-root .env which bootstrap_server.sh
+# generates on the remote (as a mirror of backend/.env) so docker compose's
+# YAML interpolation resolves correctly. We exclude it from rsync so a
+# stray local copy can't clobber the authoritative remote one mid-deploy.
 
 echo "Invoking bootstrap on $TARGET …"
 ssh "$TARGET" "cd ~/BirdWatcher && bash scripts/bootstrap_server.sh"
