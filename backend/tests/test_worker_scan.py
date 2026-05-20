@@ -119,6 +119,44 @@ def test_scan_picks_up_mp4_too(db, clips_dir, monkeypatch):
     assert worker._scan_clips_dir() == 1
 
 
+def test_skipfile_marks_visit_processed_without_retry(db, clips_dir, monkeypatch):
+    """When process_visit raises SkipFile, the worker should set processed_at
+    so the visit doesn't get re-queued forever. Failure mode this protects
+    against: a 100 MB MP4 that hits MAX_VIDEO_BYTES, gets skipped, but
+    without this would stay pending and retry every tick.
+    """
+    from pipeline.exceptions import SkipFile
+
+    monkeypatch.setattr(worker, "SessionLocal", db)
+    # Seed a visit pointing at a real file so the worker queries it.
+    _make_file(clips_dir / "huge.mp4")
+    worker._scan_clips_dir()
+
+    # Monkeypatch process_visit to raise SkipFile, mimicking the size-cap path.
+    def fake_process_visit(visit, session):
+        raise SkipFile("video too large to process: 99.9 MB > 15 MB cap")
+
+    monkeypatch.setattr(worker, "process_visit", fake_process_visit)
+    worker._process_pending()
+
+    session = db()
+    try:
+        v = session.query(Visit).one()
+        assert v.processed_at is not None  # marked done
+        assert "skipped" in (v.processing_error or "")
+        assert "video too large" in (v.processing_error or "")
+    finally:
+        session.close()
+
+    # Run the worker again — the visit should no longer be queued because
+    # processed_at is set.
+    def boom(_visit, _session):
+        raise AssertionError("worker should not re-process a skipped visit")
+
+    monkeypatch.setattr(worker, "process_visit", boom)
+    worker._process_pending()  # should be a no-op
+
+
 def test_scan_recurses_into_subdirectories(db, clips_dir, monkeypatch):
     """Reolink uploads under upload/YYYY/MM/DD/ — the scan must descend."""
     monkeypatch.setattr(worker, "SessionLocal", db)

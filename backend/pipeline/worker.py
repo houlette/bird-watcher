@@ -23,6 +23,7 @@ from db.session import SessionLocal
 from db.utils import utcnow
 from ingest.haikubox import POLL_INTERVAL_SECONDS as HAIKUBOX_POLL_SECONDS
 from ingest.haikubox import poll_once as poll_haikubox
+from pipeline.exceptions import SkipFile
 from pipeline.frames import IMAGE_EXTS, VIDEO_EXTS
 from pipeline.process import process_visit
 
@@ -115,11 +116,19 @@ def _process_pending() -> None:
             try:
                 count = process_visit(visit, db)
                 log.info("Processed visit %d (%d tracks)", visit.id, count)
+            except SkipFile as skip:
+                # Permanent skip — file is too big / corrupt / unsupported.
+                # Mark processed so we never re-queue it. The error message
+                # is preserved for inspection via the DB or the feed UI.
+                log.warning("Visit %d skipped: %s", visit.id, skip)
+                visit.processed_at = utcnow()
+                visit.processing_error = f"skipped: {skip}"[:500]
+                db.commit()
             except Exception as exc:  # noqa: BLE001
+                # Transient error — leave processed_at NULL so the next tick
+                # retries. Record the latest error for visibility.
                 log.exception("Visit %d failed", visit.id)
                 visit.processing_error = str(exc)[:500]
-                # Leave processed_at NULL so we can retry — but bound retries
-                # by giving up after the same error appears a few times.
                 db.commit()
     finally:
         db.close()

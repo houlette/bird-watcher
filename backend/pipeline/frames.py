@@ -22,8 +22,22 @@ from typing import Iterator
 import cv2
 import numpy as np
 
+from pipeline.exceptions import SkipFile
+
 VIDEO_EXTS = {".mp4", ".webm", ".mov", ".mkv", ".avi"}
 IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
+
+# Skip videos larger than this. process_visit holds every sampled frame in
+# a dict keyed by frame index so the classifier can read crops from any of
+# them — and a 30-second 4K clip at 3 fps means ~90 frames × ~25 MB each
+# (decoded BGR uint8) ≈ 2 GB of RAM per visit. With multiple frames worth
+# of YOLO + classifier overhead, that easily OOMs a small VM.
+#
+# 15 MB cap covers typical motion-event JPGs and short MP4 clips comfortably
+# but rejects the 25-100 MB clips Reolink produces on long motion events.
+# A future refactor that streams frames through processing (rather than
+# caching them in a dict) can lift this cap.
+MAX_VIDEO_BYTES = 15 * 1024 * 1024
 
 
 @dataclass
@@ -49,8 +63,14 @@ def extract_frames(clip_path: Path, target_fps: float = 3.0) -> Iterator[Frame]:
         yield Frame(index=0, timestamp=0.0, image=image)
         return
 
-    # Default to video decoding for .mp4/.webm and any unrecognized extension —
-    # better to try and fail loudly than to silently skip.
+    # Video path — enforce the size cap before even opening the file so we
+    # never start a decode that's doomed to OOM us.
+    size = clip_path.stat().st_size
+    if size > MAX_VIDEO_BYTES:
+        raise SkipFile(
+            f"video too large to process: {size / 1e6:.1f} MB > {MAX_VIDEO_BYTES / 1e6:.0f} MB cap"
+        )
+
     cap = cv2.VideoCapture(str(clip_path))
     if not cap.isOpened():
         raise ValueError(f"Could not open clip: {clip_path}")

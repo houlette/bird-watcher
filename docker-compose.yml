@@ -15,6 +15,12 @@ services:
     env_file:
       - path: ./backend/.env
         required: false
+    # Cap memory at half the host's ~8 GB so a runaway worker (large MP4
+    # decode + model weights + ffmpeg buffers) gets OOM-killed inside the
+    # container without taking down the whole VM. Pair this with the
+    # MAX_VIDEO_BYTES cap in pipeline/frames.py so we don't loop on the
+    # same problematic file.
+    mem_limit: 4g
 
   caddy:
     image: caddy:2
