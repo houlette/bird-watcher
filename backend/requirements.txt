@@ -22,6 +22,7 @@ numpy==2.1.3
 torch==2.5.1
 torchvision==0.20.1
 ultralytics==8.3.40        # YOLO11
+sahi==0.11.18              # tiled inference for small-object detection
 onnxruntime==1.20.1        # bird species classifier (n2b8/backyard-birds is ONNX)
 timm==1.0.11               # kept for potential future torch classifiers
 transformers==4.46.3       # kept for potential future model swaps
