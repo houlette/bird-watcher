@@ -47,6 +47,11 @@ services:
     volumes:
       - ./backend/data/clips:/home/birdcam/upload
       - sftp_keys:/etc/ssh
+      # Custom sshd_config re-enables legacy SSH algorithms (CBC ciphers,
+      # ssh-rsa signature, dh-group14-sha1 KEX) so older IoT clients like
+      # the Reolink camera can negotiate. See the file's header for the
+      # security rationale.
+      - ./backend/sftp/sshd_config:/etc/ssh/sshd_config:ro
     command: "birdcam:${SFTP_PASSWORD:-changeme}:1000:1000:upload"
 
 volumes:
