@@ -57,7 +57,11 @@ services:
       FTP_USER_GID: "1000"
       FTP_USER_HOME: /home/birdcam
       FTP_PASSIVE_PORTS: "30000:30009"
-      ADDED_FLAGS: "-Y 2 -j"  # -Y 2: TLS required for AUTH; -j: create home if missing
+      # --tls=2 is the long form of -Y 2 (TLS required for AUTH). We need
+      # the long form because the image's run.sh checks for the literal
+      # substring '--tls' to decide whether to auto-generate a self-signed
+      # cert; with -Y it skips cert generation and pure-ftpd fails to start.
+      ADDED_FLAGS: "--tls=2 -j"
       TLS_CN: birdwatcher.ryanhoulette.com
       TLS_ORG: BirdWatcher
       TLS_C: US
