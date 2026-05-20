@@ -134,15 +134,30 @@ generate_sftp_password() {
 }
 
 # ────────────────────────────────────────────────────────────────────────────
-# 4c. Open UFW port 22222 for the SFTP container
+# 4c. Open UFW ports for the FTPS container (control + passive data)
 # ────────────────────────────────────────────────────────────────────────────
-open_sftp_port() {
-  if sudo ufw status 2>/dev/null | grep -q '22222/tcp'; then
-    log "UFW already allows 22222/tcp — leaving as-is."
-    return
+open_ftp_ports() {
+  if ! sudo ufw status 2>/dev/null | grep -q '22222/tcp'; then
+    log "Opening UFW 22222/tcp (FTPS control)…"
+    sudo ufw allow 22222/tcp comment 'FTPS control for Reolink'
   fi
-  log "Opening UFW 22222/tcp for SFTP (Reolink → camera uploads)…"
-  sudo ufw allow 22222/tcp comment 'SFTP for Reolink snapshots'
+  if ! sudo ufw status 2>/dev/null | grep -q '30000:30009/tcp'; then
+    log "Opening UFW 30000:30009/tcp (FTPS passive data)…"
+    sudo ufw allow 30000:30009/tcp comment 'FTPS passive ports for Reolink'
+  fi
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+# 4d. Make data/clips/ writable by the FTPS user (uid 1000 inside container)
+# ────────────────────────────────────────────────────────────────────────────
+fix_clips_ownership() {
+  mkdir -p backend/data/clips
+  # The api container runs as root and creates files there; the FTP user
+  # in pure-ftpd runs as uid 1000. Chown so both can write. Ryan on the
+  # host happens to be uid 1000 too, so this is a no-op when the FTP
+  # container hasn't been up yet but is required after switching from
+  # atmoz/sftp (where files were dropped as root).
+  sudo chown -R 1000:1000 backend/data/clips
 }
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -225,7 +240,8 @@ install_node
 build_api
 generate_vapid
 generate_sftp_password
-open_sftp_port
+open_ftp_ports
+fix_clips_ownership
 sync_env_for_compose
 build_frontend
 start_stack

@@ -28,7 +28,7 @@ Whichever you choose:
 
 - **OS**: Ubuntu 24.04 LTS
 - **SSH**: paste in your public key during creation; password auth off
-- **Firewall**: allow 22 (SSH), 80 (HTTP), 443 (HTTPS), and **22222 (SFTP for Reolink snapshots)**. On Hetzner this is the Cloud Firewall in the dashboard, applied at the project level — it sits in front of the VM's own UFW rules and blocks anything the dashboard doesn't allow regardless of UFW state.
+- **Firewall**: allow 22 (SSH), 80 (HTTP), 443 (HTTPS), **22222 (FTPS control for Reolink)**, and **30000–30009 (FTPS passive-data port range)**. On Hetzner this is the Cloud Firewall in the dashboard, applied at the project level — it sits in front of the VM's own UFW rules and blocks anything the dashboard doesn't allow regardless of UFW state. Use TCP for all. (Reolink firmware only supports FTP/FTPS, not SFTP — we run pure-ftpd with TLS required.)
 - Note the public IPv4 address — you'll need it in the next step
 
 ## 2. Point DNS
@@ -181,29 +181,32 @@ The pipeline picks up the file live — no restart needed.
 
 ## 10. Configure the Reolink RLC-811WA
 
-Reolink's webhook is metadata-only (no clip body), and its FTP upload
-doesn't support motion-triggered MP4 — only motion-triggered JPG
-snapshots. So we use FTP/SFTP for the actual media transport, and treat
-the webhook as a "Test" connectivity ping only.
+Reolink firmware speaks **FTP / FTPS** (not SFTP), and its webhook is
+metadata-only (no clip body). FTP uploads only support motion-triggered
+JPG snapshots — not MP4. We therefore run an FTPS server with TLS
+required, configure the camera to upload JPGs over FTPS on motion, and
+keep the webhook as a connectivity-test ping only.
 
 In the Reolink web client (the camera's IP on your LAN):
 
 1. **Settings → Network → WiFi**: connect to your 5GHz WiFi. Confirm signal strength is ≥ −65 dBm at the mount point.
 2. **Settings → Detection → Motion**: enable basic motion detection. **Disable** AI Person/Vehicle/Animal — they're tuned for security cameras and miss small birds.
-3. **Settings → Network → FTP** (this is the SFTP destination for snapshots):
-   - Type / Protocol: **SFTP**
-   - Server: `birdwatcher.ryanhoulette.com`
-   - Port: `22222`
-   - Username: `birdcam`
-   - Password: value of `SFTP_PASSWORD` from `backend/.env` (bootstrap generated it)
-   - Remote directory: `/upload`
-   - **File Type**: **Picture (JPG)** — not Video. Reolink doesn't actually do motion-triggered MP4 upload.
-   - **Schedule**: Alarm only (uncheck Timer) — uploads on motion, not continuously.
-   - **Capture interval / count**: 1–2 s, 3–5 frames per event if your firmware supports it (gives the classifier multiple stills per visit).
-   - Hit **Test** — the camera should report success.
+3. **Settings → Surveillance → FTP**:
+   - **Server**: `birdwatcher.ryanhoulette.com`
+   - **Port**: `22222`
+   - **Username**: `birdcam`
+   - **Password**: value of `SFTP_PASSWORD` from `backend/.env` (bootstrap generated it; variable name is historical, the same credential is used for FTPS)
+   - **Anonymous**: off
+   - **Transport Mode**: `Auto` (or `Passive`)
+   - **Don't allow plain unencrypted FTP**: **ON** (this forces FTPS; the server requires TLS anyway)
+   - **Upload**: `Video & Image` (or `Image only`; the pipeline handles both)
+   - **Video → Resolution**: `Clear` (4K). Max File Size 100MB is fine.
+   - **Image → Resolution**: `Clear`.
+   - Hit **Test** — the camera should report success once the Hetzner Cloud Firewall has port 22222 and 30000–30009 open.
+   - Under **Schedule** below, switch to the **Alarm** tab (not Timer), check **Any Motion**, leave the 24/7 grid filled in.
 4. **Settings → Network → Webhook / HTTP push** (optional but useful):
    - URL: `https://birdwatcher.ryanhoulette.com/api/ingest/motion`
-   - Body: anything; our endpoint returns 200 to any POST. We just keep this so the camera's Test button works, and so we have a fast signal in logs that motion fired.
+   - Body: anything; our endpoint returns 200 to any POST. Keep this so the camera's Test button works and we get a fast log signal when motion fires.
 5. **Live view**: confirm framing. Adjust the varifocal lens until a typical bird at the feeder is ≥ 200 px wide. (At 4K, this is roughly the lens set to 6–10 mm depending on distance.)
 
 ## 11. End-to-end smoke test
