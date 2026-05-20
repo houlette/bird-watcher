@@ -95,8 +95,12 @@ def _get_model(weights_path: Path = DEFAULT_WEIGHTS_PATH) -> "AutoDetectionModel
                     cwd_pt.rename(weights_path)
 
             log.info("Loading SAHI-wrapped YOLO11 from %s", weights_path)
+            # SAHI 0.11.18 doesn't have a dedicated 'ultralytics' loader;
+            # YOLO11 shares architecture with YOLOv8 so the yolov8 loader
+            # handles both. Upgrade SAHI later if a YOLO11-specific path
+            # appears.
             _model = AutoDetectionModel.from_pretrained(
-                model_type="ultralytics",
+                model_type="yolov8",
                 model_path=str(weights_path),
                 confidence_threshold=BIRD_CONFIDENCE_THRESHOLD,
                 category_mapping={str(COCO_BIRD_CLASS): "bird"},
