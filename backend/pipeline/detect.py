@@ -60,6 +60,30 @@ SAHI_OVERLAP_RATIO = 0.20
 # two adjacent tiles. Default 0.5 is fine.
 SAHI_NMS_IOU = 0.50
 
+# The 80 COCO classes YOLO11 was trained on. SAHI needs the complete map
+# to look up category names — if a tile gets a prediction for class 49
+# ('orange') and the map only has '14', SAHI raises KeyError. We filter
+# to class 14 ('bird') after prediction in detect_birds().
+_COCO_NAMES = {
+    0: "person", 1: "bicycle", 2: "car", 3: "motorcycle", 4: "airplane",
+    5: "bus", 6: "train", 7: "truck", 8: "boat", 9: "traffic light",
+    10: "fire hydrant", 11: "stop sign", 12: "parking meter", 13: "bench",
+    14: "bird", 15: "cat", 16: "dog", 17: "horse", 18: "sheep", 19: "cow",
+    20: "elephant", 21: "bear", 22: "zebra", 23: "giraffe", 24: "backpack",
+    25: "umbrella", 26: "handbag", 27: "tie", 28: "suitcase", 29: "frisbee",
+    30: "skis", 31: "snowboard", 32: "sports ball", 33: "kite", 34: "baseball bat",
+    35: "baseball glove", 36: "skateboard", 37: "surfboard", 38: "tennis racket",
+    39: "bottle", 40: "wine glass", 41: "cup", 42: "fork", 43: "knife",
+    44: "spoon", 45: "bowl", 46: "banana", 47: "apple", 48: "sandwich",
+    49: "orange", 50: "broccoli", 51: "carrot", 52: "hot dog", 53: "pizza",
+    54: "donut", 55: "cake", 56: "chair", 57: "couch", 58: "potted plant",
+    59: "bed", 60: "dining table", 61: "toilet", 62: "tv", 63: "laptop",
+    64: "mouse", 65: "remote", 66: "keyboard", 67: "cell phone", 68: "microwave",
+    69: "oven", 70: "toaster", 71: "sink", 72: "refrigerator", 73: "book",
+    74: "clock", 75: "vase", 76: "scissors", 77: "teddy bear", 78: "hair drier",
+    79: "toothbrush",
+}
+
 
 @dataclass
 class BirdDetection:
@@ -100,15 +124,18 @@ def _get_model(weights_path: Path = DEFAULT_WEIGHTS_PATH) -> "AutoDetectionModel
             # handles both. Upgrade SAHI later if a YOLO11-specific path
             # appears.
             #
-            # We do NOT override category_mapping: SAHI then uses the
-            # model's own full COCO names dict (80 classes). Restricting
-            # it to {'14': 'bird'} causes a KeyError when YOLO predicts any
-            # other class on a tile (e.g. 'orange' for a red blob). We
-            # filter to bird-only in detect_birds() instead.
+            # SAHI's yolov8 loader looks up category names via
+            # self.category_mapping[str(category_id)] for every prediction.
+            # If we don't pass category_mapping it doesn't reliably
+            # auto-populate, so we hand it the full COCO 80-class map
+            # explicitly. We filter to bird-only in detect_birds() so the
+            # mapping just needs to cover every class YOLO can possibly
+            # emit, not just bird.
             _model = AutoDetectionModel.from_pretrained(
                 model_type="yolov8",
                 model_path=str(weights_path),
                 confidence_threshold=BIRD_CONFIDENCE_THRESHOLD,
+                category_mapping={str(i): name for i, name in _COCO_NAMES.items()},
             )
     return _model
 
