@@ -1,22 +1,18 @@
-"""Bird detection via SAHI-tiled YOLO11 inference.
+"""Bird detection via tiled YOLO11 inference.
 
 YOLO11 ships with a COCO-trained model whose class 14 is 'bird'. Used
 directly on our 4K motion frames, even YOLO11-medium misses birds smaller
 than ~150 px because the model internally downsamples to its training
-resolution (640 by default; 1280 with our override) — a 100-px bird on a
-3840×2160 frame collapses to ~17–35 px after downsample and falls below
-detection thresholds.
+resolution — a 100-px bird on a 3840×2160 frame collapses to ~17–35 px
+after downsample and falls below detection thresholds.
 
-We use SAHI (Slicing Aided Hyper Inference) to work around this without
-swapping models. SAHI splits the input image into overlapping tiles, runs
-YOLO on each tile at native scale, then NMS-merges the results — so a
-100-px bird on the full frame becomes a 100-px bird on a ~1000-px tile,
-about 10% of tile width, comfortably detectable.
-
-Tradeoff: SAHI runs YOLO once per tile (~15 tiles for a 3840×2160 frame
-with 1024-px tiles at 20% overlap), so detection time is roughly 10× the
-single-pass equivalent. Acceptable since each motion event is a single
-frame and we're not real-time critical.
+To work around this we slice each frame into overlapping ~1024-px tiles,
+run YOLO on each tile (so a 100-px bird is now ~10% of tile width, easy
+to detect), translate detections back to full-image coordinates, and
+NMS-merge to dedupe birds that straddle tile seams. This is what SAHI
+does; we implemented it inline rather than depend on SAHI because their
+0.11.x category_mapping handling broke for our use case and the manual
+code is ~50 lines.
 """
 from __future__ import annotations
 
@@ -29,60 +25,28 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from sahi import AutoDetectionModel  # type: ignore
+    from ultralytics import YOLO  # type: ignore
 
 log = logging.getLogger(__name__)
 
-# COCO class index for 'bird'.
 COCO_BIRD_CLASS = 14
 
-# Confidence threshold below which we ignore detections. With SAHI tiling
-# the bird ends up much larger relative to the tile, so we can be a bit
-# stricter than the 0.15 we used during the full-frame era. 0.20 is a
-# middle ground — caught the test cardinal in tile-based bench runs and
-# rejects most YOLO phantom labels (toilet, orange, fire hydrant, etc.).
+# Confidence threshold. With tiling, birds-on-tile score much higher than
+# birds-on-downsampled-full-frame, so we can be moderately strict.
 BIRD_CONFIDENCE_THRESHOLD = 0.20
 
-# Where the YOLO weights live (auto-downloaded on first run by ultralytics).
+# Tiling parameters. A 3840×2160 frame tiled at 1024 with 20% overlap
+# gives a 5×3 grid = 15 tiles. Each tile run at imgsz=1024 takes
+# ~150-300 ms on CPU; full-frame detection ~2-5 s. Overlap lets us catch
+# birds spanning two tiles; NMS then dedupes.
+TILE_PX = 1024
+TILE_OVERLAP_PX = int(TILE_PX * 0.20)
+
+# NMS IoU threshold for merging cross-tile duplicates.
+NMS_IOU = 0.50
+
+# Where YOLO weights live (auto-downloaded on first use).
 DEFAULT_WEIGHTS_PATH = Path(__file__).parent.parent / "models" / "yolo11n.pt"
-
-# SAHI tiling parameters.
-#
-# A 4K frame (3840×2160) tiled at 1024×1024 with 20% overlap produces a
-# 5×3 grid = 15 tiles. Each tile fed to YOLO at imgsz=1024 (its native
-# tile size — no downsampling waste) takes ~150–300 ms on CPU, so the
-# whole frame is ~2–5 s. With overlap, birds straddling tile seams still
-# get caught and the NMS step dedupes.
-SAHI_TILE_PX = 1024
-SAHI_OVERLAP_RATIO = 0.20
-
-# Inside-tile NMS: merge overlapping detections of the same bird seen by
-# two adjacent tiles. Default 0.5 is fine.
-SAHI_NMS_IOU = 0.50
-
-# The 80 COCO classes YOLO11 was trained on. SAHI needs the complete map
-# to look up category names — if a tile gets a prediction for class 49
-# ('orange') and the map only has '14', SAHI raises KeyError. We filter
-# to class 14 ('bird') after prediction in detect_birds().
-_COCO_NAMES = {
-    0: "person", 1: "bicycle", 2: "car", 3: "motorcycle", 4: "airplane",
-    5: "bus", 6: "train", 7: "truck", 8: "boat", 9: "traffic light",
-    10: "fire hydrant", 11: "stop sign", 12: "parking meter", 13: "bench",
-    14: "bird", 15: "cat", 16: "dog", 17: "horse", 18: "sheep", 19: "cow",
-    20: "elephant", 21: "bear", 22: "zebra", 23: "giraffe", 24: "backpack",
-    25: "umbrella", 26: "handbag", 27: "tie", 28: "suitcase", 29: "frisbee",
-    30: "skis", 31: "snowboard", 32: "sports ball", 33: "kite", 34: "baseball bat",
-    35: "baseball glove", 36: "skateboard", 37: "surfboard", 38: "tennis racket",
-    39: "bottle", 40: "wine glass", 41: "cup", 42: "fork", 43: "knife",
-    44: "spoon", 45: "bowl", 46: "banana", 47: "apple", 48: "sandwich",
-    49: "orange", 50: "broccoli", 51: "carrot", 52: "hot dog", 53: "pizza",
-    54: "donut", 55: "cake", 56: "chair", 57: "couch", 58: "potted plant",
-    59: "bed", 60: "dining table", 61: "toilet", 62: "tv", 63: "laptop",
-    64: "mouse", 65: "remote", 66: "keyboard", 67: "cell phone", 68: "microwave",
-    69: "oven", 70: "toaster", 71: "sink", 72: "refrigerator", 73: "book",
-    74: "clock", 75: "vase", 76: "scissors", 77: "teddy bear", 78: "hair drier",
-    79: "toothbrush",
-}
 
 
 @dataclass
@@ -95,88 +59,110 @@ class BirdDetection:
 
 
 _model_lock = Lock()
-_model: "AutoDetectionModel | None" = None
+_model: "YOLO | None" = None
 
 
-def _get_model(weights_path: Path = DEFAULT_WEIGHTS_PATH) -> "AutoDetectionModel":
-    """Lazy-load and cache the SAHI-wrapped YOLO model singleton."""
+def _get_model(weights_path: Path = DEFAULT_WEIGHTS_PATH) -> "YOLO":
+    """Lazy-load and cache the YOLO model singleton."""
     global _model
     if _model is not None:
         return _model
     with _model_lock:
         if _model is None:
-            from sahi import AutoDetectionModel  # noqa: WPS433
+            from ultralytics import YOLO  # noqa: WPS433
             weights_path.parent.mkdir(parents=True, exist_ok=True)
-
-            # Make sure the YOLO weights are on disk before SAHI tries to
-            # load them. ultralytics will fetch on first use if missing.
-            if not weights_path.exists():
-                from ultralytics import YOLO  # noqa: WPS433
-                log.info("Fetching YOLO weights to %s", weights_path)
-                YOLO("yolo11n.pt")  # downloads to current cwd
-                # Move to the expected location
-                if (cwd_pt := Path.cwd() / "yolo11n.pt").exists():
-                    cwd_pt.rename(weights_path)
-
-            log.info("Loading SAHI-wrapped YOLO11 from %s", weights_path)
-            # SAHI 0.11.18 doesn't have a dedicated 'ultralytics' loader;
-            # YOLO11 shares architecture with YOLOv8 so the yolov8 loader
-            # handles both. Upgrade SAHI later if a YOLO11-specific path
-            # appears.
-            #
-            # SAHI's yolov8 loader looks up category names via
-            # self.category_mapping[str(category_id)] for every prediction.
-            # If we don't pass category_mapping it doesn't reliably
-            # auto-populate, so we hand it the full COCO 80-class map
-            # explicitly. We filter to bird-only in detect_birds() so the
-            # mapping just needs to cover every class YOLO can possibly
-            # emit, not just bird.
-            _model = AutoDetectionModel.from_pretrained(
-                model_type="yolov8",
-                model_path=str(weights_path),
-                confidence_threshold=BIRD_CONFIDENCE_THRESHOLD,
-                category_mapping={str(i): name for i, name in _COCO_NAMES.items()},
-            )
+            _model = YOLO(str(weights_path) if weights_path.exists() else "yolo11n.pt")
     return _model
 
 
+def _tile_offsets(width: int, height: int) -> list[tuple[int, int, int, int]]:
+    """Generate (x, y, w, h) tile rectangles covering width × height.
+
+    Tiles are TILE_PX × TILE_PX with TILE_OVERLAP_PX overlap between
+    neighbors. Edge tiles get clipped to the frame so the last column /
+    row may be narrower than TILE_PX.
+    """
+    step = TILE_PX - TILE_OVERLAP_PX
+    rects: list[tuple[int, int, int, int]] = []
+    y = 0
+    while y < height:
+        x = 0
+        while x < width:
+            w = min(TILE_PX, width - x)
+            h = min(TILE_PX, height - y)
+            rects.append((x, y, w, h))
+            if x + TILE_PX >= width:
+                break
+            x += step
+        if y + TILE_PX >= height:
+            break
+        y += step
+    return rects
+
+
+def _iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
+    """IoU of two xywh boxes."""
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    ix1, iy1 = max(ax, bx), max(ay, by)
+    ix2, iy2 = min(ax + aw, bx + bw), min(ay + ah, by + bh)
+    iw, ih = max(0, ix2 - ix1), max(0, iy2 - iy1)
+    inter = iw * ih
+    if inter == 0:
+        return 0.0
+    union = aw * ah + bw * bh - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _nms(dets: list[BirdDetection], iou_thresh: float) -> list[BirdDetection]:
+    """Non-maximum suppression: drop lower-confidence duplicates of the same bird."""
+    if not dets:
+        return []
+    sorted_dets = sorted(dets, key=lambda d: d.confidence, reverse=True)
+    keep: list[BirdDetection] = []
+    for d in sorted_dets:
+        if any(_iou(d.bbox, k.bbox) >= iou_thresh for k in keep):
+            continue
+        keep.append(d)
+    return keep
+
+
 def detect_birds(frame_image: np.ndarray, frame_index: int) -> list[BirdDetection]:
-    """Run SAHI-tiled YOLO on a single BGR frame; return only bird detections."""
+    """Tiled YOLO bird detection on a single BGR frame."""
     model = _get_model()
+    height, width = frame_image.shape[:2]
 
-    # SAHI's get_sliced_prediction expects RGB images.
-    from sahi.predict import get_sliced_prediction  # noqa: WPS433
-
-    rgb = frame_image[:, :, ::-1]
-    result = get_sliced_prediction(
-        rgb,
-        detection_model=model,
-        slice_height=SAHI_TILE_PX,
-        slice_width=SAHI_TILE_PX,
-        overlap_height_ratio=SAHI_OVERLAP_RATIO,
-        overlap_width_ratio=SAHI_OVERLAP_RATIO,
-        postprocess_match_threshold=SAHI_NMS_IOU,
-        verbose=0,
-    )
-
-    out: list[BirdDetection] = []
-    for pred in result.object_prediction_list:
-        # SAHI gives us back ObjectPrediction. We restrict to the bird class
-        # both via the model's category_mapping above AND by name here, as
-        # a belt-and-suspenders against future model swaps that might not
-        # honor category_mapping.
-        if pred.category.id != COCO_BIRD_CLASS and pred.category.name != "bird":
-            continue
-        bbox = pred.bbox  # SAHI BoundingBox: minx, miny, maxx, maxy
-        x, y = int(bbox.minx), int(bbox.miny)
-        w, h = int(bbox.maxx - bbox.minx), int(bbox.maxy - bbox.miny)
-        if w <= 0 or h <= 0:
-            continue
-        out.append(
-            BirdDetection(
-                bbox=(x, y, w, h),
-                confidence=float(pred.score.value),
-                frame_index=frame_index,
-            )
+    raw: list[BirdDetection] = []
+    for tile_x, tile_y, tile_w, tile_h in _tile_offsets(width, height):
+        tile = frame_image[tile_y : tile_y + tile_h, tile_x : tile_x + tile_w]
+        results = model.predict(
+            tile,
+            classes=[COCO_BIRD_CLASS],
+            conf=BIRD_CONFIDENCE_THRESHOLD,
+            imgsz=TILE_PX,  # tiles are already tile-sized; no waste downsample
+            verbose=False,
         )
-    return out
+        if not results:
+            continue
+        result = results[0]
+        if result.boxes is None or len(result.boxes) == 0:
+            continue
+        xyxy = result.boxes.xyxy.cpu().numpy()
+        confs = result.boxes.conf.cpu().numpy()
+        for (x1, y1, x2, y2), conf in zip(xyxy, confs, strict=True):
+            # Translate tile-local coords back to full-frame coords.
+            x = int(x1) + tile_x
+            y = int(y1) + tile_y
+            w = int(x2 - x1)
+            h = int(y2 - y1)
+            if w <= 0 or h <= 0:
+                continue
+            raw.append(
+                BirdDetection(
+                    bbox=(x, y, w, h),
+                    confidence=float(conf),
+                    frame_index=frame_index,
+                )
+            )
+
+    return _nms(raw, NMS_IOU)
