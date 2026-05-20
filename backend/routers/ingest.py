@@ -66,14 +66,23 @@ async def receive_motion(
         # Connectivity test — Reolink's Test button fires an empty request
         # to verify the URL responds. Also: some Reolink firmwares send
         # motion notifications without the clip body (intended to be paired
-        # with FTP upload elsewhere); we log content-type and length to make
-        # which-flavor-of-POST diagnosis easy from the logs.
+        # with FTP upload elsewhere). We log content-type, length, and a
+        # body preview to make diagnosis easy.
+        ct = request.headers.get("content-type", "")
+        body_preview = ""
+        if request.method == "POST" and not ct.startswith("multipart/"):
+            try:
+                body = await request.body()
+                body_preview = body[:1024].decode("utf-8", errors="replace")
+            except Exception as exc:  # noqa: BLE001
+                body_preview = f"<read failed: {exc}>"
         log.info(
-            "ingest ping: %s from %s ct=%r len=%s",
+            "ingest ping: %s from %s ct=%r len=%s body=%r",
             request.method,
             request.client.host if request.client else "?",
             request.headers.get("content-type"),
             request.headers.get("content-length"),
+            body_preview,
         )
         return {"ok": True, "kind": "ping"}
 
