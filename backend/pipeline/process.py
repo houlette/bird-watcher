@@ -16,6 +16,7 @@ from db.models import Detection, Species, Visit
 from db.utils import utcnow
 from pipeline.classify import SpeciesPrediction, classify_bird
 from pipeline.detect import detect_birds
+from pipeline.exceptions import SkipFile
 from pipeline.frames import extract_frames
 from pipeline.fuse import fuse
 from pipeline.notify import dispatch_for_detection
@@ -35,7 +36,11 @@ def process_visit(visit: Visit, db: Session) -> int:
 
     clip_path = DATA_DIR / visit.clip_path
     if not clip_path.exists():
-        raise FileNotFoundError(f"Clip missing for visit {visit.id}: {clip_path}")
+        # The file's gone — either it was deleted (manual cleanup, retention
+        # eviction) or it never landed (interrupted upload, bug elsewhere).
+        # Either way, it's not coming back; treat as a permanent skip so the
+        # worker doesn't loop on this row forever.
+        raise SkipFile(f"clip file missing on disk: {clip_path}")
 
     tracker = Tracker()
     last_frame_image = None  # keep handy for cropping after the loop
