@@ -99,11 +99,16 @@ def _get_model(weights_path: Path = DEFAULT_WEIGHTS_PATH) -> "AutoDetectionModel
             # YOLO11 shares architecture with YOLOv8 so the yolov8 loader
             # handles both. Upgrade SAHI later if a YOLO11-specific path
             # appears.
+            #
+            # We do NOT override category_mapping: SAHI then uses the
+            # model's own full COCO names dict (80 classes). Restricting
+            # it to {'14': 'bird'} causes a KeyError when YOLO predicts any
+            # other class on a tile (e.g. 'orange' for a red blob). We
+            # filter to bird-only in detect_birds() instead.
             _model = AutoDetectionModel.from_pretrained(
                 model_type="yolov8",
                 model_path=str(weights_path),
                 confidence_threshold=BIRD_CONFIDENCE_THRESHOLD,
-                category_mapping={str(COCO_BIRD_CLASS): "bird"},
             )
     return _model
 
