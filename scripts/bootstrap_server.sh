@@ -181,10 +181,14 @@ sync_env_for_compose() {
 # 5. Frontend build
 # ────────────────────────────────────────────────────────────────────────────
 build_frontend() {
-  if [ -d frontend/dist ] && [ "$(find frontend/dist -newer frontend/src -type f 2>/dev/null | head -1)" ]; then
-    log "Frontend already built and newer than src — skipping."
-    return
-  fi
+  # We always rebuild. The previous 'skip if dist is newer than src' check
+  # compared dist files against the frontend/src DIRECTORY mtime, which
+  # doesn't update when rsync modifies existing files in place — so the
+  # skip would fire even after I'd edited source files, shipping a stale
+  # bundle to production. (Discovered when "Not a bird" picker didn't
+  # appear despite multiple deploys.)
+  #
+  # npm ci + vite build takes ~1 minute; not worth being clever about.
   log "Building frontend (npm ci + vite build)…"
   ( cd frontend && npm ci --no-audit --no-fund && npm run build )
 }
