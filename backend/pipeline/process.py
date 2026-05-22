@@ -1,8 +1,10 @@
-"""End-to-end per-clip pipeline: extract → detect → track → persist.
+"""End-to-end per-clip pipeline: extract → detect → track → classify → fuse → persist.
 
-Phase 2 stops at writing per-track crops + Detection rows with species=None.
-Phase 3 will plug the species classifier in between `tracker.finalize()`
-and `_persist_detections()`.
+For every YOLO-detected track we always save the best crop and write a
+Detection row, even if the species classifier couldn't place the bird in
+our NA allow-list. Unidentified rows go into the feed as 'Unidentified'
+so the user can tag them via the SpeciesPicker — those manual labels
+are the highest-value examples for the eventual classifier fine-tune.
 """
 from __future__ import annotations
 
@@ -72,19 +74,36 @@ def process_visit(visit: Visit, db: Session) -> int:
             continue
         best = track.best_detection
 
+        # Always save the YOLO-detected crop. If the classifier later rejects
+        # it, the row still goes into the feed as "Unidentified" so the user
+        # can tag it via the picker (real species OR "Not a bird"). These
+        # are the highest-value active-learning examples — YOLO sees a
+        # bird shape but the classifier isn't confident, so an explicit
+        # human label closes the loop.
+        crop_rel_path, _ = _save_best_crop(track, frames_by_index, visit_id=visit.id)
+
         # Multi-frame voting: classify up to 3 crops from this track (best
         # by area×conf, plus 2 evenly-spaced others if the track has enough
         # frames). Average their softmax distributions before fusion.
         crops_to_classify = _select_voting_crops(track, frames_by_index)
         per_crop_predictions = [classify_bird(c) for c in crops_to_classify]
-
-        # Drop empty per-crop predictions (the classifier's not_a_bird gate
-        # returns an empty list for crops it doesn't think are birds). If
-        # every crop in this track was rejected, the track was a false
-        # positive from YOLO and we skip it entirely — no Detection, no crop.
         per_crop_predictions = [p for p in per_crop_predictions if p]
+
         if not per_crop_predictions:
-            log.info("track %d: all crops rejected as not_a_bird, skipping", track.track_id)
+            # Classifier rejected every crop. Persist with species_id=NULL;
+            # the user can correct via the "Wrong species?" picker.
+            log.info("track %d: classifier rejected; persisting as Unidentified", track.track_id)
+            db.add(Detection(
+                visit_id=visit.id,
+                species_id=None,
+                confidence=0.0,
+                raw_predictions=[],
+                audio_confirmed=False,
+                crop_path=str(crop_rel_path),
+                bbox=list(best.bbox),
+                track_id=track.track_id,
+            ))
+            persisted += 1
             continue
 
         averaged = _average_predictions(per_crop_predictions)
@@ -103,7 +122,6 @@ def process_visit(visit: Visit, db: Session) -> int:
         raw_labels = {p.species: p.raw_label for preds in per_crop_predictions for p in preds}
 
         top = fused[0]
-        crop_rel_path, _ = _save_best_crop(track, frames_by_index, visit_id=visit.id)
         species_id = _resolve_species(db, top.species)
 
         detection = Detection(
@@ -134,7 +152,7 @@ def process_visit(visit: Visit, db: Session) -> int:
             dispatch_for_detection(db, detection)
         except Exception:  # noqa: BLE001
             log.exception("Push dispatch failed for detection %d", detection.id)
-    log.info("visit %d: %d tracks persisted (after not_a_bird filter)", visit.id, persisted)
+    log.info("visit %d: %d tracks persisted (some may be Unidentified)", visit.id, persisted)
 
     visit.processed_at = utcnow()
     visit.ended_at = utcnow()
