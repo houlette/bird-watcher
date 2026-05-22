@@ -3,6 +3,12 @@ import { useQuery } from "@tanstack/react-query";
 
 import { fetchSpecies, type SpeciesEntry } from "../lib/api";
 
+// Must match backend/db/models.py:NOT_A_BIRD_LABEL exactly. The picker
+// pins this as a special option (separated from real species by a divider)
+// so users can flag false positives like the hummingbird feeder without
+// having to scroll through 150 real species names.
+export const NOT_A_BIRD = "Not a bird";
+
 type Props = {
   open: boolean;
   current?: string | null;
@@ -68,6 +74,20 @@ export default function SpeciesPicker({ open, current, onSelect, onCancel }: Pro
         </div>
 
         <div className="overflow-y-auto flex-1">
+          {/* Pinned "Not a bird" option — always at the top, distinct styling.
+              Shown even with an active query so users can flag false positives
+              without typing. */}
+          <button
+            className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center justify-between text-sm border-b border-slate-200 text-slate-600"
+            onClick={() => onSelect(NOT_A_BIRD)}
+          >
+            <span className="flex items-center gap-2">
+              <span aria-hidden>🚫</span>
+              <span>{NOT_A_BIRD}</span>
+            </span>
+            <span className="text-xs text-slate-400">false positive</span>
+          </button>
+
           {isLoading && <p className="p-3 text-sm text-slate-500">Loading species…</p>}
           {!isLoading && filtered.length === 0 && (
             <p className="p-3 text-sm text-slate-500">No species match "{query}".</p>

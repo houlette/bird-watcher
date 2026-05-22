@@ -154,3 +154,61 @@ def test_correction_rejects_unknown_detection(client):
         json={"detection_id": 99999, "correct_species_name": "Northern Cardinal"},
     )
     assert r.status_code == 404
+
+
+def test_species_endpoint_excludes_not_a_bird_from_calibration(client, monkeypatch, tmp_path):
+    """The 'Not a bird' sentinel shouldn't appear in the regular species list
+    (the picker surfaces it separately pinned at the top)."""
+    cal_path = tmp_path / "yard_priors.json"
+    monkeypatch.setattr(calibration, "CALIBRATION_PATH", cal_path)
+    _write_calibration(cal_path, {
+        "Northern Cardinal": {"total": 100, "monthly_pct": {str(m): 1 / 12 for m in range(1, 13)}},
+        "Not a bird": {"total": 50, "monthly_pct": {str(m): 1 / 12 for m in range(1, 13)}},
+    })
+    r = client.get("/api/species")
+    names = [s["name"] for s in r.json()["species"]]
+    assert "Northern Cardinal" in names
+    assert "Not a bird" not in names
+
+
+def test_detections_excludes_not_a_bird_by_default(client, db):
+    """The feed should not show detections the user marked as 'Not a bird'."""
+    from db.models import NOT_A_BIRD_LABEL
+    cardinal_det = _seed_detection(db, "Northern Cardinal")
+    feeder_det = _seed_detection(db, NOT_A_BIRD_LABEL)
+
+    r = client.get("/api/detections")
+    assert r.status_code == 200
+    ids = [d["id"] for d in r.json()]
+    assert cardinal_det in ids
+    assert feeder_det not in ids
+
+
+def test_detections_include_not_a_bird_when_requested(client, db):
+    """Diagnostic opt-in flag exposes everything including false positives."""
+    from db.models import NOT_A_BIRD_LABEL
+    cardinal_det = _seed_detection(db, "Northern Cardinal")
+    feeder_det = _seed_detection(db, NOT_A_BIRD_LABEL)
+
+    r = client.get("/api/detections?include_not_a_bird=true")
+    ids = [d["id"] for d in r.json()]
+    assert cardinal_det in ids
+    assert feeder_det in ids
+
+
+def test_correction_to_not_a_bird_removes_from_feed(client, db):
+    """End-to-end: user marks a misidentified Ovenbird as Not a bird,
+    and the next GET /api/detections excludes it."""
+    from db.models import NOT_A_BIRD_LABEL
+    det_id = _seed_detection(db, "Ovenbird")
+    assert det_id in [d["id"] for d in client.get("/api/detections").json()]
+
+    r = client.post(
+        "/api/corrections",
+        json={"detection_id": det_id, "correct_species_name": NOT_A_BIRD_LABEL},
+    )
+    assert r.status_code == 200
+    assert r.json()["species"] == NOT_A_BIRD_LABEL
+
+    assert det_id not in [d["id"] for d in client.get("/api/detections").json()]
+    assert det_id in [d["id"] for d in client.get("/api/detections?include_not_a_bird=true").json()]

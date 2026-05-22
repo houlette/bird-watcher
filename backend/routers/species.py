@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from db.models import NOT_A_BIRD_LABEL
 from pipeline import calibration
 from pipeline.classify import NA_BACKYARD_ALLOWLIST, _normalize_for_display
 
@@ -27,7 +28,9 @@ async def list_species() -> dict:
         items = [
             {"name": name, "total": info.get("total", 0)}
             for name, info in cal["species"].items()
-            if isinstance(info, dict) and info.get("total", 0) >= calibration.MIN_DETECTIONS_FOR_ALLOWLIST
+            if isinstance(info, dict)
+            and info.get("total", 0) >= calibration.MIN_DETECTIONS_FOR_ALLOWLIST
+            and name != NOT_A_BIRD_LABEL
         ]
         items.sort(key=lambda r: r["total"], reverse=True)
         return {"source": "calibration", "species": items}

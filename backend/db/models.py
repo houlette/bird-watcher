@@ -7,6 +7,17 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from db.session import Base
 from db.utils import utcnow
 
+# Reserved Species.common_name for "the user looked at this and it's not
+# actually a bird" corrections (hummingbird feeders, wind spinners,
+# leaves the classifier insisted were Ovenbirds, etc.). Used by:
+#   - SpeciesPicker (renders this option pinned at the top)
+#   - GET /api/detections (filters these out by default so the feed shows
+#     only real birds)
+#   - GET /api/species (excludes this from the picker's species list since
+#     it's surfaced separately)
+#   - The eventual retraining script (uses these as negative examples).
+NOT_A_BIRD_LABEL = "Not a bird"
+
 
 class Species(Base):
     __tablename__ = "species"

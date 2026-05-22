@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import desc
 from sqlalchemy.orm import Session, joinedload
 
-from db.models import Detection, Visit
+from db.models import NOT_A_BIRD_LABEL, Detection, Species, Visit
 from db.session import get_db
 
 router = APIRouter()
@@ -13,6 +13,7 @@ router = APIRouter()
 async def list_detections(
     limit: int = Query(50, le=200),
     species_id: int | None = None,
+    include_not_a_bird: bool = Query(False, description="Include detections corrected to 'Not a bird'"),
     db: Session = Depends(get_db),
 ) -> list[dict]:
     q = (
@@ -22,6 +23,13 @@ async def list_detections(
     )
     if species_id is not None:
         q = q.filter(Detection.species_id == species_id)
+    if not include_not_a_bird:
+        # Hide detections the user has marked as not-a-bird so the feed
+        # shows only real birds. The rows still exist in the DB for the
+        # retraining pipeline.
+        q = q.outerjoin(Species, Detection.species_id == Species.id).filter(
+            (Species.common_name.is_(None)) | (Species.common_name != NOT_A_BIRD_LABEL)
+        )
     rows = q.limit(limit).all()
 
     return [
