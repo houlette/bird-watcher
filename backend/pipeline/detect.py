@@ -45,8 +45,15 @@ TILE_OVERLAP_PX = int(TILE_PX * 0.20)
 # NMS IoU threshold for merging cross-tile duplicates.
 NMS_IOU = 0.50
 
-# Where YOLO weights live (auto-downloaded on first use).
-DEFAULT_WEIGHTS_PATH = Path(__file__).parent.parent / "models" / "yolo11n.pt"
+# Which YOLO11 variant to use. Sized from nano (smallest/fastest, lowest
+# accuracy) to extra-large. We sit at 's' (small) — a 2× param bump over
+# nano that materially reduces false positives on bird-shaped non-birds
+# (hummingbird feeders, leaves), in exchange for ~2-3× tile inference
+# time. 'm' is still feasible on the 4-vCPU box (~20s/frame) if we want
+# to push further later. Override via YOLO_WEIGHTS env var.
+import os
+YOLO_WEIGHTS_FILE = os.getenv("YOLO_WEIGHTS", "yolo11s.pt")
+DEFAULT_WEIGHTS_PATH = Path(__file__).parent.parent / "models" / YOLO_WEIGHTS_FILE
 
 
 @dataclass
@@ -71,7 +78,9 @@ def _get_model(weights_path: Path = DEFAULT_WEIGHTS_PATH) -> "YOLO":
         if _model is None:
             from ultralytics import YOLO  # noqa: WPS433
             weights_path.parent.mkdir(parents=True, exist_ok=True)
-            _model = YOLO(str(weights_path) if weights_path.exists() else "yolo11n.pt")
+            # If the file is missing on disk, ultralytics fetches it from
+            # its GitHub release by passing just the model name.
+            _model = YOLO(str(weights_path) if weights_path.exists() else YOLO_WEIGHTS_FILE)
     return _model
 
 

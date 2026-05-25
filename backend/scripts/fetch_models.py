@@ -26,13 +26,13 @@ def main() -> int:
         Path(hf_home).mkdir(parents=True, exist_ok=True)
 
     # 1) YOLO detection weights. ultralytics downloads on first construction.
-    log.info("Fetching YOLO11-nano detector…")
+    from pipeline.detect import DEFAULT_WEIGHTS_PATH, YOLO_WEIGHTS_FILE  # noqa: WPS433
     from ultralytics import YOLO  # noqa: WPS433
 
-    yolo_weights = Path(__file__).resolve().parent.parent / "models" / "yolo11n.pt"
-    yolo_weights.parent.mkdir(parents=True, exist_ok=True)
-    YOLO(str(yolo_weights) if yolo_weights.exists() else "yolo11n.pt")
-    log.info("YOLO weights ready: %s", yolo_weights)
+    log.info("Fetching YOLO detector: %s", YOLO_WEIGHTS_FILE)
+    DEFAULT_WEIGHTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    YOLO(str(DEFAULT_WEIGHTS_PATH) if DEFAULT_WEIGHTS_PATH.exists() else YOLO_WEIGHTS_FILE)
+    log.info("YOLO weights ready: %s", DEFAULT_WEIGHTS_PATH)
 
     # 2) Bird species classifier (HuggingFace).
     from pipeline.classify import warmup  # noqa: WPS433
