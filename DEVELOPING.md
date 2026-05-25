@@ -8,47 +8,67 @@ runbook); this file is everything in between.
 ## The one-paragraph mental model
 
 A Reolink RLC-811WA WiFi camera pointed at the bird feeders. On motion it
-POSTs a ~5–10 s video clip to our backend. The backend extracts frames,
-runs YOLO11 to find each bird in each frame, tracks them across frames with
-a simple IoU tracker, classifies each track's best crop with a fine-grained
-bird species model, and re-ranks the predictions using two priors: an
-allow-list + monthly distribution derived from the user's Haikubox
-(BirdNET audio) detection history, and recent audio "did you hear this
-species in the last 90 s" boosts. A React PWA displays the resulting feed
-and pings the user's phone via Web Push when a species hasn't been seen in
-30 days. Users correct misidentifications via a searchable picker; those
-corrections feed a (still-stubbed) periodic fine-tune of the classifier.
+uploads a JPG snapshot and a short MP4 clip over FTPS to a pure-ftpd
+container on our VM. The backend's filesystem-scan worker picks new files
+out of the FTPS drop directory, extracts frames at ~3 fps, runs **tiled**
+YOLO11-small over each frame (4K downsampling drops small birds otherwise),
+tracks detections across frames with a simple IoU tracker, ranks each
+track's crops by area × confidence × Laplacian-variance sharpness, hands
+the top three crops to a fine-grained bird species model, averages those
+top-5 distributions, and re-ranks with two priors: an allow-list + monthly
+distribution derived from the user's Haikubox (BirdNET audio) detection
+history, and recent audio "did you hear this species in the last 90 s"
+boosts. Tracks where the classifier rejects every crop are still persisted
+as `species_id=NULL` ("Unidentified") so the user can hand-label them. A
+React PWA displays the resulting feed (infinite-scroll) and pings the
+user's phone via Web Push when a species hasn't been seen in 30 days.
+Users correct misidentifications via a searchable picker — which spans
+both yard-heard species and a curated North American list, plus a "Not a
+bird" sentinel for YOLO false positives. Those corrections feed a (still-
+stubbed) periodic fine-tune of the classifier.
 
 ## Architecture
 
 ```
-   Reolink RLC-811WA       Haikubox (BirdNET audio)
-   on motion → POST clip   poll detections every 30 s
-              │                       │
-              ▼                       ▼
-   ┌─────────────────────────────────────────────────┐
-   │  FastAPI backend                                │
-   │  - /api/ingest/motion   (clip upload)           │
-   │  - /api/detections      (PWA read)              │
-   │  - /api/species         (picker)                │
-   │  - /api/corrections     (active learning)       │
-   │  - /api/push/{subscribe, vapid_public_key}      │
-   │                                                 │
-   │  APScheduler workers:                           │
-   │   • pipeline.worker — pulls unprocessed Visit   │
-   │     rows; runs YOLO → tracker → classifier →    │
-   │     fusion → DB. Pushes if rare.                │
-   │   • ingest.haikubox — polls Haikubox API every  │
-   │     30 s; caches into haikubox_detections.      │
-   │                                                 │
-   │  SQLite (data/birdwatcher.db) + image files     │
-   │  (data/clips/, data/crops/).                    │
-   │                                                 │
-   │  Caddy reverse-proxy in front, TLS via LE.      │
-   └────────────┬────────────────────────────────────┘
+   Reolink RLC-811WA              Haikubox (BirdNET audio)
+   on motion → FTPS upload        poll detections every 30 s
+   (JPG snapshot + MP4 clip)              │
+              │                            │
+              ▼                            ▼
+   ┌────────────────────────────────────────────────────┐
+   │  pure-ftpd (TLS, port 22222 + passive 30000-30009) │
+   │  writes to data/clips/upload/YYYY/MM/DD/*.{jpg,mp4}│
+   └────────────┬───────────────────────────────────────┘
+                │ filesystem scan
+                ▼
+   ┌────────────────────────────────────────────────────┐
+   │  FastAPI backend                                   │
+   │  - /api/detections      (PWA read, paginated)      │
+   │  - /api/species         (picker: yard + NA list)   │
+   │  - /api/corrections     (active learning)          │
+   │  - /api/push/{subscribe, vapid_public_key}         │
+   │  - /api/ingest/motion   (webhook ping, no body)    │
+   │                                                    │
+   │  APScheduler workers:                              │
+   │   • pipeline.worker — scans data/clips/ for new    │
+   │     files (≥90 s old), creates Visit rows, runs    │
+   │     tiled-YOLO → tracker → sharpness rank →        │
+   │     classify → fuse → DB. Pushes if rare.          │
+   │     SkipFile exception path retires files too      │
+   │     big / missing / corrupt so the queue drains.   │
+   │   • ingest.haikubox — polls Haikubox API every     │
+   │     30 s; caches into haikubox_detections.         │
+   │                                                    │
+   │  SQLite (data/birdwatcher.db) + image files        │
+   │  (data/clips/, data/crops/). mem_limit: 4g.        │
+   │                                                    │
+   │  Caddy reverse-proxy in front, TLS via LE.         │
+   └────────────┬───────────────────────────────────────┘
                 │ HTTPS
                 ▼
             Android PWA (Vite + React + TS, vite-plugin-pwa)
+            - Feed: useInfiniteQuery + IntersectionObserver
+            - Picker: SpeciesPicker w/ "Not a bird" sentinel
 ```
 
 ## Project layout
@@ -86,21 +106,32 @@ BirdWatcher/
 │   ├── ingest/              ← External data sources
 │   │   └── haikubox.py      ← poll the Haikubox REST API
 │   │
+│   ├── na_birds.py          ← Curated ~200-species NA bird list (picker)
+│   │
 │   ├── pipeline/            ← The classification pipeline
-│   │   ├── frames.py        ← OpenCV frame extraction at ~3 fps
-│   │   ├── detect.py        ← YOLO11-nano singleton, bird-only
+│   │   ├── frames.py        ← OpenCV frame extraction at ~3 fps;
+│   │   │                       raises SkipFile if MP4 > 15 MB
+│   │   ├── detect.py        ← Tiled YOLO11-small (1024-px tiles, 20%
+│   │   │                       overlap, NMS merge), bird-only
 │   │   ├── track.py         ← IoU tracker (no ML deps, pure)
 │   │   ├── classify.py      ← HF transformers classifier + NA allow-list
 │   │   ├── calibration.py   ← Load yard_priors.json with fallbacks
 │   │   ├── fuse.py          ← Bayesian fusion (visual × audio × seasonal)
 │   │   ├── notify.py        ← rarity decision + Web Push dispatch
-│   │   ├── process.py       ← Orchestrator: extract → detect → ... → DB
-│   │   └── worker.py        ← APScheduler: polls Visit rows; runs process
+│   │   ├── process.py       ← Orchestrator: extract → detect → track →
+│   │   │                       sharpness-rank → classify × 3 → vote →
+│   │   │                       fuse → DB. Classifier-rejected tracks
+│   │   │                       still persist as species_id=NULL.
+│   │   ├── exceptions.py    ← SkipFile (permanent-skip sentinel)
+│   │   └── worker.py        ← APScheduler: filesystem scan of
+│   │                          data/clips/ → creates Visits → runs process
 │   │
 │   ├── scripts/             ← One-shot CLI tools
 │   │   ├── smoke_test.py    ← Run pipeline against a clip locally
 │   │   ├── generate_vapid_keys.py
 │   │   ├── calibrate_from_haikubox.py
+│   │   ├── benchmark_classifiers.py  ← A/B current vs candidate
+│   │   │                                classifier on labeled corrections
 │   │   ├── fetch_models.py  ← Pre-warm YOLO + classifier weights
 │   │   └── retrain_classifier.py  ← STUB; prints correction summary
 │   │
@@ -110,6 +141,8 @@ BirdWatcher/
 │   │   ├── test_fuse.py     ← Bayesian fusion
 │   │   ├── test_calibration.py
 │   │   ├── test_notify.py
+│   │   ├── test_process.py  ← classifier-rejection persistence path,
+│   │   │                       Laplacian-variance ranking
 │   │   └── test_species_and_corrections.py
 │   │
 │   ├── data/                ← gitignored: SQLite, clips, crops, yard_priors
@@ -145,43 +178,70 @@ BirdWatcher/
 
 Trace one motion event from camera to phone notification:
 
-1. **Camera fires motion event.** Reolink uploads a multipart clip to
-   `POST /api/ingest/motion` (`routers/ingest.py`). The route writes the
-   clip to `data/clips/<timestamp>_<orig>.mp4` and creates a `Visit` row
-   with `processed_at = NULL` and the clip path.
+1. **Camera fires motion event.** Reolink uploads a JPG snapshot and an
+   MP4 clip over FTPS into `data/clips/upload/YYYY/MM/DD/Birdfeeder_NN_YYYYMMDDHHMMSS.{jpg,mp4}`
+   (capture time embedded in the filename, in whatever TZ the camera is
+   configured for — we run the camera in GMT+0 so the parser can treat it
+   as naive UTC).
 
 2. **Worker tick.** `pipeline/worker.py` is an APScheduler job firing
-   every 5 s inside the same process. It queries `Visit` rows where
-   `processed_at IS NULL`, takes one, and hands it to
-   `pipeline/process.py::process_visit`.
+   every 5 s inside the same process. It recursively scans `data/clips/`
+   for files that are ≥ `MIN_FILE_AGE_SECONDS` (90 s) old — long enough
+   that residential-bandwidth FTPS uploads have finished — and creates a
+   `Visit` row for each new path (capture time parsed from filename,
+   `processed_at = NULL`). It then picks the oldest pending Visit and
+   hands it to `pipeline/process.py::process_visit`. Two exception paths:
+   `SkipFile` → mark `processed_at` permanently so the row drops out of
+   the queue (file gone / too big / corrupt); anything else → leave
+   pending and retry next tick.
 
 3. **Frame extraction.** `pipeline/frames.py` uses OpenCV to decode the
    clip at ~3 fps. Each `Frame` knows its index, timestamp, and BGR pixels.
+   Raises `SkipFile` if an MP4 exceeds `MAX_VIDEO_BYTES` (15 MB) — the cap
+   bounds peak memory from the per-frame BGR cache.
 
 4. **Per-frame detection.** For every frame, `pipeline/detect.py` runs
-   YOLO11-nano restricted to COCO class 14 ("bird"), confidence ≥ 0.30.
-   Returns `BirdDetection(bbox, confidence, frame_index)`.
+   **tiled** YOLO11-small (`yolo11s.pt`, ~10M params) restricted to COCO
+   class 14 ("bird"), confidence ≥ `BIRD_CONFIDENCE_THRESHOLD` (0.20).
+   The frame is sliced into 1024-px tiles with 20 % overlap, YOLO runs
+   at native scale on each tile, and detections are NMS-merged at IoU
+   0.50. (Untiled inference on downsampled 4K loses small birds entirely;
+   see LESSONS.md.) Returns `BirdDetection(bbox, confidence, frame_index)`.
 
 5. **Tracking.** `pipeline/track.py::Tracker` is a greedy IoU matcher
    (`MATCH_IOU_THRESHOLD = 0.30`, `MAX_MISSED_FRAMES = 3`). It assigns
    detections to ongoing tracks across frames; the output is a list of
    `Track`s each containing the per-frame detections of one bird.
 
-6. **Per-track classification.** For each track, `process.py` selects up
-   to 3 crops (best by `area × confidence`, plus 2 evenly-spaced others)
-   and hands each to `pipeline/classify.py::classify_bird`. The classifier:
+6. **Sharpness-aware crop ranking.** For each track,
+   `process.py::_rank_detections` scores every detection by
+   `area × confidence × (Laplacian-variance + 1)`. Laplacian variance is
+   a classic focus measure — motion-blurred or out-of-focus crops score
+   low, in-focus perched frames win. The best crop is saved to disk under
+   `data/crops/v{visit:08d}_t{track:04d}.jpg`; the top 3 are handed to
+   the classifier.
+
+7. **Per-track classification.** Each ranked crop goes through
+   `pipeline/classify.py::classify_bird`. The classifier:
    - Loads `dennisjooo/Birds-Classifier-EfficientNetB2` (525 classes).
    - Filters via `NA_BACKYARD_ALLOWLIST` (or the calibration-derived list
      from `pipeline/calibration.py::get_allowlist()` if a `yard_priors.json`
      exists).
-   - If the post-softmax mass on allow-listed species is below 10 %, returns
-     `[]` (the crop is treated as not-a-bird and the track is skipped).
-   - Otherwise returns top-5 normalized predictions.
+   - If the post-softmax mass on allow-listed species is below
+     `IN_RANGE_THRESHOLD` (0.10), returns `[]` (the crop is rejected).
+   - Otherwise returns top-5 normalized predictions (per-base-species
+     aggregated across plumage variants).
 
-7. **Multi-crop voting.** `process.py::_average_predictions` averages
+   **Classifier-rejection path:** if **every** crop in the track is
+   rejected, `process.py` still writes a `Detection` row with
+   `species_id=NULL` and `confidence=0.0`. These show up in the feed as
+   "Unidentified" so the user can hand-label via the picker — the highest-
+   value active-learning examples.
+
+8. **Multi-crop voting.** `process.py::_average_predictions` averages
    the per-crop top-5 distributions into a single per-track top-5.
 
-8. **Bayesian fusion.** `pipeline/fuse.py::fuse` re-ranks the top-5 by
+9. **Bayesian fusion.** `pipeline/fuse.py::fuse` re-ranks the top-5 by
    multiplying with two priors:
    - Audio: 3× boost if `HaikuboxDetection` exists for this species in
      the last 90 s (`audio_correlation_window_seconds`).
@@ -189,19 +249,21 @@ Trace one motion event from camera to phone notification:
      (yard-specific) or `_SEASONAL_PRIORS` (hand-coded fallback).
    Renormalizes within the top-5.
 
-9. **Persistence.** `process.py` writes a `Detection` row: top-1 species
-   id, fused confidence, full top-5 in `raw_predictions` JSON, `audio_confirmed`
-   flag, the crop file path, and the track id.
+10. **Persistence.** `process.py` writes a `Detection` row: top-1 species
+    id, fused confidence, full top-5 in `raw_predictions` JSON,
+    `audio_confirmed` flag, the crop file path, the bbox, and the track id.
 
-10. **Push notification.** Immediately after `db.flush()`, `process.py`
+11. **Push notification.** Immediately after `db.flush()`, `process.py`
     calls `pipeline/notify.py::dispatch_for_detection`. That checks
     `is_rare(species, when, window_days)` per `PushSubscription` row and
     fires a Web Push via `pywebpush` if no recent prior detection exists.
     The service worker (`frontend/src/sw.ts`) shows the system notification.
 
-11. **PWA refresh.** `frontend/src/pages/Feed.tsx` polls
-    `GET /api/detections` every 15 s via TanStack Query. The new detection
-    appears at the top.
+12. **PWA refresh.** `frontend/src/pages/Feed.tsx` uses
+    `useInfiniteQuery` against `GET /api/detections?before_id=...` with
+    cursor-based pagination (`PAGE_SIZE = 50`) and an IntersectionObserver
+    sentinel that fires `fetchNextPage()` on scroll. A 30 s `refetch()`
+    interval pulls in fresh captures at the top.
 
 The Haikubox poller is a separate APScheduler job (also in
 `pipeline/worker.py`) that runs `ingest/haikubox.py::poll_once` every 30 s
@@ -299,7 +361,7 @@ months as the local bird population shifts seasonally.
 
 ## Tests
 
-37 unit tests, organized by module:
+56 unit tests, organized by module:
 
 | File | Coverage |
 |---|---|
@@ -307,6 +369,7 @@ months as the local bird population shifts seasonally.
 | `test_fuse.py` | Bayesian renormalization, audio close-call flips, seasonal boost/suppression |
 | `test_calibration.py` | Load + cache + fallback when file missing / malformed |
 | `test_notify.py` | Rarity decision over various detection histories |
+| `test_process.py` | Classifier-rejection → species_id=NULL persistence, Laplacian-variance ranking |
 | `test_species_and_corrections.py` | GET /api/species sources, POST correction happy/edge paths |
 
 None of them load torch/transformers/ultralytics — the heavy modules use
@@ -395,14 +458,19 @@ stack.
 
 Stashed in `README.md` "Future improvements":
 
-- **Classifier swap** to `prithivMLmods/Bird-Species-Classifier-526`
-  (SigLIP-2 backbone) or an iNat-2021 derivative. Defer until ~50
-  real-yard labeled crops are accumulated via active learning.
+- **Active-learning fine-tune** (`scripts/retrain_classifier.py` is a
+  stub). Real species head needs ~50 corrections per species (currently
+  ~26 across all real species). The "Not a bird" pile (~210 corrections)
+  is closer to feasible for a YOLO false-positive head fine-tune.
+- **Classifier upgrade.** A/B benchmark via `scripts/benchmark_classifiers.py`
+  showed prithivMLmods/Bird-Species-Classifier-526 (SigLIP-2) at 14 % top-1
+  vs dennisjooo at 3 %. Held off swapping because the absolute numbers say
+  the image-quality ceiling matters more than the model; revisit after
+  multi-frame voting + sharpness ranking show their gains.
 - **Scheduled yard calibration refresh** (currently manual via
   `make calibrate`; should become an APScheduler job).
-- **Active-learning fine-tune** (`scripts/retrain_classifier.py` is
-  currently a stub printing the correction summary; trigger the real
-  fine-tune around ~500 corrections).
+- **Audio-correlation backfill** (Haikubox poller only fetches the last
+  hour; backlogged visits miss audio confirmation).
 
 ## Conventions
 

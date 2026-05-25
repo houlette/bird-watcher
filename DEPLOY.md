@@ -190,8 +190,9 @@ keep the webhook as a connectivity-test ping only.
 In the Reolink web client (the camera's IP on your LAN):
 
 1. **Settings → Network → WiFi**: connect to your 5GHz WiFi. Confirm signal strength is ≥ −65 dBm at the mount point.
-2. **Settings → Detection → Motion**: enable basic motion detection. **Disable** AI Person/Vehicle/Animal — they're tuned for security cameras and miss small birds.
-3. **Settings → Surveillance → FTP**:
+2. **Settings → System → Date & Time**: set timezone to **GMT+0** and disable DST. The worker parses capture time out of the upload filename as naive UTC, so running the camera in UTC keeps audio correlation aligned without any conversion math. (Newer Reolink firmwares require clicking **Confirm** in two places — once on the dialog, once on the parent page — for the change to actually stick.)
+3. **Settings → Detection → Motion**: enable basic motion detection. **Disable** AI Person/Vehicle/Animal — they're tuned for security cameras and miss small birds.
+4. **Settings → Surveillance → FTP**:
    - **Server**: `birdwatcher.ryanhoulette.com`
    - **Port**: `22222`
    - **Username**: `birdcam`
@@ -199,15 +200,15 @@ In the Reolink web client (the camera's IP on your LAN):
    - **Anonymous**: off
    - **Transport Mode**: `Auto` (or `Passive`)
    - **Don't allow plain unencrypted FTP**: **ON** (this forces FTPS; the server requires TLS anyway)
-   - **Upload**: `Video & Image` (or `Image only`; the pipeline handles both)
-   - **Video → Resolution**: `Clear` (4K). Max File Size 100MB is fine.
+   - **Upload**: `Video & Image` (the pipeline takes JPG snapshots AND short MP4 clips; multi-frame voting + sharpness ranking depends on the MP4s).
+   - **Video → Resolution**: `Clear` (4K). **Max File Size: 15 MB.** This matches `pipeline/frames.py::MAX_VIDEO_BYTES`; larger files raise `SkipFile` and get retired without processing. (Long motion events split into multiple chunked clips, each their own Visit — that's fine.)
    - **Image → Resolution**: `Clear`.
    - Hit **Test** — the camera should report success once the Hetzner Cloud Firewall has port 22222 and 30000–30009 open.
    - Under **Schedule** below, switch to the **Alarm** tab (not Timer), check **Any Motion**, leave the 24/7 grid filled in.
-4. **Settings → Network → Webhook / HTTP push** (optional but useful):
+5. **Settings → Network → Webhook / HTTP push** (optional but useful):
    - URL: `https://birdwatcher.ryanhoulette.com/api/ingest/motion`
-   - Body: anything; our endpoint returns 200 to any POST. Keep this so the camera's Test button works and we get a fast log signal when motion fires.
-5. **Live view**: confirm framing. Adjust the varifocal lens until a typical bird at the feeder is ≥ 200 px wide. (At 4K, this is roughly the lens set to 6–10 mm depending on distance.)
+   - Body: anything; our endpoint returns 200 to any POST. Keep this so the camera's Test button works and we get a fast log signal when motion fires. (The webhook is metadata-only — clips come in over FTPS, not here.)
+6. **Live view**: confirm framing. Adjust the varifocal lens until a typical bird at the feeder is ≥ 200 px wide. (At 4K, this is roughly the lens set to 6–10 mm depending on distance.)
 
 ## 11. End-to-end smoke test
 
@@ -220,12 +221,15 @@ docker compose logs api --tail=50 | grep -E "ingest|pipeline"
 You should see lines like:
 
 ```
-INFO    POST /api/ingest/motion 200 OK
+INFO    pipeline.worker: Created visit 1 from upload/2026/05/25/Birdfeeder_00_20260525120222.mp4
 INFO    pipeline.process: visit 1: 4 tracks
-INFO    pipeline.process: visit 1: 2 tracks persisted (after not_a_bird filter)
+INFO    pipeline.process: visit 1: 4 tracks persisted (some may be Unidentified)
+INFO    pipeline.worker: Processed visit 1 (4 tracks)
 ```
 
-(Your hand will get rejected as not-a-bird, which is correct behavior.)
+(Your hand likely gets classifier-rejected; the track still becomes an
+"Unidentified" Detection in the feed so you can hand-label it as
+"Not a bird" via the picker — that's how the active-learning loop closes.)
 
 For a real positive test, point your phone showing a cardinal photo at the camera.
 
