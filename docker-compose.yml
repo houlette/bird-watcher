@@ -1,5 +1,8 @@
 services:
   api:
+    # Fixed name so the shared Caddy (in ~/infra/) can reverse_proxy to
+    # us by container name over the external `web` network.
+    container_name: birdwatcher-api
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -10,10 +13,6 @@ services:
       - ./backend/data:/app/data
       - ./backend/models:/app/models
       - ./backend/secrets:/app/secrets
-    # Expose API on the host's loopback so the shared Caddy (in the
-    # separate ~/infra/ repo) can reach us via host.docker.internal:8000.
-    ports:
-      - "127.0.0.1:8000:8000"
     env_file:
       - path: ./backend/.env
         required: false
@@ -23,6 +22,8 @@ services:
     # MAX_VIDEO_BYTES cap in pipeline/frames.py so we don't loop on the
     # same problematic file.
     mem_limit: 4g
+    networks:
+      - web
 
   # FTPS server for Reolink to upload motion-triggered JPG snapshots.
   # Reolink's RLC-811WA firmware speaks FTP/FTPS, not SFTP — see the
@@ -65,3 +66,11 @@ services:
 
 volumes:
   ftp_tls:
+
+# Shared bridge network with the Caddy container in ~/infra/. Created
+# once outside of compose with `docker network create web` — see the
+# infra repo README.
+networks:
+  web:
+    external: true
+    name: web
