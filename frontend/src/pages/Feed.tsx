@@ -70,7 +70,10 @@ export default function Feed() {
 
   return (
     <div>
-      <div className="grid gap-3">
+      {/* Multi-column grid: shrinking each crop hides the underlying motion
+          blur / low-res-ness of the feeder-cam footage — at ~180-200 px wide
+          the eye smooths over artifacts that are obvious at full width. */}
+      <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
         {detections.map((d) => (
           <DetectionCard key={d.id} detection={d} />
         ))}
