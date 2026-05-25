@@ -135,7 +135,7 @@ It writes `backend/secrets/vapid_private.pem` (mode 600, gitignored) and prints 
 
 ## 7. Build the frontend
 
-The Caddy container serves the prebuilt PWA from `frontend/dist`. Build it once:
+The shared Caddy (in `~/infra/`) serves the prebuilt PWA from `frontend/dist`. Build it once:
 
 ```bash
 # Install node 20 (matches the Vite project's expected version)
@@ -154,11 +154,10 @@ You should see `frontend/dist/` with `index.html`, an `assets/` folder, and `sw.
 
 ```bash
 docker compose up -d
-docker compose ps   # api + caddy should both be 'running'
-docker compose logs caddy --tail=20
+docker compose ps   # api + ftp should both be 'running'
 ```
 
-Caddy auto-issues a Let's Encrypt certificate for `birdwatcher.ryanhoulette.com` on first start — this works only if DNS already points here. Look for a `certificate obtained successfully` line in the logs.
+The shared Caddy in `~/infra/` handles TLS termination and reverse-proxies `birdwatcher.ryanhoulette.com` to `host.docker.internal:8000`. If the infra repo isn't deployed yet, set that up first (see its README).
 
 Verify from your laptop:
 
@@ -248,7 +247,7 @@ On your wife's Android phone:
 ```bash
 # Tail logs
 docker compose logs -f api
-docker compose logs -f caddy
+cd ~/infra && docker compose logs -f caddy
 
 # Restart after a code change
 git pull
@@ -272,7 +271,7 @@ tar czf birdwatcher-backup-$(date +%F).tar.gz \
 
 ## Troubleshooting
 
-**TLS cert fails to issue.** Caddy log will say `unable to obtain certificate`. Most common cause: DNS not yet propagated, or the firewall blocking port 80. Fix DNS / firewall, then `docker compose restart caddy`.
+**TLS cert fails to issue.** Check `cd ~/infra && docker compose logs caddy` — most common cause: DNS not yet propagated, or the firewall blocking port 80. Fix DNS / firewall, then `cd ~/infra && docker compose restart caddy`.
 
 **Camera uploads succeed but no detections appear.** Tail the API logs; if you see `not_a_bird` rejections, the YOLO/classifier filter is being too aggressive — relax `IN_RANGE_THRESHOLD` in `pipeline/classify.py`. If you see no `pipeline.process` logs at all, the worker isn't picking up new visits — restart the api container.
 
