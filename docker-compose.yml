@@ -10,8 +10,10 @@ services:
       - ./backend/data:/app/data
       - ./backend/models:/app/models
       - ./backend/secrets:/app/secrets
-    expose:
-      - "8000"
+    # Expose API on the host's loopback so the shared Caddy (in the
+    # separate ~/infra/ repo) can reach us via host.docker.internal:8000.
+    ports:
+      - "127.0.0.1:8000:8000"
     env_file:
       - path: ./backend/.env
         required: false
@@ -21,20 +23,6 @@ services:
     # MAX_VIDEO_BYTES cap in pipeline/frames.py so we don't loop on the
     # same problematic file.
     mem_limit: 4g
-
-  caddy:
-    image: caddy:2
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./frontend/dist:/srv/frontend:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      - api
 
   # FTPS server for Reolink to upload motion-triggered JPG snapshots.
   # Reolink's RLC-811WA firmware speaks FTP/FTPS, not SFTP — see the
@@ -76,6 +64,4 @@ services:
       - ftp_tls:/etc/ssl/private
 
 volumes:
-  caddy_data:
-  caddy_config:
   ftp_tls:
