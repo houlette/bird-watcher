@@ -12,10 +12,15 @@ export type Detection = {
   created_at: string;
 };
 
-export async function fetchDetections(params: { limit?: number; species_id?: number } = {}) {
+export async function fetchDetections(params: {
+  limit?: number;
+  species_id?: number;
+  before_id?: number;
+} = {}) {
   const url = new URL("/api/detections", window.location.origin);
   if (params.limit) url.searchParams.set("limit", String(params.limit));
   if (params.species_id) url.searchParams.set("species_id", String(params.species_id));
+  if (params.before_id) url.searchParams.set("before_id", String(params.before_id));
   const r = await fetch(url);
   if (!r.ok) throw new Error(`fetchDetections: ${r.status}`);
   return (await r.json()) as Detection[];

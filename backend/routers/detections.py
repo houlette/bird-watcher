@@ -14,12 +14,17 @@ async def list_detections(
     limit: int = Query(50, le=200),
     species_id: int | None = None,
     include_not_a_bird: bool = Query(False, description="Include detections corrected to 'Not a bird'"),
+    before_id: int | None = Query(
+        None,
+        description="Cursor for pagination: return detections with id < before_id (older rows). "
+        "Omit on the first page; pass the last detection's id from the previous page after that.",
+    ),
     db: Session = Depends(get_db),
 ) -> list[dict]:
     q = (
         db.query(Detection)
         .options(joinedload(Detection.species), joinedload(Detection.visit))
-        .order_by(desc(Detection.created_at))
+        .order_by(desc(Detection.id))  # id is monotone and matches created_at order
     )
     if species_id is not None:
         q = q.filter(Detection.species_id == species_id)
@@ -30,6 +35,8 @@ async def list_detections(
         q = q.outerjoin(Species, Detection.species_id == Species.id).filter(
             (Species.common_name.is_(None)) | (Species.common_name != NOT_A_BIRD_LABEL)
         )
+    if before_id is not None:
+        q = q.filter(Detection.id < before_id)
     rows = q.limit(limit).all()
 
     return [

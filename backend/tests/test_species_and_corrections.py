@@ -196,6 +196,23 @@ def test_detections_include_not_a_bird_when_requested(client, db):
     assert feeder_det in ids
 
 
+def test_detections_pagination_with_before_id(client, db):
+    """Infinite-scroll cursor: before_id returns only older (smaller-id) rows."""
+    ids = [_seed_detection(db, f"Test Species {i}") for i in range(5)]
+
+    # Default order is id desc; first page returns all 5.
+    page1 = client.get("/api/detections?limit=3").json()
+    assert [d["id"] for d in page1] == [ids[4], ids[3], ids[2]]
+
+    # Second page passes the id of the last row → returns the older ones.
+    page2 = client.get(f"/api/detections?limit=3&before_id={ids[2]}").json()
+    assert [d["id"] for d in page2] == [ids[1], ids[0]]
+
+    # Third page with a cursor older than every row → empty (end of feed).
+    page3 = client.get(f"/api/detections?limit=3&before_id={ids[0]}").json()
+    assert page3 == []
+
+
 def test_species_endpoint_returns_yard_and_extra_groups(client, monkeypatch, tmp_path):
     """Picker needs two groups: yard (Haikubox-heard) and extra (broader NA)."""
     cal_path = tmp_path / "yard_priors.json"
