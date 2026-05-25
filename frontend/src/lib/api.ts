@@ -22,7 +22,16 @@ export async function fetchDetections(params: { limit?: number; species_id?: num
 }
 
 export type SpeciesEntry = { name: string; total: number };
-export type SpeciesList = { source: "calibration" | "fallback"; species: SpeciesEntry[] };
+export type SpeciesList = {
+  source: "calibration" | "fallback";
+  // Yard-known species (Haikubox-heard) sorted by detection count desc.
+  yard: SpeciesEntry[];
+  // Broader NA-bird list (alphabetical) — pigeons, raptors, etc. the
+  // user might see visually without the Haikubox having heard them.
+  extra: SpeciesEntry[];
+  // Legacy: equals yard. Kept for backward compat.
+  species: SpeciesEntry[];
+};
 
 export async function fetchSpecies(): Promise<SpeciesList> {
   const r = await fetch("/api/species");

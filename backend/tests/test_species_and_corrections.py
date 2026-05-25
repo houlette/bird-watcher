@@ -196,6 +196,25 @@ def test_detections_include_not_a_bird_when_requested(client, db):
     assert feeder_det in ids
 
 
+def test_species_endpoint_returns_yard_and_extra_groups(client, monkeypatch, tmp_path):
+    """Picker needs two groups: yard (Haikubox-heard) and extra (broader NA)."""
+    cal_path = tmp_path / "yard_priors.json"
+    monkeypatch.setattr(calibration, "CALIBRATION_PATH", cal_path)
+    _write_calibration(cal_path, {
+        "Northern Cardinal": {"total": 100, "monthly_pct": {str(m): 1 / 12 for m in range(1, 13)}},
+    })
+    body = client.get("/api/species").json()
+    assert "yard" in body
+    assert "extra" in body
+    assert [s["name"] for s in body["yard"]] == ["Northern Cardinal"]
+    extra_names = [s["name"] for s in body["extra"]]
+    # Common NA species the user might want to label but the Haikubox missed.
+    assert "Rock Pigeon" in extra_names
+    assert "Red-tailed Hawk" in extra_names
+    # Should NOT duplicate yard species in the extra list.
+    assert "Northern Cardinal" not in extra_names
+
+
 def test_correction_to_not_a_bird_removes_from_feed(client, db):
     """End-to-end: user marks a misidentified Ovenbird as Not a bird,
     and the next GET /api/detections excludes it."""

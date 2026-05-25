@@ -17,9 +17,15 @@ type Props = {
 };
 
 /**
- * Searchable combobox over the yard's allow-listed species (~157 entries when
- * calibration is loaded, ~60 from the hand-coded fallback otherwise). Drives
- * the "Wrong species?" UX on DetectionCard.
+ * Searchable combobox over species labels. Renders two groups:
+ *   1. Yard species — what the Haikubox has actually heard at this yard,
+ *      sorted by detection count, with the counts shown as hints.
+ *   2. Other NA species — a broader curated NA-bird list (pigeons,
+ *      raptors, etc.) for species the user sees but the Haikubox has
+ *      never recorded. Alphabetical.
+ *
+ * When the user types a query, both groups are filtered and rendered
+ * under the same query result.
  */
 export default function SpeciesPicker({ open, current, onSelect, onCancel }: Props) {
   const [query, setQuery] = useState("");
@@ -33,17 +39,24 @@ export default function SpeciesPicker({ open, current, onSelect, onCancel }: Pro
   useEffect(() => {
     if (open) {
       setQuery("");
-      // Defer focus so the modal has mounted.
       requestAnimationFrame(() => inputRef.current?.focus());
     }
   }, [open]);
 
-  const filtered = useMemo<SpeciesEntry[]>(() => {
-    if (!data) return [];
+  // Filter both groups by query. When no query, show all yard species
+  // and the top of the alphabetical extra list (capped so the picker
+  // doesn't render hundreds of items at once).
+  const { yardFiltered, extraFiltered } = useMemo(() => {
+    if (!data) return { yardFiltered: [] as SpeciesEntry[], extraFiltered: [] as SpeciesEntry[] };
     const q = query.trim().toLowerCase();
-    if (!q) return data.species.slice(0, 50); // show top 50 by count when no query
-    return data.species.filter((s) => s.name.toLowerCase().includes(q)).slice(0, 50);
+    const match = (s: SpeciesEntry) => !q || s.name.toLowerCase().includes(q);
+    const yardFiltered = data.yard.filter(match).slice(0, 50);
+    const extraFiltered = data.extra.filter(match).slice(0, q ? 50 : 100);
+    return { yardFiltered, extraFiltered };
   }, [data, query]);
+
+  // Enter key picks the first available match across both groups.
+  const firstMatch = yardFiltered[0]?.name ?? extraFiltered[0]?.name;
 
   if (!open) return null;
 
@@ -68,7 +81,7 @@ export default function SpeciesPicker({ open, current, onSelect, onCancel }: Pro
             className="w-full px-3 py-2 border border-slate-300 rounded outline-none focus:border-forest"
             onKeyDown={(e) => {
               if (e.key === "Escape") onCancel();
-              if (e.key === "Enter" && filtered.length > 0) onSelect(filtered[0].name);
+              if (e.key === "Enter" && firstMatch) onSelect(firstMatch);
             }}
           />
         </div>
@@ -89,34 +102,66 @@ export default function SpeciesPicker({ open, current, onSelect, onCancel }: Pro
           </button>
 
           {isLoading && <p className="p-3 text-sm text-slate-500">Loading species…</p>}
-          {!isLoading && filtered.length === 0 && (
+          {!isLoading && yardFiltered.length === 0 && extraFiltered.length === 0 && (
             <p className="p-3 text-sm text-slate-500">No species match "{query}".</p>
           )}
-          <ul>
-            {filtered.map((s) => (
-              <li key={s.name}>
-                <button
-                  className={`w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center justify-between text-sm ${
-                    s.name === current ? "bg-cream font-semibold" : ""
-                  }`}
-                  onClick={() => onSelect(s.name)}
-                >
-                  <span>{s.name}</span>
-                  {s.total > 0 && (
-                    <span className="text-xs text-slate-400">
-                      {s.total >= 1000 ? `${Math.round(s.total / 1000)}k` : s.total}
-                    </span>
-                  )}
-                </button>
-              </li>
-            ))}
-          </ul>
+
+          {/* Group 1: Yard species (Haikubox-heard, with detection counts). */}
+          {yardFiltered.length > 0 && (
+            <>
+              <div className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wide text-slate-400 bg-slate-50/50">
+                Heard in this yard
+              </div>
+              <ul>
+                {yardFiltered.map((s) => (
+                  <li key={`yard-${s.name}`}>
+                    <button
+                      className={`w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center justify-between text-sm ${
+                        s.name === current ? "bg-cream font-semibold" : ""
+                      }`}
+                      onClick={() => onSelect(s.name)}
+                    >
+                      <span>{s.name}</span>
+                      {s.total > 0 && (
+                        <span className="text-xs text-slate-400">
+                          {s.total >= 1000 ? `${Math.round(s.total / 1000)}k` : s.total}
+                        </span>
+                      )}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+
+          {/* Group 2: Broader NA bird list. */}
+          {extraFiltered.length > 0 && (
+            <>
+              <div className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wide text-slate-400 bg-slate-50/50 border-t border-slate-100">
+                Other North American species
+              </div>
+              <ul>
+                {extraFiltered.map((s) => (
+                  <li key={`extra-${s.name}`}>
+                    <button
+                      className={`w-full text-left px-3 py-2 hover:bg-slate-50 text-sm ${
+                        s.name === current ? "bg-cream font-semibold" : ""
+                      }`}
+                      onClick={() => onSelect(s.name)}
+                    >
+                      {s.name}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
         </div>
 
         <div className="p-2 border-t flex justify-between text-xs text-slate-500">
           <span>
             {data?.source === "calibration"
-              ? "Species from this yard's Haikubox history."
+              ? `${data.yard.length} from yard · ${data.extra.length} other NA species`
               : "Fallback species list (calibrate for better picks)."}
           </span>
           <button onClick={onCancel} className="text-slate-600 hover:text-slate-900">
