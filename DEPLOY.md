@@ -152,12 +152,22 @@ You should see `frontend/dist/` with `index.html`, an `assets/` folder, and `sw.
 
 ## 8. First boot
 
+The API container joins an external Docker network named `web` so that
+the shared Caddy in `~/infra/` can reverse-proxy to it by container
+name. Create the network if it doesn't exist yet (one-time per host):
+
+```bash
+docker network create web 2>/dev/null || true
+```
+
+Then bring up the services:
+
 ```bash
 docker compose up -d
 docker compose ps   # api + ftp should both be 'running'
 ```
 
-The shared Caddy in `~/infra/` handles TLS termination and reverse-proxies `birdwatcher.ryanhoulette.com` to `host.docker.internal:8000`. If the infra repo isn't deployed yet, set that up first (see its README).
+The shared Caddy in `~/infra/` handles TLS termination and reverse-proxies `birdwatcher.ryanhoulette.com` to `birdwatcher-api:8000` over the `web` network. If the infra repo isn't deployed yet, set that up first (see its README).
 
 Verify from your laptop:
 
