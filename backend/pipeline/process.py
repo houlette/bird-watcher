@@ -72,7 +72,16 @@ def process_visit(visit: Visit, db: Session) -> int:
     for track in tracks:
         if not track.detections:
             continue
-        best = track.best_detection
+
+        # Rank this track's detections by area × confidence × sharpness so
+        # the saved crop AND the crops we hand to the classifier are the
+        # best-looking ones available across all frames. Motion blur and
+        # mid-flight poses score low on the Laplacian-variance sharpness
+        # term, letting in-focus perched frames win.
+        ranked = _rank_detections(track, frames_by_index)
+        if not ranked:
+            continue
+        best = ranked[0]
 
         # Always save the YOLO-detected crop. If the classifier later rejects
         # it, the row still goes into the feed as "Unidentified" so the user
@@ -80,12 +89,15 @@ def process_visit(visit: Visit, db: Session) -> int:
         # are the highest-value active-learning examples — YOLO sees a
         # bird shape but the classifier isn't confident, so an explicit
         # human label closes the loop.
-        crop_rel_path, _ = _save_best_crop(track, frames_by_index, visit_id=visit.id)
+        crop_rel_path, _ = _save_crop(best, frames_by_index, visit_id=visit.id, track_id=track.track_id)
 
-        # Multi-frame voting: classify up to 3 crops from this track (best
-        # by area×conf, plus 2 evenly-spaced others if the track has enough
-        # frames). Average their softmax distributions before fusion.
-        crops_to_classify = _select_voting_crops(track, frames_by_index)
+        # Multi-frame voting: classify up to 3 crops from this track. Pick
+        # the top 3 by sharpness-aware score so the classifier sees the
+        # cleanest views, not arbitrary samples.
+        crops_to_classify = [
+            _extract_crop(d, frames_by_index) for d in ranked[:3]
+        ]
+        crops_to_classify = [c for c in crops_to_classify if c is not None and c.size > 0]
         per_crop_predictions = [classify_bird(c) for c in crops_to_classify]
         per_crop_predictions = [p for p in per_crop_predictions if p]
 
@@ -161,72 +173,78 @@ def process_visit(visit: Visit, db: Session) -> int:
     return len(tracks)
 
 
-def _save_best_crop(
-    track: Track,
-    frames_by_index: dict,
-    *,
-    visit_id: int,
-) -> tuple[Path, "cv2.Mat"]:
-    """Write the best-crop image for a track to disk and return (relative_path, crop_array).
+def _laplacian_variance(image: "cv2.Mat") -> float:
+    """Focus measure: variance of the Laplacian. Higher = sharper.
 
-    Returning the crop array as well as the path lets the caller hand the same
-    image to the classifier without re-decoding it from JPEG.
+    Standard "focus measure" from microscopy / astrophotography. A motion-
+    blurred crop has low high-frequency content and scores low; an in-focus
+    crop scores high. Typical values on our crops:
+        very blurry  ~10
+        in focus     ~100-500
+        very sharp   1000+
+    Content-dependent (a uniformly-colored bird scores lower than a heavily
+    feathered one even at the same focus), so we only use it as a ranking
+    signal, not an absolute threshold.
     """
-    best = track.best_detection
-    frame_image = frames_by_index[best.frame_index]
-    x, y, w, h = best.bbox
+    if image.size == 0:
+        return 0.0
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+    return float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
-    # Expand the crop slightly so the bird isn't tight against the edges —
-    # 15% padding on each side, clipped to frame bounds.
-    fh, fw = frame_image.shape[:2]
-    pad_w, pad_h = int(w * 0.15), int(h * 0.15)
+
+def _extract_crop(det, frames_by_index: dict, padding: float = 0.15) -> "cv2.Mat | None":
+    """Crop the padded bbox out of the relevant frame. Returns None if the
+    frame isn't cached (shouldn't happen in normal flow)."""
+    frame = frames_by_index.get(det.frame_index)
+    if frame is None:
+        return None
+    x, y, w, h = det.bbox
+    fh, fw = frame.shape[:2]
+    pad_w, pad_h = int(w * padding), int(h * padding)
     x0 = max(0, x - pad_w)
     y0 = max(0, y - pad_h)
     x1 = min(fw, x + w + pad_w)
     y1 = min(fh, y + h + pad_h)
-    crop = frame_image[y0:y1, x0:x1]
+    return frame[y0:y1, x0:x1]
 
-    filename = f"v{visit_id:08d}_t{track.track_id:04d}.jpg"
+
+def _rank_detections(track: Track, frames_by_index: dict) -> list:
+    """Sort the track's detections by area × confidence × sharpness, desc.
+
+    The +1 on sharpness avoids zeroing-out a small but confident detection
+    just because its crop happened to land at low Laplacian variance, and
+    lets the ranking degrade gracefully if a frame is missing from cache
+    (sharpness defaults to 0, so area × confidence still orders them).
+    """
+    scored: list[tuple[float, object]] = []
+    for det in track.detections:
+        crop = _extract_crop(det, frames_by_index)
+        if crop is None or crop.size == 0:
+            continue
+        _, _, w, h = det.bbox
+        sharpness = _laplacian_variance(crop)
+        score = w * h * det.confidence * (sharpness + 1.0)
+        scored.append((score, det))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [d for _, d in scored]
+
+
+def _save_crop(
+    det,
+    frames_by_index: dict,
+    *,
+    visit_id: int,
+    track_id: int,
+) -> tuple[Path, "cv2.Mat"]:
+    """Write the crop for `det` to disk and return (relative_path, crop_array).
+    Returning the array lets the caller pass it straight to the classifier
+    without re-decoding the JPEG."""
+    crop = _extract_crop(det, frames_by_index)
+    assert crop is not None and crop.size > 0
+    filename = f"v{visit_id:08d}_t{track_id:04d}.jpg"
     out_path = CROPS_DIR / filename
     cv2.imwrite(str(out_path), crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
     return out_path.relative_to(DATA_DIR), crop
-
-
-def _select_voting_crops(track: Track, frames_by_index: dict) -> list["cv2.Mat"]:
-    """Pick up to 3 crops from a track for multi-frame voting.
-
-    Always include the 'best' (area × confidence). For longer tracks add 2 more
-    evenly spaced so the classifier sees different poses / angles. Crops are
-    cut directly from the cached frame images so this is essentially free.
-    """
-    n = len(track.detections)
-    if n == 0:
-        return []
-    indices = {track.detections.index(track.best_detection)}
-    if n >= 3:
-        indices.add(n // 3)
-        indices.add((2 * n) // 3)
-    elif n == 2:
-        indices.add(0)
-        indices.add(1)
-
-    out: list["cv2.Mat"] = []
-    for i in sorted(indices):
-        det = track.detections[i]
-        frame_image = frames_by_index.get(det.frame_index)
-        if frame_image is None:
-            continue
-        x, y, w, h = det.bbox
-        fh, fw = frame_image.shape[:2]
-        pad_w, pad_h = int(w * 0.15), int(h * 0.15)
-        x0 = max(0, x - pad_w)
-        y0 = max(0, y - pad_h)
-        x1 = min(fw, x + w + pad_w)
-        y1 = min(fh, y + h + pad_h)
-        crop = frame_image[y0:y1, x0:x1]
-        if crop.size > 0:
-            out.append(crop)
-    return out
 
 
 def _average_predictions(per_crop: list[list[SpeciesPrediction]]) -> list[SpeciesPrediction]:

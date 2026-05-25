@@ -102,7 +102,10 @@ def test_classifier_rejection_still_creates_detection(db, tmp_path, monkeypatch)
         # Classifier rejects (returns []) — the new code path under test.
         monkeypatch.setattr(process_module, "classify_bird", lambda _img: [])
         # Don't actually write image files.
-        monkeypatch.setattr(process_module, "_save_best_crop", lambda _t, _f, *, visit_id: (Path(f"crops/v{visit_id}_t1.jpg"), fake_frame_image))
+        monkeypatch.setattr(process_module, "_save_crop", lambda _d, _f, *, visit_id, track_id: (Path(f"crops/v{visit_id}_t{track_id}.jpg"), fake_frame_image))
+        # Bypass the sharpness-aware ranking and just hand back the track's detections in order.
+        monkeypatch.setattr(process_module, "_rank_detections", lambda track, _f: list(track.detections))
+        monkeypatch.setattr(process_module, "_extract_crop", lambda _d, _f, padding=0.15: fake_frame_image)
         # Don't try to push notifications (no species anyway).
         monkeypatch.setattr(process_module, "dispatch_for_detection", lambda *_a, **_k: 0)
 
@@ -117,3 +120,31 @@ def test_classifier_rejection_still_creates_detection(db, tmp_path, monkeypatch)
         assert d.raw_predictions == []
     finally:
         session.close()
+
+
+def test_laplacian_variance_higher_for_sharp_image():
+    """Sanity check: a sharp checkerboard scores higher than uniform gray."""
+    sharp = np.zeros((100, 100, 3), dtype=np.uint8)
+    sharp[::2, ::2] = 255  # checkerboard pattern, lots of high-frequency content
+    blurry = np.full((100, 100, 3), 128, dtype=np.uint8)  # uniform gray, no edges
+
+    sharp_var = process_module._laplacian_variance(sharp)
+    blurry_var = process_module._laplacian_variance(blurry)
+    assert sharp_var > blurry_var * 10  # at least 10× ratio
+
+
+def test_rank_detections_prefers_sharper_crops(tmp_path):
+    """Two detections with the same bbox area and confidence should be ranked
+    by sharpness — the sharper crop's source detection wins."""
+    sharp_frame = np.zeros((200, 200, 3), dtype=np.uint8)
+    sharp_frame[::2, ::2] = 255  # checkerboard — high Laplacian variance
+    blurry_frame = np.full((200, 200, 3), 128, dtype=np.uint8)  # uniform gray
+
+    d_blurry = _FakeDetection(bbox=(0, 0, 100, 100), confidence=0.9, frame_index=0)
+    d_sharp = _FakeDetection(bbox=(0, 0, 100, 100), confidence=0.9, frame_index=1)
+    track = _FakeTrack(track_id=1, detections=[d_blurry, d_sharp])
+
+    frames = {0: blurry_frame, 1: sharp_frame}
+    ranked = process_module._rank_detections(track, frames)
+    assert ranked[0] is d_sharp
+    assert ranked[1] is d_blurry
