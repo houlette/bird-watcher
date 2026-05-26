@@ -18,6 +18,19 @@ from db.utils import utcnow
 #   - The eventual retraining script (uses these as negative examples).
 NOT_A_BIRD_LABEL = "Not a bird"
 
+# Reserved Species.common_name for "this is definitely a bird but I can't
+# tell the species" corrections. Distinct from NULL species_id (which means
+# the classifier was unsure and the user hasn't weighed in yet) — UNKNOWN_BIRD
+# is a positive human confirmation. Highest-value YOLO training data: a
+# guaranteed-correct positive bounding box without species commitment.
+# Unlike NOT_A_BIRD, these DO show in the feed (they're real bird sightings).
+UNKNOWN_BIRD_LABEL = "Unknown bird"
+
+# Sentinel labels that aren't real species. Used by /api/species to exclude
+# them from the picker's species lists (they're surfaced separately) and by
+# the eventual retraining script to handle them with their own logic.
+SENTINEL_LABELS = frozenset({NOT_A_BIRD_LABEL, UNKNOWN_BIRD_LABEL})
+
 
 class Species(Base):
     __tablename__ = "species"

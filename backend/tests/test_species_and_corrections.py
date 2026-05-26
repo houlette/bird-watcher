@@ -156,19 +156,23 @@ def test_correction_rejects_unknown_detection(client):
     assert r.status_code == 404
 
 
-def test_species_endpoint_excludes_not_a_bird_from_calibration(client, monkeypatch, tmp_path):
-    """The 'Not a bird' sentinel shouldn't appear in the regular species list
-    (the picker surfaces it separately pinned at the top)."""
+def test_species_endpoint_excludes_sentinels_from_calibration(client, monkeypatch, tmp_path):
+    """Sentinel labels ('Not a bird', 'Unknown bird') shouldn't appear in the
+    regular species list — the picker surfaces them separately pinned at the top."""
     cal_path = tmp_path / "yard_priors.json"
     monkeypatch.setattr(calibration, "CALIBRATION_PATH", cal_path)
     _write_calibration(cal_path, {
         "Northern Cardinal": {"total": 100, "monthly_pct": {str(m): 1 / 12 for m in range(1, 13)}},
         "Not a bird": {"total": 50, "monthly_pct": {str(m): 1 / 12 for m in range(1, 13)}},
+        "Unknown bird": {"total": 30, "monthly_pct": {str(m): 1 / 12 for m in range(1, 13)}},
     })
     r = client.get("/api/species")
-    names = [s["name"] for s in r.json()["species"]]
-    assert "Northern Cardinal" in names
-    assert "Not a bird" not in names
+    payload = r.json()
+    yard_names = [s["name"] for s in payload["yard"]]
+    extra_names = [s["name"] for s in payload["extra"]]
+    assert "Northern Cardinal" in yard_names
+    assert "Not a bird" not in yard_names and "Not a bird" not in extra_names
+    assert "Unknown bird" not in yard_names and "Unknown bird" not in extra_names
 
 
 def test_detections_excludes_not_a_bird_by_default(client, db):

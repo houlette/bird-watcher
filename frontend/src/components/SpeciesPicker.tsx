@@ -9,6 +9,12 @@ import { fetchSpecies, type SpeciesEntry } from "../lib/api";
 // having to scroll through 150 real species names.
 export const NOT_A_BIRD = "Not a bird";
 
+// Must match backend/db/models.py:UNKNOWN_BIRD_LABEL. Pinned alongside
+// "Not a bird" for the case where the user is sure it IS a bird but
+// can't ID the species — still a useful positive training label for the
+// YOLO detector even without species info.
+export const UNKNOWN_BIRD = "Unknown bird";
+
 type Props = {
   open: boolean;
   current?: string | null;
@@ -87,11 +93,11 @@ export default function SpeciesPicker({ open, current, onSelect, onCancel }: Pro
         </div>
 
         <div className="overflow-y-auto flex-1">
-          {/* Pinned "Not a bird" option — always at the top, distinct styling.
+          {/* Pinned sentinel options — always at the top, distinct styling.
               Shown even with an active query so users can flag false positives
-              without typing. */}
+              or species-unknown birds without typing. */}
           <button
-            className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center justify-between text-sm border-b border-slate-200 text-slate-600"
+            className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center justify-between text-sm border-b border-slate-100 text-slate-600"
             onClick={() => onSelect(NOT_A_BIRD)}
           >
             <span className="flex items-center gap-2">
@@ -99,6 +105,16 @@ export default function SpeciesPicker({ open, current, onSelect, onCancel }: Pro
               <span>{NOT_A_BIRD}</span>
             </span>
             <span className="text-xs text-slate-400">false positive</span>
+          </button>
+          <button
+            className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center justify-between text-sm border-b border-slate-200 text-slate-600"
+            onClick={() => onSelect(UNKNOWN_BIRD)}
+          >
+            <span className="flex items-center gap-2">
+              <span aria-hidden>❓</span>
+              <span>{UNKNOWN_BIRD}</span>
+            </span>
+            <span className="text-xs text-slate-400">bird, species unsure</span>
           </button>
 
           {isLoading && <p className="p-3 text-sm text-slate-500">Loading species…</p>}

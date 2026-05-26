@@ -17,10 +17,10 @@ code is ~50 lines.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -58,11 +58,20 @@ DEFAULT_WEIGHTS_PATH = Path(__file__).parent.parent / "models" / YOLO_WEIGHTS_FI
 
 @dataclass
 class BirdDetection:
-    """One bird detected in one frame."""
+    """One bird detected in one frame.
+
+    `crop` is populated by `process.py` right after detection runs, so the
+    full-resolution source frame can be released before the next frame is
+    decoded. Carrying the crop on the detection itself lets the tracker
+    pass detections downstream without us also having to thread a frame
+    cache through every function — and the crop is tiny (~120 KB at
+    typical bird sizes) vs ~25 MB for a cached 4K frame.
+    """
 
     bbox: tuple[int, int, int, int]   # x, y, w, h (pixels, top-left origin)
     confidence: float
     frame_index: int
+    crop: Any = field(default=None, repr=False, compare=False)  # H×W×3 BGR ndarray once populated
 
 
 _model_lock = Lock()

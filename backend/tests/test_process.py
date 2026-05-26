@@ -27,6 +27,7 @@ class _FakeDetection:
     bbox: tuple[int, int, int, int] = (100, 100, 60, 60)
     confidence: float = 0.85
     frame_index: int = 0
+    crop: object = None  # populated by process_visit at YOLO time in real flow
 
 
 @dataclass
@@ -94,18 +95,26 @@ def test_classifier_rejection_still_creates_detection(db, tmp_path, monkeypatch)
             timestamp: float = 0.0
             image: np.ndarray = None
 
+        # The tracked detection's crop will be populated by process_visit at YOLO
+        # time, so the rest of the pipeline can read d.crop directly. We mirror
+        # that by giving the same _FakeDetection instance to both detect_birds
+        # and the fake Tracker (so the crop assignment is visible downstream).
+        tracked_det = _FakeDetection()
+
         monkeypatch.setattr(process_module, "DATA_DIR", tmp_path)
-        monkeypatch.setattr(process_module, "extract_frames", lambda _p, target_fps=3.0: iter([_Frame(image=fake_frame_image)]))
-        monkeypatch.setattr(process_module, "detect_birds", lambda _img, _idx: [_FakeDetection()])
-        # Bypass the IoU tracker entirely.
-        monkeypatch.setattr(process_module, "Tracker", lambda: _FakeTracker([_FakeTrack(track_id=1, detections=[_FakeDetection()])]))
+        monkeypatch.setattr(process_module, "extract_frames", lambda _p, target_fps=6.0: iter([_Frame(image=fake_frame_image)]))
+        monkeypatch.setattr(process_module, "detect_birds", lambda _img, _idx: [tracked_det])
+        # Bypass the IoU tracker entirely — return the same det instance so
+        # `det.crop` assigned in process_visit's loop is visible to ranking.
+        monkeypatch.setattr(process_module, "Tracker", lambda: _FakeTracker([_FakeTrack(track_id=1, detections=[tracked_det])]))
         # Classifier rejects (returns []) — the new code path under test.
         monkeypatch.setattr(process_module, "classify_bird", lambda _img: [])
         # Don't actually write image files.
-        monkeypatch.setattr(process_module, "_save_crop", lambda _d, _f, *, visit_id, track_id: (Path(f"crops/v{visit_id}_t{track_id}.jpg"), fake_frame_image))
+        monkeypatch.setattr(process_module, "_save_crop", lambda _d, *, visit_id, track_id: Path(f"crops/v{visit_id}_t{track_id}.jpg"))
         # Bypass the sharpness-aware ranking and just hand back the track's detections in order.
-        monkeypatch.setattr(process_module, "_rank_detections", lambda track, _f: list(track.detections))
-        monkeypatch.setattr(process_module, "_extract_crop", lambda _d, _f, padding=0.15: fake_frame_image)
+        monkeypatch.setattr(process_module, "_rank_detections", lambda track: list(track.detections))
+        # _extract_crop_from_image is called per-detection during the frame loop.
+        monkeypatch.setattr(process_module, "_extract_crop_from_image", lambda _d, _img, padding=0.15: fake_frame_image)
         # Don't try to push notifications (no species anyway).
         monkeypatch.setattr(process_module, "dispatch_for_detection", lambda *_a, **_k: 0)
 
@@ -140,11 +149,10 @@ def test_rank_detections_prefers_sharper_crops(tmp_path):
     sharp_frame[::2, ::2] = 255  # checkerboard — high Laplacian variance
     blurry_frame = np.full((200, 200, 3), 128, dtype=np.uint8)  # uniform gray
 
-    d_blurry = _FakeDetection(bbox=(0, 0, 100, 100), confidence=0.9, frame_index=0)
-    d_sharp = _FakeDetection(bbox=(0, 0, 100, 100), confidence=0.9, frame_index=1)
+    d_blurry = _FakeDetection(bbox=(0, 0, 100, 100), confidence=0.9, frame_index=0, crop=blurry_frame)
+    d_sharp = _FakeDetection(bbox=(0, 0, 100, 100), confidence=0.9, frame_index=1, crop=sharp_frame)
     track = _FakeTrack(track_id=1, detections=[d_blurry, d_sharp])
 
-    frames = {0: blurry_frame, 1: sharp_frame}
-    ranked = process_module._rank_detections(track, frames)
+    ranked = process_module._rank_detections(track)
     assert ranked[0] is d_sharp
     assert ranked[1] is d_blurry

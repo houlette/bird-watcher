@@ -127,8 +127,12 @@ person (or the next Claude session) doesn't pay the same tuition.
 - **Decoded video frames in memory are enormous.** 4K BGR is ~25 MB
   per frame; a 30-second clip at 3 fps is 90 frames = 2.2 GB. If you
   cache all of them so the classifier can read crops out of any one,
-  you OOM. Either stream-process (process and release each frame) or
-  cap the file size up front.
+  you OOM. Fix: extract each detection's crop at YOLO time and store
+  it on the BirdDetection itself (a typical bird crop is ~120 KB, two
+  orders of magnitude smaller). The full frame can then be released
+  before the next is decoded, and the per-visit RAM bound scales with
+  bird-count not frame-count — which lets you raise sampling fps to
+  give the sharpness ranker more candidates.
 
 ## Backend / Python
 

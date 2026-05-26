@@ -5,14 +5,14 @@ species at the top (with audio-detection counts to hint familiarity)
 and a broader NA-bird list below for less-common-at-this-yard species
 the user still wants to label (pigeons, raptors, vagrant species, etc.).
 
-The 'Not a bird' sentinel is excluded from both groups — the picker
-surfaces it separately pinned at the top.
+The 'Not a bird' and 'Unknown bird' sentinels are excluded from both
+groups — the picker surfaces them separately pinned at the top.
 """
 from __future__ import annotations
 
 from fastapi import APIRouter
 
-from db.models import NOT_A_BIRD_LABEL
+from db.models import SENTINEL_LABELS
 from na_birds import NA_BIRD_SPECIES
 from pipeline import calibration
 from pipeline.classify import NA_BACKYARD_ALLOWLIST, _normalize_for_display
@@ -30,7 +30,7 @@ async def list_species() -> dict:
             for name, info in cal["species"].items()
             if isinstance(info, dict)
             and info.get("total", 0) >= calibration.MIN_DETECTIONS_FOR_ALLOWLIST
-            and name != NOT_A_BIRD_LABEL
+            and name not in SENTINEL_LABELS
         ]
         yard_items.sort(key=lambda r: r["total"], reverse=True)
         source = "calibration"
@@ -38,7 +38,7 @@ async def list_species() -> dict:
         yard_items = [
             {"name": _normalize_for_display(name), "total": 0}
             for name in NA_BACKYARD_ALLOWLIST
-            if name != NOT_A_BIRD_LABEL
+            if name not in SENTINEL_LABELS
         ]
         yard_items.sort(key=lambda r: r["name"])
         source = "fallback"
@@ -49,7 +49,7 @@ async def list_species() -> dict:
     extra_items = [
         {"name": s, "total": 0}
         for s in NA_BIRD_SPECIES
-        if s.lower() not in yard_names_norm and s != NOT_A_BIRD_LABEL
+        if s.lower() not in yard_names_norm and s not in SENTINEL_LABELS
     ]
     extra_items.sort(key=lambda r: r["name"])
 

@@ -10,7 +10,7 @@ runbook); this file is everything in between.
 A Reolink RLC-811WA WiFi camera pointed at the bird feeders. On motion it
 uploads a JPG snapshot and a short MP4 clip over FTPS to a pure-ftpd
 container on our VM. The backend's filesystem-scan worker picks new files
-out of the FTPS drop directory, extracts frames at ~3 fps, runs **tiled**
+out of the FTPS drop directory, extracts frames at ~6 fps, runs **tiled**
 YOLO11-small over each frame (4K downsampling drops small birds otherwise),
 tracks detections across frames with a simple IoU tracker, ranks each
 track's crops by area × confidence × Laplacian-variance sharpness, hands
@@ -109,7 +109,7 @@ BirdWatcher/
 │   ├── na_birds.py          ← Curated ~200-species NA bird list (picker)
 │   │
 │   ├── pipeline/            ← The classification pipeline
-│   │   ├── frames.py        ← OpenCV frame extraction at ~3 fps;
+│   │   ├── frames.py        ← OpenCV frame extraction at ~6 fps;
 │   │   │                       raises SkipFile if MP4 > 15 MB
 │   │   ├── detect.py        ← Tiled YOLO11-small (1024-px tiles, 20%
 │   │   │                       overlap, NMS merge), bird-only
@@ -196,9 +196,11 @@ Trace one motion event from camera to phone notification:
    pending and retry next tick.
 
 3. **Frame extraction.** `pipeline/frames.py` uses OpenCV to decode the
-   clip at ~3 fps. Each `Frame` knows its index, timestamp, and BGR pixels.
-   Raises `SkipFile` if an MP4 exceeds `MAX_VIDEO_BYTES` (15 MB) — the cap
-   bounds peak memory from the per-frame BGR cache.
+   clip at ~6 fps (Reolink records at 20 fps so this is every ~3rd frame).
+   Each `Frame` knows its index, timestamp, and BGR pixels. The frame
+   image is consumed and released within the per-frame loop — we don't
+   cache full frames anymore (see step 4). Raises `SkipFile` if an MP4
+   exceeds `MAX_VIDEO_BYTES` (15 MB).
 
 4. **Per-frame detection.** For every frame, `pipeline/detect.py` runs
    **tiled** YOLO11-small (`yolo11s.pt`, ~10M params) restricted to COCO
@@ -206,7 +208,11 @@ Trace one motion event from camera to phone notification:
    The frame is sliced into 1024-px tiles with 20 % overlap, YOLO runs
    at native scale on each tile, and detections are NMS-merged at IoU
    0.50. (Untiled inference on downsampled 4K loses small birds entirely;
-   see LESSONS.md.) Returns `BirdDetection(bbox, confidence, frame_index)`.
+   see LESSONS.md.) Returns `BirdDetection(bbox, confidence, frame_index,
+   crop)`. The crop is extracted from the full-res frame at this point and
+   stored on the detection itself, so the frame can be released before the
+   next one is decoded — caching ~120 KB crops instead of ~25 MB frames is
+   what lets us afford 6 fps sampling without OOM.
 
 5. **Tracking.** `pipeline/track.py::Tracker` is a greedy IoU matcher
    (`MATCH_IOU_THRESHOLD = 0.30`, `MAX_MISSED_FRAMES = 3`). It assigns

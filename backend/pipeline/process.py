@@ -45,20 +45,29 @@ def process_visit(visit: Visit, db: Session) -> int:
         raise SkipFile(f"clip file missing on disk: {clip_path}")
 
     tracker = Tracker()
-    last_frame_image = None  # keep handy for cropping after the loop
+    any_frame_decoded = False
 
-    # Cache frame images by index so we can produce crops once tracks are known.
-    # Memory budget: ~30 frames × 4K BGR ≈ 700 MB worst case — high but bounded
-    # by clip length (5–10s × 3 fps = 15–30 frames). Acceptable on an 8 GB VM.
-    frames_by_index: dict[int, "cv2.Mat"] = {}
-
-    for frame in extract_frames(clip_path, target_fps=3.0):
-        frames_by_index[frame.index] = frame.image
-        last_frame_image = frame.image
+    # We sample at 6 fps (vs the source's 20 fps) — every ~3rd frame. Higher
+    # would 1.5–2× the per-visit YOLO cost; lower means the sharpness ranker
+    # has fewer candidates and motion-blurred frames win by default. 6 fps
+    # catches most "between wing-flap" sharp poses without burning the
+    # worker's CPU headroom.
+    #
+    # We DON'T cache full frames — instead each detection's crop is extracted
+    # at YOLO time and stored on the BirdDetection itself (see detect.py).
+    # At 4K BGR a single frame is ~25 MB; a typical bird crop is ~120 KB.
+    # Caching crops scales with bird-count, not frame-count, so we can raise
+    # target_fps without OOM risk.
+    for frame in extract_frames(clip_path, target_fps=6.0):
+        any_frame_decoded = True
         dets = detect_birds(frame.image, frame.index)
+        for d in dets:
+            d.crop = _extract_crop_from_image(d, frame.image)
         tracker.update(frame.index, dets)
+        # frame.image goes out of scope at the next iteration; the ~25 MB
+        # allocation is freed before the next frame is decoded.
 
-    if last_frame_image is None:
+    if not any_frame_decoded:
         # Empty/corrupted clip — mark processed so we don't retry forever.
         visit.processed_at = utcnow()
         visit.processing_error = "no frames decoded"
@@ -78,26 +87,23 @@ def process_visit(visit: Visit, db: Session) -> int:
         # best-looking ones available across all frames. Motion blur and
         # mid-flight poses score low on the Laplacian-variance sharpness
         # term, letting in-focus perched frames win.
-        ranked = _rank_detections(track, frames_by_index)
+        ranked = _rank_detections(track)
         if not ranked:
             continue
         best = ranked[0]
 
         # Always save the YOLO-detected crop. If the classifier later rejects
         # it, the row still goes into the feed as "Unidentified" so the user
-        # can tag it via the picker (real species OR "Not a bird"). These
-        # are the highest-value active-learning examples — YOLO sees a
-        # bird shape but the classifier isn't confident, so an explicit
-        # human label closes the loop.
-        crop_rel_path, _ = _save_crop(best, frames_by_index, visit_id=visit.id, track_id=track.track_id)
+        # can tag it via the picker (real species OR "Not a bird" / "Unknown
+        # bird"). These are the highest-value active-learning examples — YOLO
+        # sees a bird shape but the classifier isn't confident, so an
+        # explicit human label closes the loop.
+        crop_rel_path = _save_crop(best, visit_id=visit.id, track_id=track.track_id)
 
         # Multi-frame voting: classify up to 3 crops from this track. Pick
         # the top 3 by sharpness-aware score so the classifier sees the
         # cleanest views, not arbitrary samples.
-        crops_to_classify = [
-            _extract_crop(d, frames_by_index) for d in ranked[:3]
-        ]
-        crops_to_classify = [c for c in crops_to_classify if c is not None and c.size > 0]
+        crops_to_classify = [d.crop for d in ranked[:3] if d.crop is not None and d.crop.size > 0]
         per_crop_predictions = [classify_bird(c) for c in crops_to_classify]
         per_crop_predictions = [p for p in per_crop_predictions if p]
 
@@ -192,33 +198,35 @@ def _laplacian_variance(image: "cv2.Mat") -> float:
     return float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
 
-def _extract_crop(det, frames_by_index: dict, padding: float = 0.15) -> "cv2.Mat | None":
-    """Crop the padded bbox out of the relevant frame. Returns None if the
-    frame isn't cached (shouldn't happen in normal flow)."""
-    frame = frames_by_index.get(det.frame_index)
-    if frame is None:
-        return None
+def _extract_crop_from_image(det, image: "cv2.Mat", padding: float = 0.15) -> "cv2.Mat":
+    """Crop the padded bbox out of a frame image.
+
+    Called once per detection at YOLO time so the full-resolution frame can
+    be released immediately afterward (the cropped result is stored on
+    det.crop — see process_visit). Padding bleeds context outside the
+    YOLO box so the classifier sees a bit of the surrounding plumage.
+    """
     x, y, w, h = det.bbox
-    fh, fw = frame.shape[:2]
+    fh, fw = image.shape[:2]
     pad_w, pad_h = int(w * padding), int(h * padding)
     x0 = max(0, x - pad_w)
     y0 = max(0, y - pad_h)
     x1 = min(fw, x + w + pad_w)
     y1 = min(fh, y + h + pad_h)
-    return frame[y0:y1, x0:x1]
+    return image[y0:y1, x0:x1]
 
 
-def _rank_detections(track: Track, frames_by_index: dict) -> list:
+def _rank_detections(track: Track) -> list:
     """Sort the track's detections by area × confidence × sharpness, desc.
 
-    The +1 on sharpness avoids zeroing-out a small but confident detection
-    just because its crop happened to land at low Laplacian variance, and
-    lets the ranking degrade gracefully if a frame is missing from cache
-    (sharpness defaults to 0, so area × confidence still orders them).
+    Each detection already carries its pre-extracted crop on `det.crop`
+    (populated at YOLO time in process_visit). The +1 on sharpness avoids
+    zeroing-out a small but confident detection just because its crop
+    happened to land at low Laplacian variance.
     """
     scored: list[tuple[float, object]] = []
     for det in track.detections:
-        crop = _extract_crop(det, frames_by_index)
+        crop = det.crop
         if crop is None or crop.size == 0:
             continue
         _, _, w, h = det.bbox
@@ -229,22 +237,14 @@ def _rank_detections(track: Track, frames_by_index: dict) -> list:
     return [d for _, d in scored]
 
 
-def _save_crop(
-    det,
-    frames_by_index: dict,
-    *,
-    visit_id: int,
-    track_id: int,
-) -> tuple[Path, "cv2.Mat"]:
-    """Write the crop for `det` to disk and return (relative_path, crop_array).
-    Returning the array lets the caller pass it straight to the classifier
-    without re-decoding the JPEG."""
-    crop = _extract_crop(det, frames_by_index)
-    assert crop is not None and crop.size > 0
+def _save_crop(det, *, visit_id: int, track_id: int) -> Path:
+    """Write `det.crop` to disk and return the path relative to DATA_DIR."""
+    crop = det.crop
+    assert crop is not None and crop.size > 0, "crop must be populated at detection time"
     filename = f"v{visit_id:08d}_t{track_id:04d}.jpg"
     out_path = CROPS_DIR / filename
     cv2.imwrite(str(out_path), crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
-    return out_path.relative_to(DATA_DIR), crop
+    return out_path.relative_to(DATA_DIR)
 
 
 def _average_predictions(per_crop: list[list[SpeciesPrediction]]) -> list[SpeciesPrediction]:
