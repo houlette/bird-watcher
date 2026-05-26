@@ -102,7 +102,7 @@ def test_classifier_rejection_still_creates_detection(db, tmp_path, monkeypatch)
         tracked_det = _FakeDetection()
 
         monkeypatch.setattr(process_module, "DATA_DIR", tmp_path)
-        monkeypatch.setattr(process_module, "extract_frames", lambda _p, target_fps=6.0: iter([_Frame(image=fake_frame_image)]))
+        monkeypatch.setattr(process_module, "extract_frames", lambda _p, target_fps=4.0: iter([_Frame(image=fake_frame_image)]))
         monkeypatch.setattr(process_module, "detect_birds", lambda _img, _idx: [tracked_det])
         # Bypass the IoU tracker entirely — return the same det instance so
         # `det.crop` assigned in process_visit's loop is visible to ranking.

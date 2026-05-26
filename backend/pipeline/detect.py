@@ -40,12 +40,16 @@ BIRD_CONFIDENCE_THRESHOLD = 0.20
 # ~150-300 ms on CPU; full-frame detection ~2-5 s. Overlap lets us catch
 # birds spanning two tiles; NMS then dedupes.
 TILE_PX = 1024
-# 40% overlap means any bird up to ~410 px wide is guaranteed to fit fully
-# inside at least one tile. At 20% (~205 px) most cardinals/larger birds
-# straddled a seam and got split into two half-bird detections. The cost is
-# +1 tile per row (≈20% more YOLO inference); cheaper than re-decoding or
-# trying to stitch fragments back together perfectly.
-TILE_OVERLAP_PX = int(TILE_PX * 0.40)
+# 20% overlap (≈205 px) catches most small birds fully inside a single tile.
+# Larger birds that straddle tile seams emit two half-bird detections; the
+# _nmm pass below merges those back into one. We previously bumped this to
+# 40% but the resulting +1 tile per row pushed the API container over its
+# 4 GB memory limit during peak feeder activity (OOM-killed 2026-05-26),
+# because PyTorch's intermediate-tensor pool grows roughly with the number
+# of consecutive YOLO calls and we'd raised that count by 2.4×. NMM gives
+# us the half-bird fix at no extra CPU/memory cost, so the structural
+# overlap bump isn't necessary.
+TILE_OVERLAP_PX = int(TILE_PX * 0.20)
 
 # NMS IoU threshold for merging cross-tile duplicates.
 NMS_IOU = 0.50

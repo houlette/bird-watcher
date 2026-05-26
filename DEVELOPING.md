@@ -10,7 +10,7 @@ runbook); this file is everything in between.
 A Reolink RLC-811WA WiFi camera pointed at the bird feeders. On motion it
 uploads a JPG snapshot and a short MP4 clip over FTPS to a pure-ftpd
 container on our VM. The backend's filesystem-scan worker picks new files
-out of the FTPS drop directory, extracts frames at ~6 fps, runs **tiled**
+out of the FTPS drop directory, extracts frames at ~4 fps, runs **tiled**
 YOLO11-small over each frame (4K downsampling drops small birds otherwise),
 tracks detections across frames with a simple IoU tracker, ranks each
 track's crops by area × confidence × Laplacian-variance sharpness, hands
@@ -109,7 +109,7 @@ BirdWatcher/
 │   ├── na_birds.py          ← Curated ~200-species NA bird list (picker)
 │   │
 │   ├── pipeline/            ← The classification pipeline
-│   │   ├── frames.py        ← OpenCV frame extraction at ~6 fps;
+│   │   ├── frames.py        ← OpenCV frame extraction at ~4 fps;
 │   │   │                       raises SkipFile if MP4 > 15 MB
 │   │   ├── detect.py        ← Tiled YOLO11-small (1024-px tiles, 20%
 │   │   │                       overlap, NMS merge), bird-only
@@ -196,7 +196,7 @@ Trace one motion event from camera to phone notification:
    pending and retry next tick.
 
 3. **Frame extraction.** `pipeline/frames.py` uses OpenCV to decode the
-   clip at ~6 fps (Reolink records at 20 fps so this is every ~3rd frame).
+   clip at ~4 fps (Reolink records at 20 fps so this is every ~3rd frame).
    Each `Frame` knows its index, timestamp, and BGR pixels. The frame
    image is consumed and released within the per-frame loop — we don't
    cache full frames anymore (see step 4). Raises `SkipFile` if an MP4
@@ -208,12 +208,12 @@ Trace one motion event from camera to phone notification:
    The frame is sliced into 1024-px tiles with 20 % overlap, YOLO runs
    at native scale on each tile, and detections are NMS-merged at IoU
    0.50. (Untiled inference on downsampled 4K loses small birds entirely;
-   see LESSONS.md.) Tile overlap is 40 % so any bird up to ~410 px wide is
-   guaranteed to fit fully inside at least one tile. Cross-tile duplicates
-   AND tile-seam fragments are then handled by `_nmm` (Non-Maximum
-   Merging): standard duplicates merge into the union bbox, and two
-   half-bird detections from adjacent tiles (near-zero gap on one axis
-   with strong perpendicular alignment) merge into one whole-bird bbox.
+   see LESSONS.md.) Tiles overlap by 20 %. Cross-tile duplicates AND
+   tile-seam fragments are handled by `_nmm` (Non-Maximum Merging):
+   standard duplicates merge into the union bbox, and two half-bird
+   detections from adjacent tiles (near-zero gap on one axis with strong
+   perpendicular alignment) merge into one whole-bird bbox — so a bird
+   that straddles a seam ends up as one whole-bird crop, not two halves.
    Returns `BirdDetection(bbox, confidence, frame_index, crop)`. The crop
    is extracted from the full-res frame at this point with 30 % padding
    (so even tightly-fit YOLO boxes show a visually complete bird) and
