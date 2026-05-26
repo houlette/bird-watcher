@@ -40,7 +40,12 @@ BIRD_CONFIDENCE_THRESHOLD = 0.20
 # ~150-300 ms on CPU; full-frame detection ~2-5 s. Overlap lets us catch
 # birds spanning two tiles; NMS then dedupes.
 TILE_PX = 1024
-TILE_OVERLAP_PX = int(TILE_PX * 0.20)
+# 40% overlap means any bird up to ~410 px wide is guaranteed to fit fully
+# inside at least one tile. At 20% (~205 px) most cardinals/larger birds
+# straddled a seam and got split into two half-bird detections. The cost is
+# +1 tile per row (≈20% more YOLO inference); cheaper than re-decoding or
+# trying to stitch fragments back together perfectly.
+TILE_OVERLAP_PX = int(TILE_PX * 0.40)
 
 # NMS IoU threshold for merging cross-tile duplicates.
 NMS_IOU = 0.50
@@ -132,16 +137,83 @@ def _iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
     return inter / union if union > 0 else 0.0
 
 
-def _nms(dets: list[BirdDetection], iou_thresh: float) -> list[BirdDetection]:
-    """Non-maximum suppression: drop lower-confidence duplicates of the same bird."""
+def _box_union(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+    """The smallest xywh box that contains both `a` and `b`."""
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    x1 = min(ax, bx)
+    y1 = min(ay, by)
+    x2 = max(ax + aw, bx + bw)
+    y2 = max(ay + ah, by + bh)
+    return (x1, y1, x2 - x1, y2 - y1)
+
+
+# A pair of boxes is treated as "two halves of the same bird split across a
+# tile seam" if the gap along one axis is ≤ this many pixels AND they overlap
+# substantially on the perpendicular axis (see _is_tile_fragment_pair). 20 px
+# absorbs YOLO's per-tile bbox imprecision near the seam without merging two
+# birds perched 30+ px apart on the same branch.
+TILE_SEAM_GAP_PX = 20
+TILE_SEAM_OVERLAP_FRAC = 0.5
+
+
+def _is_tile_fragment_pair(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:
+    """True if `a` and `b` look like two fragments of one bird across a tile seam.
+
+    Tile-seam fragments share an edge: their gap on one axis is tiny while
+    they line up almost completely on the perpendicular axis (same bird's
+    top/bottom or left/right). Two distinct birds perched near each other
+    have a real gap on both axes OR a misalignment on the perpendicular.
+    """
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    # Vertical seam (boxes side-by-side, small x-gap, large y-overlap).
+    x_gap = max(0, max(ax, bx) - min(ax + aw, bx + bw))
+    y_overlap = max(0, min(ay + ah, by + bh) - max(ay, by))
+    if x_gap <= TILE_SEAM_GAP_PX and y_overlap >= TILE_SEAM_OVERLAP_FRAC * min(ah, bh):
+        return True
+    # Horizontal seam (boxes stacked, small y-gap, large x-overlap).
+    y_gap = max(0, max(ay, by) - min(ay + ah, by + bh))
+    x_overlap = max(0, min(ax + aw, bx + bw) - max(ax, bx))
+    if y_gap <= TILE_SEAM_GAP_PX and x_overlap >= TILE_SEAM_OVERLAP_FRAC * min(aw, bw):
+        return True
+    return False
+
+
+def _nmm(dets: list[BirdDetection], iou_thresh: float) -> list[BirdDetection]:
+    """Non-Maximum Merging: drops or expands rather than just suppresses.
+
+    Two cases handled:
+      1. Overlapping duplicates (IoU ≥ iou_thresh): a fully-detected bird in
+         one tile + a partial detection of the same bird in the adjacent
+         tile's overlap zone. We merge into the union bbox (instead of
+         dropping the partial outright) so the kept box represents the
+         largest extent both tiles agreed on. Keeps the higher confidence.
+      2. Tile-seam fragments (zero/near-zero IoU but spatially adjacent
+         and aligned, see _is_tile_fragment_pair): two halves of one bird
+         that each tile saw partially. Merge into the union bbox.
+
+    Iterates in confidence-desc order; the surviving box for a merged pair
+    is therefore the higher-confidence one with its bbox grown to contain
+    both, which is exactly what we want for the crop downstream.
+    """
     if not dets:
         return []
     sorted_dets = sorted(dets, key=lambda d: d.confidence, reverse=True)
     keep: list[BirdDetection] = []
     for d in sorted_dets:
-        if any(_iou(d.bbox, k.bbox) >= iou_thresh for k in keep):
-            continue
-        keep.append(d)
+        merged = False
+        for i, k in enumerate(keep):
+            if _iou(d.bbox, k.bbox) >= iou_thresh or _is_tile_fragment_pair(d.bbox, k.bbox):
+                keep[i] = BirdDetection(
+                    bbox=_box_union(k.bbox, d.bbox),
+                    confidence=k.confidence,   # higher of the two (k was kept first)
+                    frame_index=k.frame_index,
+                )
+                merged = True
+                break
+        if not merged:
+            keep.append(d)
     return keep
 
 
@@ -183,4 +255,4 @@ def detect_birds(frame_image: np.ndarray, frame_index: int) -> list[BirdDetectio
                 )
             )
 
-    return _nms(raw, NMS_IOU)
+    return _nmm(raw, NMS_IOU)

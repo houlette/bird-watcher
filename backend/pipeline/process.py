@@ -198,13 +198,19 @@ def _laplacian_variance(image: "cv2.Mat") -> float:
     return float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
 
-def _extract_crop_from_image(det, image: "cv2.Mat", padding: float = 0.15) -> "cv2.Mat":
+def _extract_crop_from_image(det, image: "cv2.Mat", padding: float = 0.30) -> "cv2.Mat":
     """Crop the padded bbox out of a frame image.
 
     Called once per detection at YOLO time so the full-resolution frame can
     be released immediately afterward (the cropped result is stored on
-    det.crop — see process_visit). Padding bleeds context outside the
-    YOLO box so the classifier sees a bit of the surrounding plumage.
+    det.crop — see process_visit). Padding bleeds context outside the YOLO
+    box so:
+      - The classifier sees surrounding plumage / perch context.
+      - Tightly-fit YOLO bboxes (which often clip wings/tails) still show
+        a visually complete bird in the saved feed crop.
+      - Even if NMM in detect.py misses a tile-split fragment, the extra
+        30 % around the (partial) detection often catches the rest of the
+        bird in the image data we save to disk.
     """
     x, y, w, h = det.bbox
     fh, fw = image.shape[:2]

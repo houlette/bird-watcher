@@ -208,11 +208,18 @@ Trace one motion event from camera to phone notification:
    The frame is sliced into 1024-px tiles with 20 % overlap, YOLO runs
    at native scale on each tile, and detections are NMS-merged at IoU
    0.50. (Untiled inference on downsampled 4K loses small birds entirely;
-   see LESSONS.md.) Returns `BirdDetection(bbox, confidence, frame_index,
-   crop)`. The crop is extracted from the full-res frame at this point and
-   stored on the detection itself, so the frame can be released before the
-   next one is decoded — caching ~120 KB crops instead of ~25 MB frames is
-   what lets us afford 6 fps sampling without OOM.
+   see LESSONS.md.) Tile overlap is 40 % so any bird up to ~410 px wide is
+   guaranteed to fit fully inside at least one tile. Cross-tile duplicates
+   AND tile-seam fragments are then handled by `_nmm` (Non-Maximum
+   Merging): standard duplicates merge into the union bbox, and two
+   half-bird detections from adjacent tiles (near-zero gap on one axis
+   with strong perpendicular alignment) merge into one whole-bird bbox.
+   Returns `BirdDetection(bbox, confidence, frame_index, crop)`. The crop
+   is extracted from the full-res frame at this point with 30 % padding
+   (so even tightly-fit YOLO boxes show a visually complete bird) and
+   stored on the detection itself, so the frame can be released before
+   the next one is decoded — caching ~120 KB crops instead of ~25 MB
+   frames is what lets us afford 6 fps sampling without OOM.
 
 5. **Tracking.** `pipeline/track.py::Tracker` is a greedy IoU matcher
    (`MATCH_IOU_THRESHOLD = 0.30`, `MAX_MISSED_FRAMES = 3`). It assigns
