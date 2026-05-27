@@ -3,7 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { submitCorrection, type Detection } from "../lib/api";
 import AudioBadge from "./AudioBadge";
-import SpeciesPicker from "./SpeciesPicker";
+import SpeciesPicker, { NOT_A_BIRD } from "./SpeciesPicker";
 
 export default function DetectionCard({
   detection,
@@ -47,13 +47,30 @@ export default function DetectionCard({
         <div className="text-slate-500">{Math.round(detection.confidence * 100)}% · {time}</div>
 
         {!compact && (
-          <button
-            className="mt-2 text-xs text-slate-500 hover:text-forest underline"
-            onClick={() => setPickerOpen(true)}
-            disabled={correctionMutation.isPending}
-          >
-            {correctionMutation.isPending ? "Saving…" : "Wrong species?"}
-          </button>
+          <div className="mt-2 flex items-center justify-between gap-2 text-xs">
+            <button
+              className="text-slate-500 hover:text-forest underline disabled:opacity-50"
+              onClick={() => setPickerOpen(true)}
+              disabled={correctionMutation.isPending}
+            >
+              {correctionMutation.isPending ? "Saving…" : "Wrong species?"}
+            </button>
+            {/* One-click false-positive label. Most "Unidentified" crops are
+                YOLO false positives (wind-stirred leaves, sun glints on the
+                feeder), and labeling them via the picker took 2 clicks plus
+                a scroll. This shortcut makes bulk labeling tractable; the
+                Detection is filtered out of the feed immediately afterward,
+                giving the user instant visual confirmation. */}
+            <button
+              className="px-2 py-1 rounded border border-slate-200 text-slate-600 hover:bg-red-50 hover:border-red-300 hover:text-red-700 disabled:opacity-50"
+              onClick={() => correctionMutation.mutate(NOT_A_BIRD)}
+              disabled={correctionMutation.isPending}
+              title="Mark as not a bird (false positive)"
+              aria-label="Mark as not a bird"
+            >
+              🚫
+            </button>
+          </div>
         )}
         {correctionMutation.isError && (
           <p className="text-xs text-red-600 mt-1">
