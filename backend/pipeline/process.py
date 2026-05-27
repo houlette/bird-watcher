@@ -47,20 +47,19 @@ def process_visit(visit: Visit, db: Session) -> int:
     tracker = Tracker()
     any_frame_decoded = False
 
-    # We sample at 4 fps (vs the source's 20 fps) — every ~5th frame. Was
-    # briefly 6 fps but combined with the 40 %-overlap tile bump that pushed
-    # the worker over its 4 GB memory limit and saturated all 4 cores; the
-    # queue grew monotonically. 4 fps × 20 % overlap is ~1.3× the original
-    # CPU load, fits in budget, and still gives the sharpness ranker ~4
-    # candidates per second of footage (vs the original 3) — enough to
-    # usually catch a "between wing-flap" sharp pose.
+    # We sample at 3 fps (vs the source's 20 fps) — every ~7th frame.
+    # Combined with the 10 s clip-duration cap in frames.py, this gives the
+    # sharpness ranker ~30 candidates per visit total, and bounds per-visit
+    # YOLO cost to about 2 minutes on the CAX21 — enough to keep up with
+    # ~30 arrivals/hr without the queue growing. Was briefly 4 then 6 fps;
+    # both saturated the CPU budget against 24 s clips.
     #
     # We DON'T cache full frames — instead each detection's crop is extracted
     # at YOLO time and stored on the BirdDetection itself (see detect.py).
     # At 4K BGR a single frame is ~25 MB; a typical bird crop is ~120 KB.
     # Caching crops scales with bird-count, not frame-count, so we can raise
     # target_fps without OOM risk.
-    for frame in extract_frames(clip_path, target_fps=4.0):
+    for frame in extract_frames(clip_path, target_fps=3.0):
         any_frame_decoded = True
         dets = detect_birds(frame.image, frame.index)
         for d in dets:

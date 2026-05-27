@@ -10,7 +10,7 @@ runbook); this file is everything in between.
 A Reolink RLC-811WA WiFi camera pointed at the bird feeders. On motion it
 uploads a JPG snapshot and a short MP4 clip over FTPS to a pure-ftpd
 container on our VM. The backend's filesystem-scan worker picks new files
-out of the FTPS drop directory, extracts frames at ~4 fps, runs **tiled**
+out of the FTPS drop directory, extracts frames at ~3 fps, first 10 s only, runs **tiled**
 YOLO11-small over each frame (4K downsampling drops small birds otherwise),
 tracks detections across frames with a simple IoU tracker, ranks each
 track's crops by area × confidence × Laplacian-variance sharpness, hands
@@ -109,7 +109,7 @@ BirdWatcher/
 │   ├── na_birds.py          ← Curated ~200-species NA bird list (picker)
 │   │
 │   ├── pipeline/            ← The classification pipeline
-│   │   ├── frames.py        ← OpenCV frame extraction at ~4 fps;
+│   │   ├── frames.py        ← OpenCV frame extraction at ~3 fps, first 10 s only;
 │   │   │                       raises SkipFile if MP4 > 15 MB
 │   │   ├── detect.py        ← Tiled YOLO11-small (1024-px tiles, 20%
 │   │   │                       overlap, NMS merge), bird-only
@@ -196,7 +196,7 @@ Trace one motion event from camera to phone notification:
    pending and retry next tick.
 
 3. **Frame extraction.** `pipeline/frames.py` uses OpenCV to decode the
-   clip at ~4 fps (Reolink records at 20 fps so this is every ~3rd frame).
+   clip at ~3 fps, first 10 s only (Reolink records at 20 fps so this is every ~3rd frame).
    Each `Frame` knows its index, timestamp, and BGR pixels. The frame
    image is consumed and released within the per-frame loop — we don't
    cache full frames anymore (see step 4). Raises `SkipFile` if an MP4

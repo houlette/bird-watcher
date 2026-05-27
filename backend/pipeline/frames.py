@@ -39,6 +39,15 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 # caching them in a dict) can lift this cap.
 MAX_VIDEO_BYTES = 15 * 1024 * 1024
 
+# Cap the wall-clock duration we sample from any one clip. Reolink's
+# "Video & Image" FTP setting emits 24-second MP4s, but a typical feeder
+# visit is "bird arrives in first 1–2 s, then stays perched (or leaves)
+# for the rest" — frames 10 s+ rarely give the sharpness ranker anything
+# the earlier frames didn't already. Capping here keeps per-visit CPU
+# bounded so a 24 s clip doesn't take 3× as long to process as an 8 s one;
+# without it the worker can't keep up with arrival rate on busy days.
+MAX_PROCESS_DURATION_SECONDS = 10.0
+
 
 @dataclass
 class Frame:
@@ -85,8 +94,11 @@ def extract_frames(clip_path: Path, target_fps: float = 3.0) -> Iterator[Frame]:
             ok, frame = cap.read()
             if not ok:
                 break
+            timestamp = src_idx / src_fps
+            if timestamp > MAX_PROCESS_DURATION_SECONDS:
+                break
             if src_idx % step == 0:
-                yield Frame(index=out_idx, timestamp=src_idx / src_fps, image=frame)
+                yield Frame(index=out_idx, timestamp=timestamp, image=frame)
                 out_idx += 1
             src_idx += 1
     finally:
