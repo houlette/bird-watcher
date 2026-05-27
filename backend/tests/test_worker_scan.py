@@ -206,3 +206,29 @@ def test_scan_recurses_into_subdirectories(db, clips_dir, monkeypatch):
         ]
     finally:
         session.close()
+
+
+def test_cleanup_old_frames_deletes_only_stale(tmp_path, monkeypatch):
+    """Files older than FRAME_RETENTION_DAYS are deleted; newer ones survive."""
+    frames_dir = tmp_path / "frames"
+    frames_dir.mkdir()
+    fresh = frames_dir / "v00000001_t0001.jpg"
+    stale = frames_dir / "v00000002_t0001.jpg"
+    fresh.write_bytes(b"fresh")
+    stale.write_bytes(b"stale")
+    # Backdate the stale one well past the cutoff.
+    long_ago = time.time() - (worker.FRAME_RETENTION_DAYS + 1) * 86400
+    os.utime(stale, (long_ago, long_ago))
+
+    monkeypatch.setattr(worker, "FRAMES_DIR", frames_dir)
+    deleted = worker._cleanup_old_frames()
+
+    assert deleted == 1
+    assert fresh.exists()
+    assert not stale.exists()
+
+
+def test_cleanup_old_frames_handles_missing_dir(tmp_path, monkeypatch):
+    """No-op when the frames directory doesn't exist yet (fresh install)."""
+    monkeypatch.setattr(worker, "FRAMES_DIR", tmp_path / "does_not_exist")
+    assert worker._cleanup_old_frames() == 0

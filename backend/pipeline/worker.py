@@ -27,7 +27,7 @@ from ingest.haikubox import POLL_INTERVAL_SECONDS as HAIKUBOX_POLL_SECONDS
 from ingest.haikubox import poll_once as poll_haikubox
 from pipeline.exceptions import SkipFile
 from pipeline.frames import IMAGE_EXTS, VIDEO_EXTS
-from pipeline.process import process_visit
+from pipeline.process import FRAMES_DIR, process_visit
 
 log = logging.getLogger(__name__)
 
@@ -166,6 +166,39 @@ def _process_pending() -> None:
         db.close()
 
 
+# Source frames are saved per persisted track for a future YOLO fine-tune.
+# We retain them long enough for the user's labeling to catch up to fresh
+# detections (median lag is hours, occasional outliers run days). 14 days is
+# generous without unbounded disk growth — ~1.5–2 GB/day in steady state.
+FRAME_RETENTION_DAYS = 14
+FRAME_CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60
+
+
+def _cleanup_old_frames() -> int:
+    """Delete source-frame archive files older than FRAME_RETENTION_DAYS.
+
+    Keeps things simple: time-based retention by file mtime, no DB join.
+    If we later want to preserve labeled-detection frames indefinitely,
+    extend this to skip files whose (visit_id, track_id) appears in
+    Correction. For now, the assumption is "label within 14 days or lose it."
+    """
+    if not FRAMES_DIR.exists():
+        return 0
+    cutoff = time.time() - FRAME_RETENTION_DAYS * 86400
+    deleted = 0
+    for path in FRAMES_DIR.glob("v*_t*.jpg"):
+        try:
+            if path.stat().st_mtime < cutoff:
+                path.unlink()
+                deleted += 1
+        except OSError:
+            # File raced with another delete or got mode-changed; ignore.
+            continue
+    if deleted:
+        log.info("Frame retention: deleted %d frame(s) older than %d days", deleted, FRAME_RETENTION_DAYS)
+    return deleted
+
+
 def start_worker() -> BackgroundScheduler:
     scheduler = BackgroundScheduler(daemon=True)
     scheduler.add_job(
@@ -184,9 +217,18 @@ def start_worker() -> BackgroundScheduler:
         coalesce=True,
         id="poll_haikubox",
     )
+    scheduler.add_job(
+        _cleanup_old_frames,
+        "interval",
+        seconds=FRAME_CLEANUP_INTERVAL_SECONDS,
+        max_instances=1,
+        coalesce=True,
+        id="cleanup_old_frames",
+        next_run_time=datetime.now(timezone.utc),  # run once at startup
+    )
     scheduler.start()
     log.info(
-        "Workers started: pipeline every %ds, Haikubox poller every %ds",
+        "Workers started: pipeline every %ds, Haikubox poller every %ds, frame cleanup daily",
         POLL_INTERVAL_SECONDS,
         HAIKUBOX_POLL_SECONDS,
     )

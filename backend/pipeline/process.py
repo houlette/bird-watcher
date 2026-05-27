@@ -29,6 +29,12 @@ log = logging.getLogger(__name__)
 DATA_DIR = Path(__file__).parent.parent / "data"
 CROPS_DIR = DATA_DIR / "crops"
 CROPS_DIR.mkdir(parents=True, exist_ok=True)
+# Full source frames for persisted tracks, preserved for a future YOLO
+# fine-tune. Crops alone aren't enough because YOLO needs (image, bbox, label)
+# triples — the bbox in image coordinates of the full frame. Disk usage is
+# bounded by a daily 14-day retention task in pipeline.worker.
+FRAMES_DIR = DATA_DIR / "frames"
+FRAMES_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def process_visit(visit: Visit, db: Session) -> int:
@@ -78,6 +84,12 @@ def process_visit(visit: Visit, db: Session) -> int:
     tracks = tracker.finalize()
     log.info("visit %d: %d tracks", visit.id, len(tracks))
 
+    # Collected as we go through the track loop; flushed to disk via a single
+    # clip re-decode at the end so we don't have to keep all sampled frames
+    # in RAM during the track-finalize phase (that was the OOM trigger before).
+    # Maps track_id -> the sampled frame index of the chosen best detection.
+    frames_to_save: dict[int, int] = {}
+
     persisted = 0
     for track in tracks:
         if not track.detections:
@@ -123,6 +135,7 @@ def process_visit(visit: Visit, db: Session) -> int:
                 bbox=list(best.bbox),
                 track_id=track.track_id,
             ))
+            frames_to_save[track.track_id] = best.frame_index
             persisted += 1
             continue
 
@@ -165,6 +178,7 @@ def process_visit(visit: Visit, db: Session) -> int:
         )
         db.add(detection)
         db.flush()  # populate detection.id + created_at before push dispatch
+        frames_to_save[track.track_id] = best.frame_index
         persisted += 1
 
         # Phase 5: notify subscribers if this species hasn't been seen recently.
@@ -174,6 +188,19 @@ def process_visit(visit: Visit, db: Session) -> int:
         except Exception:  # noqa: BLE001
             log.exception("Push dispatch failed for detection %d", detection.id)
     log.info("visit %d: %d tracks persisted (some may be Unidentified)", visit.id, persisted)
+
+    # Save the source frame for each persisted track. Done after the loop
+    # via a single clip re-decode so we don't have to keep full-resolution
+    # frames in RAM through track finalize. These frames are the ingredient
+    # for a future YOLO false-positive fine-tune; combined with Detection.bbox
+    # and the user-applied Correction.correct_species_id, they form the
+    # (image, bbox, label) triples the fine-tune will need.
+    try:
+        _save_source_frames(clip_path, frames_to_save, visit_id=visit.id)
+    except Exception:  # noqa: BLE001
+        # Non-fatal: missing source frames just means this visit's tracks
+        # won't be available for YOLO fine-tune. Detection rows still land.
+        log.exception("Failed to save source frames for visit %d", visit.id)
 
     visit.processed_at = utcnow()
     visit.ended_at = utcnow()
@@ -244,6 +271,52 @@ def _rank_detections(track: Track) -> list:
         scored.append((score, det))
     scored.sort(key=lambda x: x[0], reverse=True)
     return [d for _, d in scored]
+
+
+def _save_source_frames(
+    clip_path: Path,
+    frame_index_by_track: dict[int, int],
+    *,
+    visit_id: int,
+    target_fps: float = 3.0,
+) -> None:
+    """Re-decode the clip and write out the source frame for each persisted track.
+
+    Done as a post-processing step (rather than during the YOLO loop) because
+    we otherwise have to keep all sampled frames in RAM through the track-
+    finalize phase — that was the OOM trigger we just fixed. The cost of one
+    extra clip decode per visit is ~5–10 % wall time, paid once per visit.
+
+    The sampled frame index stored on `BirdDetection.frame_index` is the index
+    after subsampling (3 fps from a 20 fps source = every 7th frame), so we
+    multiply by `step` to recover the source-stream index, then seek there.
+
+    No-op if the clip can't be reopened (file was deleted mid-process) — the
+    Detection rows still land; only the frame archive is missing.
+    """
+    if not frame_index_by_track:
+        return
+    cap = cv2.VideoCapture(str(clip_path))
+    if not cap.isOpened():
+        log.warning("Couldn't reopen %s for source-frame extraction", clip_path)
+        return
+    try:
+        src_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        step = max(1, int(round(src_fps / target_fps)))
+        for track_id, sampled_idx in frame_index_by_track.items():
+            src_idx = sampled_idx * step
+            cap.set(cv2.CAP_PROP_POS_FRAMES, src_idx)
+            ok, frame = cap.read()
+            if not ok:
+                log.debug(
+                    "visit %d track %d: source frame %d unreadable; skipping",
+                    visit_id, track_id, src_idx,
+                )
+                continue
+            out_path = FRAMES_DIR / f"v{visit_id:08d}_t{track_id:04d}.jpg"
+            cv2.imwrite(str(out_path), frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    finally:
+        cap.release()
 
 
 def _save_crop(det, *, visit_id: int, track_id: int) -> Path:

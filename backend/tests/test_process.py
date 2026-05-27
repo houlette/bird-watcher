@@ -115,6 +115,9 @@ def test_classifier_rejection_still_creates_detection(db, tmp_path, monkeypatch)
         monkeypatch.setattr(process_module, "_rank_detections", lambda track: list(track.detections))
         # _extract_crop_from_image is called per-detection during the frame loop.
         monkeypatch.setattr(process_module, "_extract_crop_from_image", lambda _d, _img, padding=0.15: fake_frame_image)
+        # Source-frame archive write — pre-empt the cv2.VideoCapture call since
+        # our fake clip is a JPEG with .jpg fake bytes, not a real MP4.
+        monkeypatch.setattr(process_module, "_save_source_frames", lambda *_a, **_k: None)
         # Don't try to push notifications (no species anyway).
         monkeypatch.setattr(process_module, "dispatch_for_detection", lambda *_a, **_k: 0)
 
