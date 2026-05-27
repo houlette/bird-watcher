@@ -130,13 +130,17 @@ def _process_pending() -> None:
     # Step 1: discover any clips that arrived via SFTP and have no Visit row.
     _scan_clips_dir()
 
-    # Step 2: process the oldest pending visit.
+    # Step 2: process the NEWEST pending visit first. Counter-intuitive for a
+    # work queue, but during a backlog drain we want the user's feed to show
+    # what the camera saw 30 seconds ago — not what it saw 5 days ago. Older
+    # backlog still drains in the background between fresh arrivals; it just
+    # waits its turn behind anything more recent.
     db = SessionLocal()
     try:
         pending = db.execute(
             select(Visit)
             .where(Visit.processed_at.is_(None))
-            .order_by(Visit.started_at)
+            .order_by(Visit.started_at.desc())
             .limit(MAX_VISITS_PER_TICK)
         ).scalars().all()
 
