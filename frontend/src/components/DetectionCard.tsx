@@ -12,7 +12,12 @@ export default function DetectionCard({
   detection: Detection;
   compact?: boolean;
 }) {
-  const time = new Date(detection.created_at).toLocaleString();
+  // Show CAPTURE time (when the camera saw the bird), not the row's
+  // processing time. The API tags captured_at as naive UTC; JS's Date
+  // parser interprets a naive ISO string as local time, so append 'Z'
+  // before parsing to treat it as UTC and let toLocaleString convert
+  // to the viewer's local zone.
+  const time = new Date(detection.captured_at + "Z").toLocaleString();
   const [pickerOpen, setPickerOpen] = useState(false);
   const queryClient = useQueryClient();
 

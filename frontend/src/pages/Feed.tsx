@@ -18,13 +18,15 @@ export default function Feed() {
   } = useInfiniteQuery({
     queryKey: ["detections", "feed"],
     queryFn: ({ pageParam }) =>
-      fetchDetections({ limit: PAGE_SIZE, before_id: pageParam || undefined }),
-    initialPageParam: 0 as number,
+      fetchDetections({ limit: PAGE_SIZE, before: pageParam || undefined }),
+    initialPageParam: "" as string,
     getNextPageParam: (lastPage: Detection[]) => {
       // The page is empty (or smaller than PAGE_SIZE → last page reached).
       if (lastPage.length < PAGE_SIZE) return undefined;
-      // Cursor for the next request is the id of the last (oldest) row.
-      return lastPage[lastPage.length - 1].id;
+      // Cursor for the next request is the last (oldest) row's compound cursor
+      // (capture-time | detection-id). The backend uses it to fetch the next
+      // chronologically-older page.
+      return lastPage[lastPage.length - 1].cursor;
     },
   });
 

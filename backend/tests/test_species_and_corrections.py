@@ -200,21 +200,71 @@ def test_detections_include_not_a_bird_when_requested(client, db):
     assert feeder_det in ids
 
 
-def test_detections_pagination_with_before_id(client, db):
-    """Infinite-scroll cursor: before_id returns only older (smaller-id) rows."""
+def test_detections_pagination_with_compound_cursor(client, db):
+    """Infinite-scroll cursor: `before` returns only rows captured earlier
+    (started_at, id) than the cursor."""
     ids = [_seed_detection(db, f"Test Species {i}") for i in range(5)]
 
-    # Default order is id desc; first page returns all 5.
+    # All seeded with utcnow() in the same call window → tied on started_at,
+    # ordered by id desc as the tiebreaker.
     page1 = client.get("/api/detections?limit=3").json()
     assert [d["id"] for d in page1] == [ids[4], ids[3], ids[2]]
+    # Response includes the compound cursor and the capture timestamp.
+    assert "cursor" in page1[0]
+    assert "captured_at" in page1[0]
 
-    # Second page passes the id of the last row → returns the older ones.
-    page2 = client.get(f"/api/detections?limit=3&before_id={ids[2]}").json()
+    # Second page uses the last row's cursor to get the next older slice.
+    page2 = client.get(
+        "/api/detections", params={"limit": 3, "before": page1[-1]["cursor"]}
+    ).json()
     assert [d["id"] for d in page2] == [ids[1], ids[0]]
 
-    # Third page with a cursor older than every row → empty (end of feed).
-    page3 = client.get(f"/api/detections?limit=3&before_id={ids[0]}").json()
+    # Past the end → empty.
+    page3 = client.get(
+        "/api/detections", params={"limit": 3, "before": page2[-1]["cursor"]}
+    ).json()
     assert page3 == []
+
+
+def test_detections_sorted_by_capture_time_not_processing_time(client, db):
+    """During a backlog drain, an OLD visit just processed shouldn't pop to the
+    top of the feed. Sort key is Visit.started_at desc, not Detection.id desc."""
+    from datetime import datetime
+
+    # Insert in id-order opposite to capture-time-order: the most recently
+    # inserted Detection is the OLDEST sighting.
+    older_capture = datetime(2026, 5, 26, 8, 0, 0)
+    newer_capture = datetime(2026, 5, 26, 12, 0, 0)
+
+    species = Species(common_name="Test Bird", scientific_name="", is_rare=False)
+    db.add(species)
+    db.flush()
+
+    # First insert: newer-captured visit (smaller id).
+    v_new = Visit(started_at=newer_capture, clip_path="clips/a.mp4")
+    db.add(v_new); db.flush()
+    d_new = Detection(
+        visit_id=v_new.id, species_id=species.id, confidence=0.5,
+        raw_predictions=[], audio_confirmed=False,
+        crop_path="crops/a.jpg", bbox=[0, 0, 10, 10], track_id=1,
+    )
+    db.add(d_new); db.flush()
+
+    # Second insert: older-captured visit (larger id) — simulates an old
+    # backlog visit that just got processed.
+    v_old = Visit(started_at=older_capture, clip_path="clips/b.mp4")
+    db.add(v_old); db.flush()
+    d_old = Detection(
+        visit_id=v_old.id, species_id=species.id, confidence=0.5,
+        raw_predictions=[], audio_confirmed=False,
+        crop_path="crops/b.jpg", bbox=[0, 0, 10, 10], track_id=1,
+    )
+    db.add(d_old); db.commit()
+
+    rows = client.get("/api/detections").json()
+    ids_in_order = [d["id"] for d in rows]
+    # Capture-time ordering: newer-captured first, regardless of id order.
+    assert ids_in_order.index(d_new.id) < ids_in_order.index(d_old.id)
 
 
 def test_species_endpoint_returns_yard_and_extra_groups(client, monkeypatch, tmp_path):
