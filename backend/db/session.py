@@ -1,8 +1,11 @@
 """SQLite session management."""
+import logging
 from pathlib import Path
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
+
+log = logging.getLogger(__name__)
 
 DB_PATH = Path(__file__).parent.parent / "data" / "birdwatcher.db"
 DB_PATH.parent.mkdir(exist_ok=True)
@@ -19,11 +22,37 @@ class Base(DeclarativeBase):
     pass
 
 
+# Lightweight, idempotent additive-column migrations. We don't run Alembic
+# because the schema is small and the DB is one SQLite file; adding columns
+# in code keeps deploys to a single rsync+up. The trade-off is we have to
+# remember to list every new column here. Tuples are (table, column, sql_type).
+_ADDITIVE_COLUMNS = [
+    ("detections", "yolo_confidence", "REAL"),
+]
+
+
+def _apply_additive_migrations() -> None:
+    """ALTER TABLE ADD COLUMN for any column listed in _ADDITIVE_COLUMNS
+    that isn't already present. Existing rows get NULL — the model marks
+    the column nullable so this is fine."""
+    insp = inspect(engine)
+    with engine.begin() as conn:
+        for table, col, sql_type in _ADDITIVE_COLUMNS:
+            if not insp.has_table(table):
+                continue  # create_all will handle fresh DBs
+            existing = {c["name"] for c in insp.get_columns(table)}
+            if col in existing:
+                continue
+            log.info("Migration: ALTER TABLE %s ADD COLUMN %s %s", table, col, sql_type)
+            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {sql_type}"))
+
+
 def init_db() -> None:
     # Importing models triggers table registration on Base.metadata
     from db import models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+    _apply_additive_migrations()
 
 
 def get_db():

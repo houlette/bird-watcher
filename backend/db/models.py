@@ -71,6 +71,13 @@ class Detection(Base):
     species_id: Mapped[int | None] = mapped_column(ForeignKey("species.id"), nullable=True, index=True)
 
     confidence: Mapped[float] = mapped_column(Float)
+    # Raw YOLO confidence on the best (saved) detection. Distinct from
+    # `confidence` above, which is the FUSED post-classifier+priors score
+    # (collapsed to 0.0 when the classifier rejects). Captured so we can
+    # study whether YOLO confidence alone separates real birds from false
+    # positives — see scripts/analyze_yolo_confidence.py.
+    # Nullable because rows inserted before this column existed don't have it.
+    yolo_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     # Top-5 predictions before fusion: [{"species": "...", "p": 0.55}, ...]
     raw_predictions: Mapped[list] = mapped_column(JSON, default=list)
     # Whether Haikubox heard the same species within the correlation window

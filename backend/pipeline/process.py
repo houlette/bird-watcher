@@ -116,6 +116,7 @@ def process_visit(visit: Visit, db: Session) -> int:
                 visit_id=visit.id,
                 species_id=None,
                 confidence=0.0,
+                yolo_confidence=float(best.confidence),
                 raw_predictions=[],
                 audio_confirmed=False,
                 crop_path=str(crop_rel_path),
@@ -147,6 +148,7 @@ def process_visit(visit: Visit, db: Session) -> int:
             visit_id=visit.id,
             species_id=species_id,
             confidence=top.probability,
+            yolo_confidence=float(best.confidence),
             raw_predictions=[
                 {
                     "species": f.species,
