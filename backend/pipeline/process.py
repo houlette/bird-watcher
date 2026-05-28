@@ -22,6 +22,7 @@ from pipeline.exceptions import SkipFile
 from pipeline.frames import extract_frames
 from pipeline.fuse import fuse
 from pipeline.notify import dispatch_for_detection
+from pipeline.scene_mask import filter_detections as _scene_mask_filter
 from pipeline.track import Track, Tracker
 
 log = logging.getLogger(__name__)
@@ -68,6 +69,11 @@ def process_visit(visit: Visit, db: Session) -> int:
     for frame in extract_frames(clip_path, target_fps=3.0):
         any_frame_decoded = True
         dets = detect_birds(frame.image, frame.index)
+        # Scene-mask: drop YOLO detections in regions the user has
+        # repeatedly labeled as Not-a-bird (hummingbird feeder, etc.).
+        # Detections with strong YOLO confidence override the mask, so
+        # an actual bird at the feeder still gets through.
+        dets = _scene_mask_filter(dets)
         for d in dets:
             d.crop = _extract_crop_from_image(d, frame.image)
         tracker.update(frame.index, dets)
