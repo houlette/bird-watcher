@@ -23,11 +23,13 @@ export async function fetchDetections(params: {
   limit?: number;
   species_id?: number;
   before?: string;
+  only_not_a_bird?: boolean;
 } = {}) {
   const url = new URL("/api/detections", window.location.origin);
   if (params.limit) url.searchParams.set("limit", String(params.limit));
   if (params.species_id) url.searchParams.set("species_id", String(params.species_id));
   if (params.before) url.searchParams.set("before", params.before);
+  if (params.only_not_a_bird) url.searchParams.set("only_not_a_bird", "true");
   const r = await fetch(url);
   if (!r.ok) throw new Error(`fetchDetections: ${r.status}`);
   return (await r.json()) as Detection[];

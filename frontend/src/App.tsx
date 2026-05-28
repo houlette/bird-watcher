@@ -14,6 +14,7 @@ export default function App() {
       <main className="flex-1 max-w-3xl w-full mx-auto p-4">
         <Routes>
           <Route path="/" element={<Feed />} />
+          <Route path="/labels" element={<Feed mode="nab" />} />
           <Route path="/species/:id" element={<Species />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
@@ -21,6 +22,7 @@ export default function App() {
 
       <nav className="bg-white border-t flex justify-around py-2 sticky bottom-0">
         <Tab to="/" label="Feed" />
+        <Tab to="/labels" label="Labels" />
         <Tab to="/settings" label="Settings" />
       </nav>
     </div>

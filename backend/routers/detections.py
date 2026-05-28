@@ -25,6 +25,7 @@ async def list_detections(
     limit: int = Query(50, le=200),
     species_id: int | None = None,
     include_not_a_bird: bool = Query(False, description="Include detections corrected to 'Not a bird'"),
+    only_not_a_bird: bool = Query(False, description="Show ONLY detections corrected to 'Not a bird' — for reviewing/correcting prior NAB labels"),
     before: str | None = Query(
         None,
         description="Cursor for pagination, format: '<captured_at_iso>|<detection_id>'. "
@@ -46,10 +47,17 @@ async def list_detections(
     )
     if species_id is not None:
         q = q.filter(Detection.species_id == species_id)
-    if not include_not_a_bird:
-        # Hide detections the user has marked as not-a-bird so the feed
-        # shows only real birds. The rows still exist in the DB for the
-        # retraining pipeline.
+    if only_not_a_bird:
+        # NAB-review mode: show ONLY 'Not a bird'-labeled detections so the
+        # user can scan past mistakes and re-correct them. include_not_a_bird
+        # is ignored in this mode (we're explicitly opting INTO NAB).
+        q = q.join(Species, Detection.species_id == Species.id).filter(
+            Species.common_name == NOT_A_BIRD_LABEL
+        )
+    elif not include_not_a_bird:
+        # Default feed: hide NAB-labeled detections so the feed shows only
+        # real birds. The rows still exist in the DB for the retraining
+        # pipeline.
         q = q.outerjoin(Species, Detection.species_id == Species.id).filter(
             (Species.common_name.is_(None)) | (Species.common_name != NOT_A_BIRD_LABEL)
         )

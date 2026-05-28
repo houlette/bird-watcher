@@ -200,6 +200,30 @@ def test_detections_include_not_a_bird_when_requested(client, db):
     assert feeder_det in ids
 
 
+def test_detections_only_not_a_bird_mode(client, db):
+    """The Labels-review page calls with only_not_a_bird=true to show ONLY
+    NAB-corrected detections (so the user can audit and re-correct mistakes
+    without polluting the main feed)."""
+    from db.models import NOT_A_BIRD_LABEL
+    cardinal_det = _seed_detection(db, "Northern Cardinal")
+    feeder_det = _seed_detection(db, NOT_A_BIRD_LABEL)
+    # Unidentified detection (species_id NULL) — should also be excluded by NAB-only mode.
+    visit = Visit(started_at=utcnow(), clip_path="clips/test.webm")
+    db.add(visit); db.flush()
+    unid = Detection(
+        visit_id=visit.id, species_id=None, confidence=0.0,
+        raw_predictions=[], audio_confirmed=False,
+        crop_path="crops/u.jpg", bbox=[0, 0, 10, 10], track_id=1,
+    )
+    db.add(unid); db.commit()
+
+    r = client.get("/api/detections?only_not_a_bird=true")
+    ids = [d["id"] for d in r.json()]
+    assert feeder_det in ids
+    assert cardinal_det not in ids
+    assert unid.id not in ids
+
+
 def test_detections_pagination_with_compound_cursor(client, db):
     """Infinite-scroll cursor: `before` returns only rows captured earlier
     (started_at, id) than the cursor."""

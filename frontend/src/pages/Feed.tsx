@@ -6,7 +6,15 @@ import { fetchDetections, type Detection } from "../lib/api";
 
 const PAGE_SIZE = 50;
 
-export default function Feed() {
+type Props = {
+  // "default": the normal feed (hides NAB).
+  // "nab": review-mode showing ONLY 'Not a bird'-labeled crops so the user
+  //   can audit past labels and re-correct mistakes via the SpeciesPicker.
+  mode?: "default" | "nab";
+};
+
+export default function Feed({ mode = "default" }: Props = {}) {
+  const isNabReview = mode === "nab";
   const {
     data,
     isLoading,
@@ -16,9 +24,13 @@ export default function Feed() {
     isFetchingNextPage,
     refetch,
   } = useInfiniteQuery({
-    queryKey: ["detections", "feed"],
+    queryKey: ["detections", "feed", mode],
     queryFn: ({ pageParam }) =>
-      fetchDetections({ limit: PAGE_SIZE, before: pageParam || undefined }),
+      fetchDetections({
+        limit: PAGE_SIZE,
+        before: pageParam || undefined,
+        only_not_a_bird: isNabReview,
+      }),
     initialPageParam: "" as string,
     getNextPageParam: (lastPage: Detection[]) => {
       // The page is empty (or smaller than PAGE_SIZE → last page reached).
@@ -64,14 +76,25 @@ export default function Feed() {
   if (detections.length === 0) {
     return (
       <div className="text-slate-500 text-center py-10">
-        <p className="text-lg">No birds yet.</p>
-        <p className="text-sm">Once the camera fires a motion event, detections will appear here.</p>
+        <p className="text-lg">{isNabReview ? "No NAB labels to review." : "No birds yet."}</p>
+        <p className="text-sm">
+          {isNabReview
+            ? "If you mark a detection as 'Not a bird' in the feed, it will appear here for review."
+            : "Once the camera fires a motion event, detections will appear here."}
+        </p>
       </div>
     );
   }
 
   return (
     <div>
+      {isNabReview && (
+        <div className="mb-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded text-sm text-amber-900">
+          <strong>Reviewing past 'Not a bird' labels.</strong> Use 'Wrong species?' on any crop
+          to re-correct it — it'll move back into the main feed (or get re-labeled to a real
+          species). The active-learning training set updates immediately.
+        </div>
+      )}
       {/* Multi-column grid: shrinking each crop hides the underlying motion
           blur / low-res-ness of the feeder-cam footage — at ~180-200 px wide
           the eye smooths over artifacts that are obvious at full width. */}
