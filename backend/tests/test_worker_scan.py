@@ -159,6 +159,9 @@ def test_skipfile_marks_visit_processed_without_retry(db, clips_dir, monkeypatch
     from pipeline.exceptions import SkipFile
 
     monkeypatch.setattr(worker, "SessionLocal", db)
+    # The daylight gate isn't what this test exercises — pin it open so the
+    # SkipFile path is what actually runs.
+    monkeypatch.setattr(worker, "is_daylight", lambda _ts: True)
     # Seed a visit pointing at a real file so the worker queries it.
     _make_file(clips_dir / "huge.mp4")
     worker._scan_clips_dir()

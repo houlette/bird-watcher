@@ -25,6 +25,7 @@ from db.session import SessionLocal
 from db.utils import utcnow
 from ingest.haikubox import POLL_INTERVAL_SECONDS as HAIKUBOX_POLL_SECONDS
 from ingest.haikubox import poll_once as poll_haikubox
+from pipeline.daylight import is_daylight
 from pipeline.exceptions import SkipFile
 from pipeline.frames import IMAGE_EXTS, VIDEO_EXTS
 from pipeline.process import FRAMES_DIR, process_visit
@@ -145,6 +146,16 @@ def _process_pending() -> None:
         ).scalars().all()
 
         for visit in pending:
+            # Skip visits captured outside daylight hours. At night the
+            # Reolink switches to IR/grayscale (the species classifier
+            # can't handle that) and birds aren't active anyway — so we
+            # save the CPU and don't pollute the feed with shadow shapes.
+            if visit.started_at and not is_daylight(visit.started_at):
+                log.info("Visit %d captured outside daylight; skipping", visit.id)
+                visit.processed_at = utcnow()
+                visit.processing_error = "skipped: captured outside daylight hours"
+                db.commit()
+                continue
             try:
                 count = process_visit(visit, db)
                 log.info("Processed visit %d (%d tracks)", visit.id, count)

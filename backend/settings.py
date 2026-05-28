@@ -45,6 +45,21 @@ class Settings(BaseSettings):
     # placeholder so the repo doesn't ship a personal email address.
     vapid_subject: str = os.getenv("VAPID_SUBJECT", "mailto:you@example.com")
 
+    # Camera location, used by pipeline.daylight to skip visits captured
+    # outside daylight hours. At night the Reolink switches to IR/grayscale
+    # mode (which the species classifier wasn't trained on) and birds aren't
+    # active anyway — processing those clips wastes CPU and fills the feed
+    # with unidentifiable shadows. Defaults to NYC; override in backend/.env
+    # with the actual yard's coordinates for accurate sunrise/sunset times.
+    camera_latitude: float = float(os.getenv("CAMERA_LATITUDE", "40.7128"))
+    camera_longitude: float = float(os.getenv("CAMERA_LONGITUDE", "-74.0060"))
+    # IANA timezone name for the camera's physical location. Used by
+    # pipeline.daylight to compute LOCAL sunrise / sunset — astral's date
+    # arg gets interpreted in this zone, which avoids a UTC/local date
+    # mismatch (a 20:00 EDT sunset is 00:00 next-day UTC, so "sunset on
+    # May 27 UTC" actually means May 26 EDT's sunset).
+    camera_timezone: str = os.getenv("CAMERA_TIMEZONE", "America/New_York")
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 
