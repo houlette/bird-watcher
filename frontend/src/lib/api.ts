@@ -62,3 +62,18 @@ export async function submitCorrection(detection_id: number, correct_species_nam
   if (!r.ok) throw new Error(`submitCorrection: ${r.status}`);
   return (await r.json()) as { ok: boolean; species_id: number; species: string };
 }
+
+export async function bulkCorrection(detection_ids: number[], correct_species_name: string) {
+  const r = await fetch("/api/corrections/bulk", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ detection_ids, correct_species_name }),
+  });
+  if (!r.ok) throw new Error(`bulkCorrection: ${r.status}`);
+  return (await r.json()) as {
+    ok: boolean;
+    count: number;
+    species: string;
+    results: Array<{ id: number; species_id: number; species: string }>;
+  };
+}

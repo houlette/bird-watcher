@@ -156,6 +156,77 @@ def test_correction_rejects_unknown_detection(client):
     assert r.status_code == 404
 
 
+def test_bulk_correction_applies_to_all(client, db):
+    """Selecting N cards and labeling once should update every selected
+    Detection to the same species and write one Correction row per."""
+    ids = [_seed_detection(db, f"placeholder {i}") for i in range(3)]
+    r = client.post(
+        "/api/corrections/bulk",
+        json={"detection_ids": ids, "correct_species_name": "Northern Cardinal"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["count"] == 3
+    assert body["species"] == "Northern Cardinal"
+    # All 3 Detections now point at the same Northern Cardinal Species row.
+    for d_id in ids:
+        d = db.get(Detection, d_id)
+        db.refresh(d)
+        assert d.species.common_name == "Northern Cardinal"
+    # And there's exactly one Correction row per detection.
+    n_corrections = db.query(Correction).filter(Correction.detection_id.in_(ids)).count()
+    assert n_corrections == 3
+
+
+def test_bulk_correction_works_for_nab_sentinel(client, db):
+    """The most common bulk use case: tagging a flood of false positives."""
+    from db.models import NOT_A_BIRD_LABEL
+    ids = [_seed_detection(db, f"Test Species {i}") for i in range(5)]
+    r = client.post(
+        "/api/corrections/bulk",
+        json={"detection_ids": ids, "correct_species_name": NOT_A_BIRD_LABEL},
+    )
+    assert r.status_code == 200
+    assert r.json()["count"] == 5
+    for d_id in ids:
+        d = db.get(Detection, d_id)
+        db.refresh(d)
+        assert d.species.common_name == NOT_A_BIRD_LABEL
+
+
+def test_bulk_correction_rejects_empty_list(client):
+    r = client.post(
+        "/api/corrections/bulk",
+        json={"detection_ids": [], "correct_species_name": "Northern Cardinal"},
+    )
+    assert r.status_code == 400
+
+
+def test_bulk_correction_rejects_unknown_detection(client, db):
+    """Strict: if any id is missing, fail the whole request rather than
+    silently partial-apply (the picker only surfaces ids the user actually
+    selected, so a missing one points at a deeper bug)."""
+    good = _seed_detection(db, "Northern Cardinal")
+    r = client.post(
+        "/api/corrections/bulk",
+        json={"detection_ids": [good, 99999], "correct_species_name": "Blue Jay"},
+    )
+    assert r.status_code == 404
+    # The good one should NOT have been corrected (all-or-nothing).
+    d = db.get(Detection, good)
+    db.refresh(d)
+    assert d.species.common_name == "Northern Cardinal"
+
+
+def test_bulk_correction_rejects_blank_name(client, db):
+    ids = [_seed_detection(db, "Northern Cardinal")]
+    r = client.post(
+        "/api/corrections/bulk",
+        json={"detection_ids": ids, "correct_species_name": "   "},
+    )
+    assert r.status_code == 400
+
+
 def test_species_endpoint_excludes_sentinels_from_calibration(client, monkeypatch, tmp_path):
     """Sentinel labels ('Not a bird', 'Unknown bird') shouldn't appear in the
     regular species list — the picker surfaces them separately pinned at the top."""

@@ -1,6 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 
+import BulkActionBar from "../components/BulkActionBar";
 import DetectionCard from "../components/DetectionCard";
 import { fetchDetections, type Detection } from "../lib/api";
 
@@ -15,6 +16,22 @@ type Props = {
 
 export default function Feed({ mode = "default" }: Props = {}) {
   const isNabReview = mode === "nab";
+
+  // Selection state for bulk labeling. A Set keeps add/remove and "is it in
+  // here" cheap as the user scrolls through many cards. Selection persists
+  // through infinite-scroll page loads and the 30s feed refetch — only an
+  // explicit cancel / successful bulk submit clears it.
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const toggleSelect = useCallback((id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
+
   const {
     data,
     isLoading,
@@ -100,9 +117,15 @@ export default function Feed({ mode = "default" }: Props = {}) {
           the eye smooths over artifacts that are obvious at full width. */}
       <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
         {detections.map((d) => (
-          <DetectionCard key={d.id} detection={d} />
+          <DetectionCard
+            key={d.id}
+            detection={d}
+            selected={selectedIds.has(d.id)}
+            onToggleSelect={() => toggleSelect(d.id)}
+          />
         ))}
       </div>
+      <BulkActionBar selectedIds={[...selectedIds]} onClear={clearSelection} />
 
       <div ref={sentinelRef} className="py-6 text-center text-sm text-slate-400">
         {isFetchingNextPage

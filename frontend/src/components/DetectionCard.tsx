@@ -5,13 +5,24 @@ import { submitCorrection, type Detection } from "../lib/api";
 import AudioBadge from "./AudioBadge";
 import SpeciesPicker, { NOT_A_BIRD } from "./SpeciesPicker";
 
+type DetectionCardProps = {
+  detection: Detection;
+  compact?: boolean;
+  // When `selected` is non-undefined the card opts into bulk-select mode:
+  // the checkbox appears, the card gains a ring when selected, and tapping
+  // the image toggles selection. When undefined, the card is "view-only"
+  // (which is how we render in any context without a bulk-action bar).
+  selected?: boolean;
+  onToggleSelect?: () => void;
+};
+
 export default function DetectionCard({
   detection,
   compact = false,
-}: {
-  detection: Detection;
-  compact?: boolean;
-}) {
+  selected,
+  onToggleSelect,
+}: DetectionCardProps) {
+  const selectable = selected !== undefined && onToggleSelect !== undefined;
   // Show CAPTURE time (when the camera saw the bird), not the row's
   // processing time. The API tags captured_at as naive UTC; JS's Date
   // parser interprets a naive ISO string as local time, so append 'Z'
@@ -31,13 +42,34 @@ export default function DetectionCard({
     },
   });
 
+  const ringClass = selected ? "ring-2 ring-forest" : "ring-1 ring-transparent";
+
   return (
-    <div className="bg-white rounded-lg shadow-sm overflow-hidden flex flex-col">
+    <div className={`bg-white rounded-lg shadow-sm overflow-hidden flex flex-col relative ${ringClass}`}>
+      {selectable && (
+        // Position the checkbox over the top-left of the image. Larger
+        // hit-target than a default 16-px input so mobile thumbs hit it
+        // reliably without zooming. Backdrop ensures contrast on bright
+        // crops.
+        <label
+          className="absolute top-1 left-1 z-10 flex items-center justify-center w-7 h-7 rounded bg-white/80 backdrop-blur-sm cursor-pointer"
+          onClick={(e) => e.stopPropagation()}
+          aria-label={selected ? "Deselect" : "Select"}
+        >
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={onToggleSelect}
+            className="w-5 h-5 accent-forest cursor-pointer"
+          />
+        </label>
+      )}
       <img
         src={detection.crop_url}
         alt={detection.species ?? "bird"}
-        className="w-full object-cover aspect-[4/3]"
+        className={`w-full object-cover aspect-[4/3] ${selectable ? "cursor-pointer" : ""}`}
         loading="lazy"
+        onClick={selectable ? onToggleSelect : undefined}
       />
       <div className={`p-2 ${compact ? "text-xs" : "text-sm"}`}>
         <div className="flex items-center justify-between gap-2">
