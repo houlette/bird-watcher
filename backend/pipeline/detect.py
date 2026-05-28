@@ -32,8 +32,12 @@ log = logging.getLogger(__name__)
 COCO_BIRD_CLASS = 14
 
 # Confidence threshold. With tiling, birds-on-tile score much higher than
-# birds-on-downsampled-full-frame, so we can be moderately strict.
-BIRD_CONFIDENCE_THRESHOLD = 0.20
+# birds-on-downsampled-full-frame, so we can be moderately strict. Bumped
+# from 0.20 → 0.35 after the sweep showed YOLO11n at 0.35 produces ~3×
+# fewer detections (32 → 10 per 15-clip dataset) with no measurable loss
+# on the FP-suppression axis. The dropped detections are mostly the
+# "blurry blob" novel-FP class polluting the feed.
+BIRD_CONFIDENCE_THRESHOLD = 0.35
 
 # Tiling parameters. A 3840×2160 frame tiled at 1024 with 20% overlap
 # gives a 5×3 grid = 15 tiles. Each tile run at imgsz=1024 takes
