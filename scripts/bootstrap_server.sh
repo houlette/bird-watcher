@@ -68,6 +68,26 @@ install_node() {
 # ────────────────────────────────────────────────────────────────────────────
 # 3. Build the API image (first build is slow; later runs are cached)
 # ────────────────────────────────────────────────────────────────────────────
+prune_disk() {
+  # The CAX21's 75 GB disk fills up faster than feels intuitive: ~7-15 GB/day
+  # of MP4 clips from a busy feeder, plus Docker accumulates ~1 GB of build
+  # cache per rebuild. We've hit "No space left on device" mid-deploy twice;
+  # this pass runs BEFORE the rebuild so we always have headroom.
+  log "Pruning Docker build cache older than 24h…"
+  if docker info >/dev/null 2>&1; then
+    docker builder prune -af --filter "until=24h" >/dev/null 2>&1 || true
+  else
+    sudo docker builder prune -af --filter "until=24h" >/dev/null 2>&1 || true
+  fi
+  log "Deleting MP4/JPG clip files older than 2 days…"
+  # The pipeline only needs the clip until processing finishes; after that
+  # the saved crop + (optional) source frame are what matter. 2 days is
+  # generous safety for backlog drains.
+  find "$REPO_ROOT/backend/data/clips" -type f \( -name "*.mp4" -o -name "*.jpg" \) -mtime +2 -delete 2>/dev/null || true
+  log "Disk after prune:"
+  df -h "$REPO_ROOT" | tail -1 | sed 's/^/  /'
+}
+
 build_api() {
   log "Building API Docker image (first time: ~5-10 min for torch + transformers + ultralytics)…"
   # Need sudo if user isn't in the docker group yet in this session.
@@ -241,6 +261,7 @@ calibrate() {
 require_env
 install_docker
 install_node
+prune_disk
 build_api
 generate_vapid
 generate_sftp_password
