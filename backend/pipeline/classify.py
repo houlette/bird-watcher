@@ -140,13 +140,36 @@ _allowed_mask: np.ndarray | None = None
 
 
 def _hyphen_insensitive(label: str) -> str:
-    """Lower-cased, hyphens collapsed to spaces, runs of whitespace normalized.
+    """Lower-cased, hyphens collapsed to spaces, apostrophes stripped, runs
+    of whitespace normalized.
 
     Used for matching the model's labels against the allow-list since the
-    dataset is inconsistent about whether to write 'WHITE-THROATED SPARROW'
-    or 'WHITE THROATED SPARROW'. Strip the difference before comparing.
+    gpiosenka dataset:
+      - Is inconsistent about whether to write 'WHITE-THROATED SPARROW'
+        or 'WHITE THROATED SPARROW'.
+      - Drops possessive apostrophes — 'ANNAS HUMMINGBIRD' for
+        'Anna's Hummingbird', 'BREWERS BLACKBIRD' for "Brewer's Blackbird".
+    Strip both differences before comparing.
     """
-    return re.sub(r"[-\s]+", " ", label).strip().lower()
+    return re.sub(r"[-\s]+", " ", label.replace("'", "")).strip().lower()
+
+
+# A small curated table of confirmed gpiosenka-dataset typos. The class
+# label on the LEFT is what the model emits; the RIGHT is the correct
+# common name. We add the model's misspelled label to the allow-list at
+# load time AND map it back to the correct spelling in
+# _normalize_for_display so the user never sees the typo.
+#
+# Tried automated fuzzy-matching (ratio ≥ 0.9) but it gave 3 false
+# matches for every 4 real typos — Eastern/Western Bluebird and
+# Bank/Barn Swallow would silently conflate distinct species. Curated
+# is small and unambiguous; if we ever spot a new typo, add a line here.
+MODEL_TYPO_FIXES: dict[str, str] = {
+    "BLACKBURNIAM WARBLER": "Blackburnian Warbler",
+    "VERMILION FLYCATHER":  "Vermilion Flycatcher",
+    "EASTERN TOWEE":        "Eastern Towhee",
+    "BROWN CREPPER":        "Brown Creeper",
+}
 
 
 def _normalize_for_display(uppercase_label: str) -> str:
@@ -156,6 +179,11 @@ def _normalize_for_display(uppercase_label: str) -> str:
     we normalize to the standard hyphenated forms used by eBird / Haikubox so
     audio correlation can match by exact species name.
     """
+    # Short-circuit for the curated set of model-side typos: bypass the
+    # general fixups and return the correctly-spelled common name so the
+    # user never sees the typo in the feed or in fusion logs.
+    if uppercase_label in MODEL_TYPO_FIXES:
+        return MODEL_TYPO_FIXES[uppercase_label]
     label = uppercase_label.title()
     # Compound-adjective hyphenations in NA bird names. The leading \s+
     # consumes the space so we get "Dark-eyed" rather than "Dark -eyed".
@@ -233,6 +261,10 @@ def _load() -> tuple["PreTrainedModel", "BaseImageProcessor"]:
                 int(idx)
                 for idx, label in id2label.items()
                 if _hyphen_insensitive(label) in allowlist_normalized
+                # Whitelist the model's typo'd labels for species we DO want
+                # — the corresponding correct spelling sits in allowlist_normalized
+                # already; the model just emits a misspelled key for it.
+                or label in MODEL_TYPO_FIXES
             ]
             n_classes = len(id2label)
             mask = np.zeros(n_classes, dtype=bool)
