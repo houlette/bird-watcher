@@ -40,8 +40,12 @@ rsync -avz --delete-after \
   --exclude='.venv/' \
   --exclude='node_modules/' \
   --exclude='backend/data/' \
+  --exclude='backend/data.real-backup/' \
   --exclude='backend/models/' \
   --exclude='backend/secrets/' \
+  --exclude='backend/scripts/sweep/data/' \
+  --exclude='backend/scripts/sweep/results/' \
+  --exclude='backend/yolo*.pt' \
   --exclude='frontend/dist/' \
   --exclude='__pycache__/' \
   --exclude='.pytest_cache/' \
