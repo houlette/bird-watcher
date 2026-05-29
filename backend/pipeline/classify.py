@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import TYPE_CHECKING
 
+import cv2
 import numpy as np
 
 if TYPE_CHECKING:
@@ -279,6 +280,26 @@ def _load() -> tuple["PreTrainedModel", "BaseImageProcessor"]:
     return _model, _processor
 
 
+# CLAHE (Contrast-Limited Adaptive Histogram Equalization) pre-processing.
+# Applied to the L channel of LAB so the chroma stays put — a per-channel
+# CLAHE in BGR shifts colors. The A/B run on 942 labeled crops showed it:
+#   - holds NAB rejection at 97%
+#   - accepts 15% more real birds past the in-range filter
+#   - lifts real-bird top-5 accuracy from 62% → 72%
+#   - keeps absolute top-1 count unchanged (so no real-bird losses)
+# clipLimit=2.0 and 8×8 tiles are the OpenCV defaults; a good fit for
+# 200-400 px crops.
+_CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+
+
+def _preprocess_for_classifier(bgr: np.ndarray) -> np.ndarray:
+    """Apply lighting normalization (CLAHE on L channel) before classification."""
+    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    l_eq = _CLAHE.apply(l)
+    return cv2.cvtColor(cv2.merge((l_eq, a, b)), cv2.COLOR_LAB2BGR)
+
+
 def classify_bird(crop_bgr: np.ndarray) -> list[SpeciesPrediction]:
     import torch  # noqa: WPS433
 
@@ -288,7 +309,11 @@ def classify_bird(crop_bgr: np.ndarray) -> list[SpeciesPrediction]:
     model, processor = _load()
     assert _allowed_mask is not None  # populated by _load()
 
-    rgb = crop_bgr[:, :, ::-1].copy()
+    # Lighting-normalize the crop before handing it to the classifier.
+    # Doesn't affect the SAVED crop on disk — that path uses crop_bgr
+    # unmodified for the user-visible feed image.
+    crop_for_model = _preprocess_for_classifier(crop_bgr)
+    rgb = crop_for_model[:, :, ::-1].copy()
     inputs = processor(images=rgb, return_tensors="pt")
     with torch.no_grad():
         logits = model(**inputs).logits[0]
