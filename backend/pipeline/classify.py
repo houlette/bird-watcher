@@ -202,17 +202,32 @@ def _load() -> tuple["PreTrainedModel", "BaseImageProcessor"]:
             _model.eval()
 
             id2label = _model.config.id2label
-            # Prefer the yard-specific allow-list (from yard_priors.json built
-            # by scripts/calibrate_from_haikubox.py — species the Haikubox has
-            # actually heard at this site). Fall back to the hand-coded
-            # NA_BACKYARD_ALLOWLIST if no calibration exists.
+            # Build the allow-list as the UNION of:
+            #   (a) yard-specific list (yard_priors.json from
+            #       scripts/calibrate_from_haikubox.py — species the Haikubox
+            #       has actually heard at this site), and
+            #   (b) the broader curated NA bird list (na_birds.NA_BIRD_SPECIES).
+            # Fall back to the hand-coded NA_BACKYARD_ALLOWLIST if neither is
+            # available.
+            #
+            # Why the union: the sweep showed yard-only rejected 88% of
+            # user-labeled real birds (classifier had zero in-range mass
+            # on any of the 31 yard species for most crops); broadening to
+            # ~67 model-matched species recovered 27 more real-bird
+            # acceptances per 128-crop batch with NAB rejection essentially
+            # unchanged (99% → 97%). We keep the yard list in the union so
+            # site-specific species the curated NA list happens to miss
+            # still pass through.
+            from na_birds import NA_BIRD_SPECIES
             calibrated = calibration.get_allowlist()
             if calibrated:
-                source_list = calibrated
-                log.info("Allow-list source: yard calibration (%d species)", len(calibrated))
+                source_list = set(calibrated) | set(NA_BIRD_SPECIES)
+                log.info("Allow-list source: yard calibration (%d) ∪ NA broad (%d) = %d species",
+                         len(calibrated), len(NA_BIRD_SPECIES), len(source_list))
             else:
-                source_list = NA_BACKYARD_ALLOWLIST
-                log.info("Allow-list source: hand-coded eastern-NA fallback (%d species)", len(source_list))
+                source_list = set(NA_BIRD_SPECIES) | set(NA_BACKYARD_ALLOWLIST)
+                log.info("Allow-list source: NA broad (%d) ∪ eastern-NA fallback (%d) = %d species",
+                         len(NA_BIRD_SPECIES), len(NA_BACKYARD_ALLOWLIST), len(source_list))
             allowlist_normalized = {_hyphen_insensitive(name) for name in source_list}
             allowed = [
                 int(idx)
