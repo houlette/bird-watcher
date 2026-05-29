@@ -35,3 +35,16 @@ vapid_*.pem
 # Claude local settings
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+
+# Sweep harness artifacts — bulky local-only files. The scripts under
+# backend/scripts/sweep/*.py ARE committed (reusable eval harness); the
+# data they consume and results they produce are not.
+backend/scripts/sweep/results/
+backend/scripts/sweep/data/
+
+# Local backup of the production-style data dir, stashed while the sweep
+# harness's symlink is active. backend/data/ is already ignored above.
+backend/data.real-backup/
+
+# YOLO weights are auto-downloaded by ultralytics on first call.
+backend/yolo*.pt
