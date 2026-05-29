@@ -22,14 +22,18 @@ export type Detection = {
 export async function fetchDetections(params: {
   limit?: number;
   species_id?: number;
+  species_name?: string;
   before?: string;
   only_not_a_bird?: boolean;
+  only_unidentified?: boolean;
 } = {}) {
   const url = new URL("/api/detections", window.location.origin);
   if (params.limit) url.searchParams.set("limit", String(params.limit));
   if (params.species_id) url.searchParams.set("species_id", String(params.species_id));
+  if (params.species_name) url.searchParams.set("species_name", params.species_name);
   if (params.before) url.searchParams.set("before", params.before);
   if (params.only_not_a_bird) url.searchParams.set("only_not_a_bird", "true");
+  if (params.only_unidentified) url.searchParams.set("only_unidentified", "true");
   const r = await fetch(url);
   if (!r.ok) throw new Error(`fetchDetections: ${r.status}`);
   return (await r.json()) as Detection[];

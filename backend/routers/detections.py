@@ -23,9 +23,11 @@ def _parse_cursor(cursor: str) -> tuple[datetime, int]:
 @router.get("")
 async def list_detections(
     limit: int = Query(50, le=200),
-    species_id: int | None = None,
+    species_id: int | None = Query(None, description="Filter to one species (by id)"),
+    species_name: str | None = Query(None, description="Filter to one species (by common name — convenience for the picker which speaks names)"),
     include_not_a_bird: bool = Query(False, description="Include detections corrected to 'Not a bird'"),
     only_not_a_bird: bool = Query(False, description="Show ONLY detections corrected to 'Not a bird' — for reviewing/correcting prior NAB labels"),
+    only_unidentified: bool = Query(False, description="Show ONLY detections with no species assigned (the classifier rejected; awaiting user label)"),
     before: str | None = Query(
         None,
         description="Cursor for pagination, format: '<captured_at_iso>|<detection_id>'. "
@@ -47,6 +49,17 @@ async def list_detections(
     )
     if species_id is not None:
         q = q.filter(Detection.species_id == species_id)
+    if species_name is not None:
+        # Resolve name → id once; if no Species row exists yet for this name
+        # (the picker can offer names not yet in the DB), return an empty
+        # result instead of erroring — semantically "no detections of that".
+        sp = db.query(Species).filter(Species.common_name == species_name).one_or_none()
+        if sp is None:
+            return []
+        q = q.filter(Detection.species_id == sp.id)
+    if only_unidentified:
+        # The "show me the queue I need to label" filter.
+        q = q.filter(Detection.species_id.is_(None))
     if only_not_a_bird:
         # NAB-review mode: show ONLY 'Not a bird'-labeled detections so the
         # user can scan past mistakes and re-correct them. include_not_a_bird

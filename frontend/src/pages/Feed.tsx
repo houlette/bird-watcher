@@ -3,6 +3,7 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 
 import BulkActionBar from "../components/BulkActionBar";
 import DetectionCard from "../components/DetectionCard";
+import FilterPicker, { type Filter } from "../components/FilterPicker";
 import { fetchDetections, type Detection } from "../lib/api";
 
 const PAGE_SIZE = 50;
@@ -41,6 +42,10 @@ export default function Feed({ mode = "default" }: Props = {}) {
     setBatchMode(false);
   }, []);
 
+  // Feed filter — "All birds" by default. Locked to NAB-only on /labels.
+  const [filter, setFilter] = useState<Filter>({ mode: "all" });
+  const effectiveFilter: Filter = isNabReview ? { mode: "all" } : filter;
+
   const {
     data,
     isLoading,
@@ -50,12 +55,14 @@ export default function Feed({ mode = "default" }: Props = {}) {
     isFetchingNextPage,
     refetch,
   } = useInfiniteQuery({
-    queryKey: ["detections", "feed", mode],
+    queryKey: ["detections", "feed", mode, effectiveFilter],
     queryFn: ({ pageParam }) =>
       fetchDetections({
         limit: PAGE_SIZE,
         before: pageParam || undefined,
         only_not_a_bird: isNabReview,
+        only_unidentified: effectiveFilter.mode === "unidentified",
+        species_name: effectiveFilter.mode === "species" ? effectiveFilter.name : undefined,
       }),
     initialPageParam: "" as string,
     getNextPageParam: (lastPage: Detection[]) => {
@@ -94,75 +101,93 @@ export default function Feed({ mode = "default" }: Props = {}) {
     return () => obs.disconnect();
   }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
-  if (isLoading) return <p className="text-slate-500">Loading…</p>;
   if (error) return <p className="text-red-600">Failed to load detections.</p>;
 
   const detections = data?.pages.flat() ?? [];
+  const isFiltered = effectiveFilter.mode !== "all";
 
-  if (detections.length === 0) {
-    return (
-      <div className="text-slate-500 text-center py-10">
-        <p className="text-lg">{isNabReview ? "No NAB labels to review." : "No birds yet."}</p>
-        <p className="text-sm">
-          {isNabReview
-            ? "If you mark a detection as 'Not a bird' in the feed, it will appear here for review."
-            : "Once the camera fires a motion event, detections will appear here."}
-        </p>
-      </div>
-    );
-  }
+  // Sticky top toolbar — filter on the left (hidden on the /labels NAB-review
+  // page where the filter is meaningless), Select on the right. Extends to
+  // page edges with negative horizontal margins so the sticky background
+  // covers the full width as the grid scrolls underneath.
+  const toolbar = (
+    <div className="sticky top-0 z-30 bg-white border-b border-slate-200 -mx-4 px-4 py-2 flex items-center justify-between gap-2">
+      <div>{!isNabReview && <FilterPicker value={filter} onChange={setFilter} />}</div>
+      <button
+        className={`px-3 py-1 text-sm rounded border ${
+          batchMode
+            ? "bg-forest text-cream border-forest"
+            : "bg-white text-slate-600 border-slate-200 hover:border-forest hover:text-forest"
+        }`}
+        onClick={() => (batchMode ? exitBatchMode() : setBatchMode(true))}
+        aria-pressed={batchMode}
+      >
+        {batchMode ? "Done" : "Select"}
+      </button>
+    </div>
+  );
 
   return (
     <div>
+      {toolbar}
       {isNabReview && (
-        <div className="mb-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded text-sm text-amber-900">
+        <div className="mt-3 mb-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded text-sm text-amber-900">
           <strong>Reviewing past 'Not a bird' labels.</strong> Use 'Wrong species?' on any crop
           to re-correct it — it'll move back into the main feed (or get re-labeled to a real
           species). The active-learning training set updates immediately.
         </div>
       )}
-      {/* Top toolbar — only the Select / Done batch-mode toggle for now.
-          Sits above the grid so it doesn't crowd individual cards. */}
-      <div className="mb-3 flex justify-end">
-        <button
-          className={`px-3 py-1 text-sm rounded border ${
-            batchMode
-              ? "bg-forest text-cream border-forest"
-              : "bg-white text-slate-600 border-slate-200 hover:border-forest hover:text-forest"
-          }`}
-          onClick={() => (batchMode ? exitBatchMode() : setBatchMode(true))}
-          aria-pressed={batchMode}
-        >
-          {batchMode ? "Done" : "Select"}
-        </button>
-      </div>
-      {/* Multi-column grid: shrinking each crop hides the underlying motion
-          blur / low-res-ness of the feeder-cam footage — at ~180-200 px wide
-          the eye smooths over artifacts that are obvious at full width. */}
-      <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-        {detections.map((d) => (
-          <DetectionCard
-            key={d.id}
-            detection={d}
-            // Only opt the card into select-mode when batchMode is on.
-            // When off, `selected` is undefined and DetectionCard renders
-            // its non-selectable variant (no checkbox, no image-tap-to-select).
-            selected={batchMode ? selectedIds.has(d.id) : undefined}
-            onToggleSelect={batchMode ? () => toggleSelect(d.id) : undefined}
-          />
-        ))}
-      </div>
-      {batchMode && (
-        <BulkActionBar selectedIds={[...selectedIds]} onClear={exitBatchMode} />
-      )}
 
-      <div ref={sentinelRef} className="py-6 text-center text-sm text-slate-400">
-        {isFetchingNextPage
-          ? "Loading more…"
-          : hasNextPage
-            ? "Scroll for more"
-            : `End of feed (${detections.length} detection${detections.length === 1 ? "" : "s"})`}
-      </div>
+      {isLoading ? (
+        <p className="text-slate-500 mt-4">Loading…</p>
+      ) : detections.length === 0 ? (
+        <div className="text-slate-500 text-center py-10">
+          <p className="text-lg">
+            {isFiltered
+              ? `No matches for "${effectiveFilter.mode === "species" ? effectiveFilter.name : "Unidentified"}".`
+              : isNabReview
+                ? "No NAB labels to review."
+                : "No birds yet."}
+          </p>
+          <p className="text-sm">
+            {isFiltered
+              ? "Try changing the filter at the top."
+              : isNabReview
+                ? "If you mark a detection as 'Not a bird' in the feed, it will appear here for review."
+                : "Once the camera fires a motion event, detections will appear here."}
+          </p>
+        </div>
+      ) : (
+        <>
+          {/* Multi-column grid: shrinking each crop hides the underlying motion
+              blur / low-res-ness of the feeder-cam footage — at ~180-200 px wide
+              the eye smooths over artifacts that are obvious at full width. */}
+          <div className="mt-3 grid gap-3 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+            {detections.map((d) => (
+              <DetectionCard
+                key={d.id}
+                detection={d}
+                // Only opt the card into select-mode when batchMode is on.
+                // When off, `selected` is undefined and DetectionCard renders
+                // its non-selectable variant (no checkbox, no image-tap-to-select).
+                selected={batchMode ? selectedIds.has(d.id) : undefined}
+                onToggleSelect={batchMode ? () => toggleSelect(d.id) : undefined}
+              />
+            ))}
+          </div>
+          {batchMode && (
+            <BulkActionBar selectedIds={[...selectedIds]} onClear={exitBatchMode} />
+          )}
+
+          <div ref={sentinelRef} className="py-6 text-center text-sm text-slate-400">
+            {isFetchingNextPage
+              ? "Loading more…"
+              : hasNextPage
+                ? "Scroll for more"
+                : `End of feed (${detections.length} detection${detections.length === 1 ? "" : "s"})`}
+          </div>
+        </>
+      )}
     </div>
   );
 }
