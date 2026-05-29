@@ -21,10 +21,10 @@ jobs:
           cache-dependency-path: backend/requirements.txt
 
       # Heavy ML deps (torch, transformers, ultralytics) aren't needed by the
-      # 37 unit tests — they exercise the tracker, fusion, calibration, notify,
-      # species, and corrections modules with the classifier/YOLO singletons
-      # never loaded. Install only the lightweight subset so CI stays under
-      # 90 s.
+      # unit tests — they exercise the tracker, fusion, calibration, notify,
+      # species, corrections, scene_mask, daylight, and worker modules with
+      # the classifier/YOLO singletons never loaded. Install only the
+      # lightweight subset so CI stays fast.
       - name: Install backend test deps
         run: |
           pip install --upgrade pip
@@ -34,6 +34,7 @@ jobs:
             pillow==11.0.0 numpy==2.1.3 opencv-python-headless==4.10.0.84 \
             pywebpush==2.0.0 cryptography==43.0.3 \
             pydantic==2.9.2 pydantic-settings==2.6.1 python-dotenv==1.0.1 \
+            astral==3.2 \
             pytest
 
       - name: Run pytest
