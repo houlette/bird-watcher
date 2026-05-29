@@ -15,9 +15,20 @@ export const NOT_A_BIRD = "Not a bird";
 // YOLO detector even without species info.
 export const UNKNOWN_BIRD = "Unknown bird";
 
+/**
+ * Optional list of the classifier's top-K predictions surfaced as a
+ * "Suggested" group at the top of the picker. When the user taps
+ * "Wrong species?" we know the top-1 was wrong, so we exclude it and
+ * show what the classifier ranked #2 through #5 — usually one of them
+ * is the correct ID, and a single tap finishes the correction instead
+ * of searching the full list.
+ */
+export type Suggestion = { species: string; p: number };
+
 type Props = {
   open: boolean;
   current?: string | null;
+  suggestions?: Suggestion[];
   onSelect: (species: string) => void;
   onCancel: () => void;
 };
@@ -33,7 +44,12 @@ type Props = {
  * When the user types a query, both groups are filtered and rendered
  * under the same query result.
  */
-export default function SpeciesPicker({ open, current, onSelect, onCancel }: Props) {
+export default function SpeciesPicker({ open, current, suggestions, onSelect, onCancel }: Props) {
+  // Filter out the current species (the wrong top-1 that prompted the
+  // correction) and cap at the next 3 ranked guesses.
+  const suggestionList = (suggestions ?? [])
+    .filter((s) => s.species && s.species !== current)
+    .slice(0, 3);
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement | null>(null);
   const { data, isLoading } = useQuery({
@@ -116,6 +132,36 @@ export default function SpeciesPicker({ open, current, onSelect, onCancel }: Pro
             </span>
             <span className="text-xs text-slate-400">bird, species unsure</span>
           </button>
+
+          {/* Classifier's next-best guesses for this crop (top-1 excluded — it's
+              what the user just rejected). If the right answer is in here, the
+              correction is a single tap. Only shown when no search query is
+              active so the suggestions don't get hidden behind a filtered list. */}
+          {suggestionList.length > 0 && !query && (
+            <>
+              <div className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wide text-slate-400 bg-slate-50/50 border-t border-slate-100">
+                Suggested by classifier
+              </div>
+              <ul>
+                {suggestionList.map((s) => (
+                  <li key={`suggestion-${s.species}`}>
+                    <button
+                      className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center justify-between text-sm border-b border-slate-50"
+                      onClick={() => onSelect(s.species)}
+                    >
+                      <span className="flex items-center gap-2">
+                        <span aria-hidden>✨</span>
+                        <span>{s.species}</span>
+                      </span>
+                      <span className="text-xs text-slate-400">
+                        {Math.round(s.p * 100)}%
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
 
           {isLoading && <p className="p-3 text-sm text-slate-500">Loading species…</p>}
           {!isLoading && yardFiltered.length === 0 && extraFiltered.length === 0 && (

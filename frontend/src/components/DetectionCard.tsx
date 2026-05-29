@@ -114,6 +114,11 @@ export default function DetectionCard({
       <SpeciesPicker
         open={pickerOpen}
         current={detection.species}
+        // The classifier's full top-K is already on the wire in raw_predictions.
+        // Surfacing it pinned at the top of the picker means the correct ID is
+        // often a single tap away when the top-1 is wrong (#2-#5 frequently
+        // contain it for borderline crops).
+        suggestions={detection.raw_predictions}
         onSelect={(name) => correctionMutation.mutate(name)}
         onCancel={() => setPickerOpen(false)}
       />
