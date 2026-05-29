@@ -17,10 +17,16 @@ type Props = {
 export default function Feed({ mode = "default" }: Props = {}) {
   const isNabReview = mode === "nab";
 
+  // Batch-edit mode: opt-in. Checkboxes are off by default to keep the
+  // browsing view uncluttered; the user taps "Select" to enter batch mode,
+  // makes selections, then bulk-labels (or cancels) — at which point we
+  // exit batch mode automatically.
+  const [batchMode, setBatchMode] = useState(false);
+
   // Selection state for bulk labeling. A Set keeps add/remove and "is it in
   // here" cheap as the user scrolls through many cards. Selection persists
-  // through infinite-scroll page loads and the 30s feed refetch — only an
-  // explicit cancel / successful bulk submit clears it.
+  // through infinite-scroll page loads and the 30s feed refetch within the
+  // batch session; exiting batch mode clears it.
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const toggleSelect = useCallback((id: number) => {
     setSelectedIds((prev) => {
@@ -30,7 +36,10 @@ export default function Feed({ mode = "default" }: Props = {}) {
       return next;
     });
   }, []);
-  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
+  const exitBatchMode = useCallback(() => {
+    setSelectedIds(new Set());
+    setBatchMode(false);
+  }, []);
 
   const {
     data,
@@ -112,6 +121,21 @@ export default function Feed({ mode = "default" }: Props = {}) {
           species). The active-learning training set updates immediately.
         </div>
       )}
+      {/* Top toolbar — only the Select / Done batch-mode toggle for now.
+          Sits above the grid so it doesn't crowd individual cards. */}
+      <div className="mb-3 flex justify-end">
+        <button
+          className={`px-3 py-1 text-sm rounded border ${
+            batchMode
+              ? "bg-forest text-cream border-forest"
+              : "bg-white text-slate-600 border-slate-200 hover:border-forest hover:text-forest"
+          }`}
+          onClick={() => (batchMode ? exitBatchMode() : setBatchMode(true))}
+          aria-pressed={batchMode}
+        >
+          {batchMode ? "Done" : "Select"}
+        </button>
+      </div>
       {/* Multi-column grid: shrinking each crop hides the underlying motion
           blur / low-res-ness of the feeder-cam footage — at ~180-200 px wide
           the eye smooths over artifacts that are obvious at full width. */}
@@ -120,12 +144,17 @@ export default function Feed({ mode = "default" }: Props = {}) {
           <DetectionCard
             key={d.id}
             detection={d}
-            selected={selectedIds.has(d.id)}
-            onToggleSelect={() => toggleSelect(d.id)}
+            // Only opt the card into select-mode when batchMode is on.
+            // When off, `selected` is undefined and DetectionCard renders
+            // its non-selectable variant (no checkbox, no image-tap-to-select).
+            selected={batchMode ? selectedIds.has(d.id) : undefined}
+            onToggleSelect={batchMode ? () => toggleSelect(d.id) : undefined}
           />
         ))}
       </div>
-      <BulkActionBar selectedIds={[...selectedIds]} onClear={clearSelection} />
+      {batchMode && (
+        <BulkActionBar selectedIds={[...selectedIds]} onClear={exitBatchMode} />
+      )}
 
       <div ref={sentinelRef} className="py-6 text-center text-sm text-slate-400">
         {isFetchingNextPage
