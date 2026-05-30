@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { submitCorrection, type Detection } from "../lib/api";
 import AudioBadge from "./AudioBadge";
+import ImageZoom from "./ImageZoom";
 import SpeciesPicker, { NOT_A_BIRD } from "./SpeciesPicker";
 
 type DetectionCardProps = {
@@ -30,6 +31,7 @@ export default function DetectionCard({
   // to the viewer's local zone.
   const time = new Date(detection.captured_at + "Z").toLocaleString();
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [zoomOpen, setZoomOpen] = useState(false);
   const queryClient = useQueryClient();
 
   const correctionMutation = useMutation({
@@ -67,9 +69,11 @@ export default function DetectionCard({
       <img
         src={detection.crop_url}
         alt={detection.species ?? "bird"}
-        className={`w-full object-cover aspect-[4/3] ${selectable ? "cursor-pointer" : ""}`}
+        // In batch mode tap = toggle-select; otherwise tap = open full-screen
+        // zoom preview. Cursor reflects which behavior is live.
+        className={`w-full object-cover aspect-[4/3] ${selectable ? "cursor-pointer" : "cursor-zoom-in"}`}
         loading="lazy"
-        onClick={selectable ? onToggleSelect : undefined}
+        onClick={selectable ? onToggleSelect : () => setZoomOpen(true)}
       />
       <div className={`p-2 ${compact ? "text-xs" : "text-sm"}`}>
         <div className="flex items-center justify-between gap-2">
@@ -138,6 +142,13 @@ export default function DetectionCard({
         onSelect={(name) => correctionMutation.mutate(name)}
         onCancel={() => setPickerOpen(false)}
       />
+      {zoomOpen && (
+        <ImageZoom
+          src={detection.crop_url}
+          alt={detection.species ?? "bird"}
+          onClose={() => setZoomOpen(false)}
+        />
+      )}
     </div>
   );
 }
