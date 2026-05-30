@@ -77,6 +77,22 @@ export default function DetectionCard({
           {detection.audio_confirmed && <AudioBadge />}
         </div>
         <div className="text-slate-500">{Math.round(detection.confidence * 100)}% · {time}</div>
+        {/* Classifier's next-best guesses. dennisjooo's top-5 hit rate is much
+            higher than top-1, so showing the next 2 candidates with their
+            probabilities tells the user when the model was borderline and
+            often surfaces the right answer at a glance. Filter to ≥ 2% to
+            skip the noise tail; cap at 2 to keep the card compact. */}
+        {(() => {
+          const alts = (detection.raw_predictions ?? [])
+            .filter((p) => p.species && p.species !== detection.species && p.p >= 0.02)
+            .slice(0, 2);
+          if (alts.length === 0) return null;
+          return (
+            <div className="text-xs text-slate-400 mt-0.5 truncate">
+              {alts.map((a) => `${a.species} ${Math.round(a.p * 100)}%`).join(" · ")}
+            </div>
+          );
+        })()}
 
         {!compact && (
           <div className="mt-2 flex items-center justify-between gap-2 text-xs">
