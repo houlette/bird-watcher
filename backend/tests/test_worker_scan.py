@@ -235,3 +235,36 @@ def test_cleanup_old_frames_handles_missing_dir(tmp_path, monkeypatch):
     """No-op when the frames directory doesn't exist yet (fresh install)."""
     monkeypatch.setattr(worker, "FRAMES_DIR", tmp_path / "does_not_exist")
     assert worker._cleanup_old_frames() == 0
+
+
+def test_cleanup_old_clips_deletes_only_stale(tmp_path, monkeypatch):
+    """Clip files older than CLIP_RETENTION_HOURS are deleted; newer
+    ones and non-clip files survive. Recurses into Reolink's
+    upload/YYYY/MM/DD/ tree."""
+    clips_dir = tmp_path / "clips"
+    nested = clips_dir / "upload" / "2026" / "05" / "30"
+    nested.mkdir(parents=True)
+    fresh_mp4 = nested / "Birdfeeder_00_20260530120000.mp4"
+    stale_mp4 = nested / "Birdfeeder_00_20260528120000.mp4"
+    stale_jpg = nested / "Birdfeeder_00_20260528120100.jpg"
+    notmedia = clips_dir / "README.txt"     # non-clip file: must NOT be deleted
+    for p in (fresh_mp4, stale_mp4, stale_jpg, notmedia):
+        p.write_bytes(b"x")
+    long_ago = time.time() - (worker.CLIP_RETENTION_HOURS + 1) * 3600
+    os.utime(stale_mp4, (long_ago, long_ago))
+    os.utime(stale_jpg, (long_ago, long_ago))
+    os.utime(notmedia, (long_ago, long_ago))   # even an "old" non-media survives
+
+    monkeypatch.setattr(worker, "CLIPS_DIR", clips_dir)
+    deleted = worker._cleanup_old_clips()
+
+    assert deleted == 2
+    assert fresh_mp4.exists()
+    assert not stale_mp4.exists()
+    assert not stale_jpg.exists()
+    assert notmedia.exists()
+
+
+def test_cleanup_old_clips_handles_missing_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(worker, "CLIPS_DIR", tmp_path / "does_not_exist")
+    assert worker._cleanup_old_clips() == 0

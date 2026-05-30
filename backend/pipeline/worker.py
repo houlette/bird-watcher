@@ -184,6 +184,16 @@ def _process_pending() -> None:
 FRAME_RETENTION_DAYS = 14
 FRAME_CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60
 
+# Reolink MP4 / JPG uploads sit under CLIPS_DIR. Once a clip is processed
+# (the Visit row's processed_at is set), the file is dead weight — every
+# frame we'd want for future YOLO retraining was already extracted into
+# FRAMES_DIR during process_visit. Holding longer just risks disk-full
+# (we hit it twice already, 75 GB VM and ~10-40 GB of clips/day depending
+# on bird activity). 1-day retention bounds growth without losing
+# never-processed clips.
+CLIP_RETENTION_HOURS = 24
+CLIP_CLEANUP_INTERVAL_SECONDS = 60 * 60   # hourly, since 24h windows tighter than 14d
+
 
 def _cleanup_old_frames() -> int:
     """Delete source-frame archive files older than FRAME_RETENTION_DAYS.
@@ -207,6 +217,36 @@ def _cleanup_old_frames() -> int:
             continue
     if deleted:
         log.info("Frame retention: deleted %d frame(s) older than %d days", deleted, FRAME_RETENTION_DAYS)
+    return deleted
+
+
+def _cleanup_old_clips() -> int:
+    """Delete MP4 / JPG clips older than CLIP_RETENTION_HOURS.
+
+    Runs hourly because the daily 7-15 GB ingestion rate makes a 24h window
+    much tighter than the 14d frame retention window. Walks the recursive
+    Reolink upload tree (clips/upload/YYYY/MM/DD/...)."""
+    if not CLIPS_DIR.exists():
+        return 0
+    cutoff = time.time() - CLIP_RETENTION_HOURS * 3600
+    deleted = 0
+    bytes_freed = 0
+    for path in CLIPS_DIR.rglob("*"):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in (".mp4", ".jpg", ".jpeg"):
+            continue
+        try:
+            st = path.stat()
+            if st.st_mtime < cutoff:
+                bytes_freed += st.st_size
+                path.unlink()
+                deleted += 1
+        except OSError:
+            continue
+    if deleted:
+        log.info("Clip retention: deleted %d clip(s) older than %dh (%.1f GB freed)",
+                 deleted, CLIP_RETENTION_HOURS, bytes_freed / 1e9)
     return deleted
 
 
@@ -237,9 +277,18 @@ def start_worker() -> BackgroundScheduler:
         id="cleanup_old_frames",
         next_run_time=datetime.now(timezone.utc),  # run once at startup
     )
+    scheduler.add_job(
+        _cleanup_old_clips,
+        "interval",
+        seconds=CLIP_CLEANUP_INTERVAL_SECONDS,
+        max_instances=1,
+        coalesce=True,
+        id="cleanup_old_clips",
+        next_run_time=datetime.now(timezone.utc),  # run once at startup
+    )
     scheduler.start()
     log.info(
-        "Workers started: pipeline every %ds, Haikubox poller every %ds, frame cleanup daily",
+        "Workers started: pipeline every %ds, Haikubox poller every %ds, frame cleanup daily, clip cleanup hourly",
         POLL_INTERVAL_SECONDS,
         HAIKUBOX_POLL_SECONDS,
     )
