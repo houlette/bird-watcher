@@ -12,6 +12,7 @@ import logging
 from pathlib import Path
 
 import cv2
+import numpy as np
 from sqlalchemy.orm import Session
 
 from db.models import Detection, Species, Visit
@@ -119,12 +120,26 @@ def process_visit(visit: Visit, db: Session) -> int:
         # explicit human label closes the loop.
         crop_rel_path = _save_crop(best, visit_id=visit.id, track_id=track.track_id)
 
-        # Multi-frame voting: classify up to 3 crops from this track. Pick
-        # the top 3 by sharpness-aware score so the classifier sees the
-        # cleanest views, not arbitrary samples.
-        crops_to_classify = [d.crop for d in ranked[:3] if d.crop is not None and d.crop.size > 0]
-        per_crop_predictions = [classify_bird(c) for c in crops_to_classify]
-        per_crop_predictions = [p for p in per_crop_predictions if p]
+        # Hand the classifier the top-K crops. Two behaviors switched by the
+        # _USE_MULTI_FRAME_FUSION constant:
+        #
+        #   - Fused (Step 2): phase-correlation-align the top-3 crops and
+        #     average to one denoised composite, then classify ONCE. Saves
+        #     ~2× classifier latency per track and gives the model a cleaner
+        #     image to work with — net win on perched-bird tracks where
+        #     alignment succeeds; reverts to single-anchor when it doesn't.
+        #
+        #   - Legacy (vote): classify each of the top-3 independently and
+        #     soft-average the per-crop top-5 distributions. Three model
+        #     calls per track.
+        candidate_crops = [d.crop for d in ranked[:3] if d.crop is not None and d.crop.size > 0]
+        if _USE_MULTI_FRAME_FUSION:
+            fused = _fuse_crops(candidate_crops)
+            preds = classify_bird(fused) if fused is not None else []
+            per_crop_predictions = [preds] if preds else []
+        else:
+            per_crop_predictions = [classify_bird(c) for c in candidate_crops]
+            per_crop_predictions = [p for p in per_crop_predictions if p]
 
         if not per_crop_predictions:
             # Classifier rejected every crop. Persist with species_id=NULL;
@@ -234,6 +249,80 @@ def _laplacian_variance(image: "cv2.Mat") -> float:
     return float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
 
+# Step 2 (multi-frame fusion) toggle. The classifier-time helper below uses
+# this to switch between the current behavior (classify the top-K crops
+# independently, average the predictions) and the fused behavior (align +
+# average the crops, classify the composite once). Sweep harness monkey-
+# patches this at A/B time; production state is True unless reverted.
+_USE_MULTI_FRAME_FUSION = True
+# Reject phase-correlation alignments below this peak strength — below this
+# the bird's pose has likely changed too much to fuse usefully and we drop
+# the misaligned candidate. Tuned by hand on a few perched-vs-flying tracks;
+# higher = stricter = falls back to single-crop more often.
+_FUSION_MIN_CORR_PEAK = 0.10
+# Pixel size we resize each crop to before fusion. Matches the classifier's
+# input (260) plus a bit of headroom for the warpAffine border replication.
+_FUSION_RESIZE_PX = 260
+
+
+def _fuse_crops(crops: list) -> "cv2.Mat | None":
+    """Align top-K sharpness-ranked crops via phase correlation and average.
+
+    Inputs:
+      - `crops`: list of BGR uint8 ndarrays, ordered best-first by the
+        sharpness ranker. Caller filters out empties.
+
+    Returns:
+      - A fused BGR uint8 ndarray sized (_FUSION_RESIZE_PX × _FUSION_RESIZE_PX)
+        when at least 2 crops align well; OR
+      - The (resized) anchor when only the anchor remains after alignment-
+        quality rejection; OR
+      - None only if `crops` is empty.
+
+    The anchor is the first (sharpest) crop. For each non-anchor crop we:
+      1. Resize to the anchor's size so phase correlation has a common grid.
+      2. Run cv2.phaseCorrelate to find the (dx, dy) translation that
+         maximizes cross-correlation. Skip if the peak response is below
+         _FUSION_MIN_CORR_PEAK — that means pose or content changed too
+         much between the two frames for averaging to help (bird flapped
+         a wing, turned its head, etc.).
+      3. Translate the candidate by (-dx, -dy) so it aligns with the anchor.
+      4. Stack and pixel-wise-average all aligned crops.
+
+    The denoising win comes from the law-of-large-numbers reduction in
+    sensor noise once N reasonably-aligned views are averaged (~ sqrt(N)
+    SNR improvement). For dim crops where the classifier currently has
+    low in-range probability mass, that extra signal is what tips it
+    from rejected to accepted.
+    """
+    if not crops:
+        return None
+    target = (_FUSION_RESIZE_PX, _FUSION_RESIZE_PX)
+    anchor = cv2.resize(crops[0], target)
+    if len(crops) == 1:
+        return anchor
+
+    anchor_gray = cv2.cvtColor(anchor, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    aligned = [anchor]
+    for cand in crops[1:]:
+        resized = cv2.resize(cand, target)
+        try:
+            cand_gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY).astype(np.float32)
+            (dx, dy), response = cv2.phaseCorrelate(anchor_gray, cand_gray)
+        except cv2.error:
+            continue
+        if response < _FUSION_MIN_CORR_PEAK:
+            continue
+        # Shift cand by (-dx, -dy) so it lines up with anchor.
+        M = np.float32([[1, 0, -dx], [0, 1, -dy]])
+        warped = cv2.warpAffine(resized, M, target, borderMode=cv2.BORDER_REPLICATE)
+        aligned.append(warped)
+
+    if len(aligned) == 1:
+        return anchor   # all candidates rejected; just use the anchor
+    return np.mean(np.stack(aligned), axis=0).astype(np.uint8)
+
+
 def _extract_crop_from_image(det, image: "cv2.Mat", padding: float = 0.30) -> "cv2.Mat":
     """Crop the padded bbox out of a frame image.
 
@@ -325,13 +414,53 @@ def _save_source_frames(
         cap.release()
 
 
+# Display-side image polish, applied to the crop we write to disk for the
+# user-visible feed. Decoupled from the classifier's own pre-processing
+# (which has its own CLAHE in classify.py) so we can dial display
+# aesthetics without affecting model accuracy.
+#
+#   - CLAHE on the L channel of LAB to lift shadowed feather detail without
+#     blowing out highlights or shifting color. Same setup as the classifier
+#     uses; ~1 ms.
+#   - Subtle unsharp mask (0.5 amount) to crisp the perceived sharpness.
+#     Stronger amounts amplify JPEG / motion-blur artifacts; 0.5 hits the
+#     sweet spot where mid-tier crops gain definition without artifacts
+#     becoming visible.
+_DISPLAY_CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+_UNSHARP_AMOUNT = 0.5
+_UNSHARP_BLUR_KSIZE = (0, 0)         # auto-compute from sigma
+_UNSHARP_BLUR_SIGMA = 1.5
+
+
+def _polish_for_display(bgr: np.ndarray) -> np.ndarray:
+    """Lighting-normalize + subtle sharpen for the user-visible feed crop."""
+    # CLAHE
+    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    l_eq = _DISPLAY_CLAHE.apply(l)
+    eq = cv2.cvtColor(cv2.merge((l_eq, a, b)), cv2.COLOR_LAB2BGR)
+    # Unsharp mask: out = eq + amount * (eq - blur(eq))
+    blurred = cv2.GaussianBlur(eq, _UNSHARP_BLUR_KSIZE, _UNSHARP_BLUR_SIGMA)
+    sharpened = cv2.addWeighted(eq, 1 + _UNSHARP_AMOUNT, blurred, -_UNSHARP_AMOUNT, 0)
+    return sharpened
+
+
 def _save_crop(det, *, visit_id: int, track_id: int) -> Path:
-    """Write `det.crop` to disk and return the path relative to DATA_DIR."""
+    """Write a display-polished `det.crop` to disk and return the path
+    relative to DATA_DIR.
+
+    The polish (CLAHE + unsharp mask) is applied here, on the way to disk
+    — the un-polished `det.crop` ndarray is what the classifier still
+    receives (via its own preprocessing path in pipeline.classify). This
+    keeps the user-facing image quality lever independent from the
+    classifier's input distribution.
+    """
     crop = det.crop
     assert crop is not None and crop.size > 0, "crop must be populated at detection time"
+    polished = _polish_for_display(crop)
     filename = f"v{visit_id:08d}_t{track_id:04d}.jpg"
     out_path = CROPS_DIR / filename
-    cv2.imwrite(str(out_path), crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    cv2.imwrite(str(out_path), polished, [cv2.IMWRITE_JPEG_QUALITY, 90])
     return out_path.relative_to(DATA_DIR)
 
 
