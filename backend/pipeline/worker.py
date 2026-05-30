@@ -63,14 +63,23 @@ _CAPTURE_TIME_RE = re.compile(r"_(\d{14})\.[A-Za-z0-9]+$")
 
 
 def _capture_time_from_filename(name: str) -> datetime | None:
-    """Parse Reolink's `..._YYYYMMDDHHMMSS.ext` filename into a naive UTC datetime."""
+    """Parse Reolink's `..._YYYYMMDDHHMMSS.ext` filename into a naive UTC datetime.
+
+    Reject implausible timestamps (year < 2000) — the Reolink loses NTP sync
+    occasionally and starts writing `19700220...` filenames. Returning None
+    here makes the caller fall back to the file's mtime, which the FTP
+    server stamps when the upload completes (correctly reflecting wall time
+    even when the camera's own clock is wrong)."""
     m = _CAPTURE_TIME_RE.search(name)
     if not m:
         return None
     try:
-        return datetime.strptime(m.group(1), "%Y%m%d%H%M%S")
+        dt = datetime.strptime(m.group(1), "%Y%m%d%H%M%S")
     except ValueError:
         return None
+    if dt.year < 2000:
+        return None
+    return dt
 
 
 def _scan_clips_dir() -> int:
