@@ -20,7 +20,7 @@ from pathlib import Path
 from apscheduler.schedulers.background import BackgroundScheduler
 from sqlalchemy import select
 
-from db.models import Visit
+from db.models import Correction, Detection, Visit
 from db.session import SessionLocal
 from db.utils import utcnow
 from ingest.haikubox import POLL_INTERVAL_SECONDS as HAIKUBOX_POLL_SECONDS
@@ -204,28 +204,71 @@ CLIP_RETENTION_HOURS = 24
 CLIP_CLEANUP_INTERVAL_SECONDS = 60 * 60   # hourly, since 24h windows tighter than 14d
 
 
-def _cleanup_old_frames() -> int:
-    """Delete source-frame archive files older than FRAME_RETENTION_DAYS.
+# Frame filenames are written by pipeline.process._save_source_frames as
+# `v{visit_id:08d}_t{track_id:04d}.jpg`. This regex reverses that so the
+# retention pass can map a file back to its (visit_id, track_id) and skip
+# deletion if the Detection has been labeled.
+_FRAME_FILENAME_RE = re.compile(r"^v(\d+)_t(\d+)\.jpg$")
 
-    Keeps things simple: time-based retention by file mtime, no DB join.
-    If we later want to preserve labeled-detection frames indefinitely,
-    extend this to skip files whose (visit_id, track_id) appears in
-    Correction. For now, the assumption is "label within 14 days or lose it."
+
+def _labeled_detection_keys() -> set[tuple[int, int]]:
+    """All (visit_id, track_id) pairs whose Detection has a user Correction.
+
+    Used by the retention pass to preserve labeled-detection frames
+    indefinitely — those are the training data for a future YOLO
+    fine-tune. Empty set on DB error so we fail safe (no deletions) rather
+    than wipe labeled data because of a transient DB hiccup.
     """
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(Detection.visit_id, Detection.track_id)
+            .join(Correction, Correction.detection_id == Detection.id)
+            .all()
+        )
+        return {(int(vid), int(tid)) for vid, tid in rows}
+    except Exception:
+        log.exception("Frame retention: failed to load labeled detections; preserving everything this pass")
+        return set()
+    finally:
+        db.close()
+
+
+def _cleanup_old_frames() -> int:
+    """Delete unlabeled source-frame archive files older than
+    FRAME_RETENTION_DAYS. Labeled-detection frames are preserved indefinitely
+    so they're available when we eventually run a YOLO false-positive head
+    fine-tune on them.
+
+    "Labeled" means a Correction row exists for the Detection that produced
+    the frame — we identify the link via the filename's encoded
+    (visit_id, track_id). Frames whose filename doesn't parse fall through
+    to the unlabeled bucket (subject to the time cutoff)."""
     if not FRAMES_DIR.exists():
         return 0
     cutoff = time.time() - FRAME_RETENTION_DAYS * 86400
+    labeled = _labeled_detection_keys()
     deleted = 0
+    preserved_labeled = 0
     for path in FRAMES_DIR.glob("v*_t*.jpg"):
         try:
+            m = _FRAME_FILENAME_RE.match(path.name)
+            if m:
+                key = (int(m.group(1)), int(m.group(2)))
+                if key in labeled:
+                    preserved_labeled += 1
+                    continue   # never delete frames for labeled detections
             if path.stat().st_mtime < cutoff:
                 path.unlink()
                 deleted += 1
         except OSError:
             # File raced with another delete or got mode-changed; ignore.
             continue
-    if deleted:
-        log.info("Frame retention: deleted %d frame(s) older than %d days", deleted, FRAME_RETENTION_DAYS)
+    if deleted or preserved_labeled:
+        log.info(
+            "Frame retention: deleted %d unlabeled frame(s) older than %d days; preserved %d labeled-detection frame(s) indefinitely",
+            deleted, FRAME_RETENTION_DAYS, preserved_labeled,
+        )
     return deleted
 
 

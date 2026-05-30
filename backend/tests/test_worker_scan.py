@@ -268,3 +268,77 @@ def test_cleanup_old_clips_deletes_only_stale(tmp_path, monkeypatch):
 def test_cleanup_old_clips_handles_missing_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(worker, "CLIPS_DIR", tmp_path / "does_not_exist")
     assert worker._cleanup_old_clips() == 0
+
+
+def test_cleanup_old_frames_preserves_labeled_indefinitely(db, tmp_path, monkeypatch):
+    """The retention pass MUST skip frames belonging to a Detection whose
+    user-applied Correction is on file, even if they're past the time
+    cutoff — these are training data for the future YOLO fine-tune.
+
+    The pattern we test:
+      - Stale-labeled frame: 30 days old AND has a Correction → KEEP.
+      - Stale-unlabeled frame: 30 days old, no Correction → DELETE.
+      - Fresh-unlabeled frame: 1 hour old, no Correction → KEEP.
+    The encoded (visit_id, track_id) in the filename is the join key.
+    """
+    from db.models import Correction, Detection, Species, Visit
+    monkeypatch.setattr(worker, "SessionLocal", db)
+
+    # Seed a labeled detection in the in-memory DB.
+    session = db()
+    try:
+        sp = Species(common_name="Northern Cardinal", scientific_name="", is_rare=False)
+        session.add(sp); session.flush()
+        v_labeled = Visit(clip_path="clips/x.mp4")
+        v_unlabeled = Visit(clip_path="clips/y.mp4")
+        session.add_all([v_labeled, v_unlabeled]); session.flush()
+        det = Detection(
+            visit_id=v_labeled.id, species_id=sp.id, confidence=0.9,
+            raw_predictions=[], audio_confirmed=False,
+            crop_path="crops/x.jpg", bbox=[0, 0, 10, 10], track_id=1,
+        )
+        session.add(det); session.flush()
+        session.add(Correction(detection_id=det.id, correct_species_id=sp.id))
+        session.commit()
+        labeled_visit_id, labeled_track_id = v_labeled.id, 1
+        unlabeled_visit_id, unlabeled_track_id = v_unlabeled.id, 1
+    finally:
+        session.close()
+
+    # Set up frames dir with three files matching the production naming pattern.
+    frames_dir = tmp_path / "frames"
+    frames_dir.mkdir()
+    labeled_stale   = frames_dir / f"v{labeled_visit_id:08d}_t{labeled_track_id:04d}.jpg"
+    unlabeled_stale = frames_dir / f"v{unlabeled_visit_id:08d}_t{unlabeled_track_id:04d}.jpg"
+    unlabeled_fresh = frames_dir / "v00099999_t0007.jpg"
+    for p in (labeled_stale, unlabeled_stale, unlabeled_fresh):
+        p.write_bytes(b"x")
+    # Backdate the two "stale" files past the cutoff.
+    long_ago = time.time() - (worker.FRAME_RETENTION_DAYS + 1) * 86400
+    os.utime(labeled_stale,   (long_ago, long_ago))
+    os.utime(unlabeled_stale, (long_ago, long_ago))
+
+    monkeypatch.setattr(worker, "FRAMES_DIR", frames_dir)
+    deleted = worker._cleanup_old_frames()
+
+    assert deleted == 1
+    assert labeled_stale.exists(), "labeled frames must be preserved beyond the cutoff"
+    assert not unlabeled_stale.exists(), "unlabeled stale frame must be deleted"
+    assert unlabeled_fresh.exists(), "fresh unlabeled frame must be kept"
+
+
+def test_cleanup_old_frames_handles_unparseable_filenames(db, tmp_path, monkeypatch):
+    """A stray frame file that doesn't match the v*_t*.jpg pattern shouldn't
+    crash retention — it falls through to the time-cutoff path."""
+    monkeypatch.setattr(worker, "SessionLocal", db)
+    frames_dir = tmp_path / "frames"
+    frames_dir.mkdir()
+    weird = frames_dir / "v_t_no_digits.jpg"   # matches glob but not regex
+    weird.write_bytes(b"x")
+    long_ago = time.time() - (worker.FRAME_RETENTION_DAYS + 1) * 86400
+    os.utime(weird, (long_ago, long_ago))
+
+    monkeypatch.setattr(worker, "FRAMES_DIR", frames_dir)
+    deleted = worker._cleanup_old_frames()
+    assert deleted == 1
+    assert not weird.exists()
