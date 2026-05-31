@@ -72,7 +72,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("llm_classify_unidentified")
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-RESULTS_DIR = Path(__file__).resolve().parent / "llm_classify_results"
+# Under data/ so the JSONL audit trail lands on the bind-mounted volume
+# and survives container rebuilds. The script's own directory at
+# scripts/llm_classify_results/ would get wiped on every deploy.
+RESULTS_DIR = DATA_DIR / "llm_classify_results"
 
 # claude-opus-4-8 is the most capable model — best for the long-tail
 # species-disambiguation cases. ~$5/$25 per 1M in/out tokens; per-image
