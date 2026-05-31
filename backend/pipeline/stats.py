@@ -39,6 +39,7 @@ from typing import Iterable
 from sqlalchemy import and_, distinct, func, or_, select
 from sqlalchemy.orm import Session
 
+from db.families import family_contains, is_family_label
 from db.models import (
     NOT_A_BIRD_LABEL,
     SENTINEL_LABELS,
@@ -160,6 +161,10 @@ def compute_daily_stats(db: Session, d: date) -> PipelineStatsDaily:
     # correct_species_id (i.e. "user agreed"). We need the historic
     # disagreement signal, which we recover from raw_predictions[0]:
     # that's the classifier's pre-correction top-1.
+    # Classifier accuracy: of corrections to a real species, how many
+    # matched. Family labels get partial credit — if the user said
+    # "Sparrow" and the model's top-1 was any member species, that's a
+    # correct ID at the family level.
     classifier_correct = 0
     classifier_eligible = 0
     for det, corrected_name in corrected_rows:
@@ -176,7 +181,13 @@ def compute_daily_stats(db: Session, d: date) -> PipelineStatsDaily:
                 top1 = (det.raw_predictions[0] or {}).get("species")
             except (TypeError, AttributeError):
                 top1 = None
+        if top1 is None:
+            continue
         if top1 == corrected_name:
+            classifier_correct += 1
+        elif is_family_label(corrected_name) and family_contains(corrected_name, top1):
+            # Family-level partial credit: user said "Sparrow," model
+            # said "House Sparrow" — that's a hit at the family.
             classifier_correct += 1
 
     # --- Payload: variable-shape extras -------------------------------------

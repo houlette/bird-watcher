@@ -191,6 +191,11 @@ def main() -> int:
             .join(Correction, Correction.detection_id == Detection.id)
             .join(Species, Correction.correct_species_id == Species.id)
             .filter(~Species.common_name.in_(SENTINEL_LABELS))
+            # Family labels ("Sparrow", "Warbler") collapse multiple species
+            # of varying real sizes; fitting one log-normal across all of
+            # them just inflates σ and pollutes the species fits we DO
+            # care about. Skip them at calibration time.
+            .filter((Species.is_family.is_(None)) | (Species.is_family == 0))
             .all()
         )
         log.info("Found %d real-species labels", len(rows))

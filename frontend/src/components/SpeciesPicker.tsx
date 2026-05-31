@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import { fetchSpecies, type SpeciesEntry } from "../lib/api";
+import { fetchSpecies, type FamilyEntry, type SpeciesEntry } from "../lib/api";
 
 // Must match backend/db/models.py:NOT_A_BIRD_LABEL exactly. The picker
 // pins this as a special option (separated from real species by a divider)
@@ -68,17 +68,33 @@ export default function SpeciesPicker({ open, current, suggestions, onSelect, on
   // Filter both groups by query. When no query, show all yard species
   // and the top of the alphabetical extra list (capped so the picker
   // doesn't render hundreds of items at once).
-  const { yardFiltered, extraFiltered } = useMemo(() => {
-    if (!data) return { yardFiltered: [] as SpeciesEntry[], extraFiltered: [] as SpeciesEntry[] };
+  const { familiesFiltered, yardFiltered, extraFiltered } = useMemo(() => {
+    const empty = {
+      familiesFiltered: [] as FamilyEntry[],
+      yardFiltered: [] as SpeciesEntry[],
+      extraFiltered: [] as SpeciesEntry[],
+    };
+    if (!data) return empty;
     const q = query.trim().toLowerCase();
-    const match = (s: SpeciesEntry) => !q || s.name.toLowerCase().includes(q);
-    const yardFiltered = data.yard.filter(match).slice(0, 50);
-    const extraFiltered = data.extra.filter(match).slice(0, q ? 50 : 100);
-    return { yardFiltered, extraFiltered };
+    const matchSp = (s: SpeciesEntry) => !q || s.name.toLowerCase().includes(q);
+    // Family matches against its own name AND its member-species names so
+    // typing "junco" surfaces Sparrow.
+    const matchFam = (f: FamilyEntry) =>
+      !q ||
+      f.name.toLowerCase().includes(q) ||
+      f.members.some((m) => m.toLowerCase().includes(q));
+    return {
+      familiesFiltered: (data.families ?? []).filter(matchFam),
+      yardFiltered: data.yard.filter(matchSp).slice(0, 50),
+      extraFiltered: data.extra.filter(matchSp).slice(0, q ? 50 : 100),
+    };
   }, [data, query]);
 
-  // Enter key picks the first available match across both groups.
-  const firstMatch = yardFiltered[0]?.name ?? extraFiltered[0]?.name;
+  // Enter key picks the first available match across all groups
+  // (families take precedence — typing "sparrow" + Enter picks the
+  // family, not the first species).
+  const firstMatch =
+    familiesFiltered[0]?.name ?? yardFiltered[0]?.name ?? extraFiltered[0]?.name;
 
   if (!open) return null;
 
@@ -164,8 +180,44 @@ export default function SpeciesPicker({ open, current, suggestions, onSelect, on
           )}
 
           {isLoading && <p className="p-3 text-sm text-slate-500">Loading species…</p>}
-          {!isLoading && yardFiltered.length === 0 && extraFiltered.length === 0 && (
-            <p className="p-3 text-sm text-slate-500">No species match "{query}".</p>
+          {!isLoading &&
+            familiesFiltered.length === 0 &&
+            yardFiltered.length === 0 &&
+            extraFiltered.length === 0 && (
+              <p className="p-3 text-sm text-slate-500">No species match "{query}".</p>
+            )}
+
+          {/* Family-level catch-alls — "I know it's a sparrow but I can't
+              tell which kind." Distinct group so the picker visually
+              cues that these are a different kind of label. Members
+              shown as a hint so the user remembers what each covers. */}
+          {familiesFiltered.length > 0 && (
+            <>
+              <div className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wide text-slate-400 bg-slate-50/50 border-t border-slate-100">
+                Families
+              </div>
+              <ul>
+                {familiesFiltered.map((f) => (
+                  <li key={`family-${f.name}`}>
+                    <button
+                      className={`w-full text-left px-3 py-2 hover:bg-slate-50 text-sm ${
+                        f.name === current ? "bg-cream font-semibold" : ""
+                      }`}
+                      onClick={() => onSelect(f.name)}
+                    >
+                      <span className="flex items-center gap-2">
+                        <span aria-hidden>👥</span>
+                        <span>{f.name}</span>
+                      </span>
+                      <span className="block ml-7 text-xs text-slate-400 truncate">
+                        e.g., {f.members.slice(0, 3).join(", ")}
+                        {f.members.length > 3 ? ", …" : ""}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </>
           )}
 
           {/* Group 1: Yard species (Haikubox-heard, with detection counts). */}

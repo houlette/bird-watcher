@@ -37,6 +37,8 @@ _ADDITIVE_COLUMNS = [
     ("visits", "scene_mask_suppressed", "INTEGER"),
     # Daily aggregate of the per-visit column above.
     ("pipeline_stats_daily", "detections_scene_mask_suppressed", "INTEGER"),
+    # Marker for family-level catch-all Species rows ("Sparrow", "Warbler").
+    ("species", "is_family", "INTEGER"),
 ]
 
 
@@ -62,6 +64,19 @@ def init_db() -> None:
 
     Base.metadata.create_all(bind=engine)
     _apply_additive_migrations()
+
+    # Seed family-level catch-all Species rows. Idempotent — running on
+    # every boot is fine (just a couple of unique-name lookups).
+    from db.families import ensure_family_species_rows
+    seed_db = SessionLocal()
+    try:
+        created = ensure_family_species_rows(seed_db)
+        if created:
+            log.info("Seeded %d family-level Species row(s)", created)
+    except Exception:
+        log.exception("Failed to seed family Species rows")
+    finally:
+        seed_db.close()
 
 
 def get_db():

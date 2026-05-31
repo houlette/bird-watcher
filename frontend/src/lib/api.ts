@@ -40,6 +40,7 @@ export async function fetchDetections(params: {
 }
 
 export type SpeciesEntry = { name: string; total: number };
+export type FamilyEntry = { name: string; members: string[] };
 export type SpeciesList = {
   source: "calibration" | "fallback";
   // Yard-known species (Haikubox-heard) sorted by detection count desc.
@@ -47,6 +48,9 @@ export type SpeciesList = {
   // Broader NA-bird list (alphabetical) — pigeons, raptors, etc. the
   // user might see visually without the Haikubox having heard them.
   extra: SpeciesEntry[];
+  // Family-level catch-all labels for "I know it's a sparrow but
+  // I can't tell which kind." `members` is the constituent species.
+  families: FamilyEntry[];
   // Legacy: equals yard. Kept for backward compat.
   species: SpeciesEntry[];
 };

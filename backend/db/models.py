@@ -40,6 +40,15 @@ class Species(Base):
     scientific_name: Mapped[str] = mapped_column(String)
     nabirds_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_rare: Mapped[bool] = mapped_column(Integer, default=0)  # SQLite boolean
+    # Family-level catch-all labels ("Sparrow", "Warbler"). These behave
+    # like species rows in the DB (a Correction can point at one), but
+    # downstream code treats them differently:
+    #   - the species picker pins them in their own section,
+    #   - the size prior calibration excludes them (wide variance),
+    #   - classifier-accuracy stats give partial credit if the model's
+    #     top-1 was any member species,
+    #   - retraining pipelines treat them as soft labels.
+    is_family: Mapped[bool | None] = mapped_column(Integer, nullable=True, default=0)
 
 
 class Visit(Base):

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from db.families import FAMILY_MEMBERS, FAMILY_NAMES
 from db.models import SENTINEL_LABELS
 from na_birds import NA_BIRD_SPECIES
 from pipeline import calibration
@@ -44,18 +45,32 @@ async def list_species() -> dict:
         source = "fallback"
 
     # Broader NA list, minus anything already in the yard list (avoid dupes
-    # in the picker UI). Comparison is case-insensitive on the display name.
+    # in the picker UI) and minus family names (surfaced separately). Case
+    # insensitive comparison on the display name.
     yard_names_norm = {r["name"].lower() for r in yard_items}
     extra_items = [
         {"name": s, "total": 0}
         for s in NA_BIRD_SPECIES
-        if s.lower() not in yard_names_norm and s not in SENTINEL_LABELS
+        if s.lower() not in yard_names_norm
+        and s not in SENTINEL_LABELS
+        and s not in FAMILY_NAMES
     ]
     extra_items.sort(key=lambda r: r["name"])
+
+    # Family group: the catch-all labels the user picks when they know
+    # roughly what it is but not the species. Member lists travel with
+    # each entry so the picker can show a "e.g., House, Song, Junco…"
+    # hint without re-fetching.
+    families = [
+        {"name": fam, "members": list(members)}
+        for fam, members in FAMILY_MEMBERS.items()
+    ]
+    families.sort(key=lambda r: r["name"])
 
     return {
         "source": source,
         "species": yard_items,    # legacy shape — preserves backward compat for any caller
         "yard": yard_items,
         "extra": extra_items,
+        "families": families,
     }
