@@ -445,27 +445,29 @@ def _save_source_frames(
 #   - CLAHE on the L channel of LAB to lift shadowed feather detail without
 #     blowing out highlights or shifting color. Same setup as the classifier
 #     uses; ~1 ms.
-#   - Subtle unsharp mask (0.5 amount) to crisp the perceived sharpness.
-#     Stronger amounts amplify JPEG / motion-blur artifacts; 0.5 hits the
-#     sweet spot where mid-tier crops gain definition without artifacts
-#     becoming visible.
+#   - Unsharp mask was tried at 0.5 → 0.3 → 0.15 amount and consistently
+#     read as "crunchy" on feather edges. Disabled — the win wasn't worth
+#     the artifact. The constant and helper paths are retained in case
+#     we want to re-introduce a smarter sharpener later (e.g., edge-aware
+#     or only-when-blurry), but the live path skips it entirely when
+#     amount == 0.
 _DISPLAY_CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-# Was 0.5 → 0.3 → 0.15 in successive rounds of user feedback that the
-# sharpening still looked too crunchy on feather edges. 0.15 is barely
-# perceptible on its own but still adds definition when stacked atop the
-# CLAHE step above.
-_UNSHARP_AMOUNT = 0.15
+_UNSHARP_AMOUNT = 0.0
 _UNSHARP_BLUR_KSIZE = (0, 0)         # auto-compute from sigma
 _UNSHARP_BLUR_SIGMA = 1.5
 
 
 def _polish_for_display(bgr: np.ndarray) -> np.ndarray:
-    """Lighting-normalize + subtle sharpen for the user-visible feed crop."""
+    """Lighting-normalize (CLAHE) the user-visible feed crop. Sharpening
+    is short-circuited when _UNSHARP_AMOUNT == 0 (no GaussianBlur /
+    addWeighted cost)."""
     # CLAHE
     lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
     l_eq = _DISPLAY_CLAHE.apply(l)
     eq = cv2.cvtColor(cv2.merge((l_eq, a, b)), cv2.COLOR_LAB2BGR)
+    if _UNSHARP_AMOUNT <= 0:
+        return eq
     # Unsharp mask: out = eq + amount * (eq - blur(eq))
     blurred = cv2.GaussianBlur(eq, _UNSHARP_BLUR_KSIZE, _UNSHARP_BLUR_SIGMA)
     sharpened = cv2.addWeighted(eq, 1 + _UNSHARP_AMOUNT, blurred, -_UNSHARP_AMOUNT, 0)
