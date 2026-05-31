@@ -66,15 +66,32 @@ export default function DetectionCard({
           />
         </label>
       )}
-      <img
-        src={detection.crop_url}
-        alt={detection.species ?? "bird"}
-        // In batch mode tap = toggle-select; otherwise tap = open full-screen
-        // zoom preview. Cursor reflects which behavior is live.
-        className={`w-full object-cover aspect-[4/3] ${selectable ? "cursor-pointer" : "cursor-zoom-in"}`}
-        loading="lazy"
+      {/* Crops vary in aspect ratio (a vertically-perched cardinal vs a
+          horizontally-strutting pigeon), but the feed grid is uniform 4:3.
+          `object-cover` previously clipped tall birds at the head/tail;
+          we now `object-contain` the actual crop and fill the surrounding
+          letterbox with a heavily-blurred copy of the same image. The
+          browser reuses the cached crop_url, so this adds essentially no
+          network cost — and visually we get the full bird with a soft,
+          ambient backdrop. */}
+      <div
+        className={`relative w-full aspect-[4/3] overflow-hidden ${selectable ? "cursor-pointer" : "cursor-zoom-in"}`}
         onClick={selectable ? onToggleSelect : () => setZoomOpen(true)}
-      />
+      >
+        <img
+          src={detection.crop_url}
+          aria-hidden
+          // scale-110 hides the blur's edge halo at the card boundary.
+          className="absolute inset-0 w-full h-full object-cover blur-2xl scale-110"
+          loading="lazy"
+        />
+        <img
+          src={detection.crop_url}
+          alt={detection.species ?? "bird"}
+          className="relative w-full h-full object-contain"
+          loading="lazy"
+        />
+      </div>
       <div className={`p-2 ${compact ? "text-xs" : "text-sm"}`}>
         <div className="flex items-center justify-between gap-2">
           <span className="font-semibold">{detection.species ?? "Unidentified"}</span>
