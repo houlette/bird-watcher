@@ -427,9 +427,11 @@ def _save_source_frames(
 #     sweet spot where mid-tier crops gain definition without artifacts
 #     becoming visible.
 _DISPLAY_CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-# Was 0.5 — toned down to 0.3 after user feedback that the original was
-# slightly too aggressive (mild halo around high-contrast bird edges).
-_UNSHARP_AMOUNT = 0.3
+# Was 0.5 → 0.3 → 0.15 in successive rounds of user feedback that the
+# sharpening still looked too crunchy on feather edges. 0.15 is barely
+# perceptible on its own but still adds definition when stacked atop the
+# CLAHE step above.
+_UNSHARP_AMOUNT = 0.15
 _UNSHARP_BLUR_KSIZE = (0, 0)         # auto-compute from sigma
 _UNSHARP_BLUR_SIGMA = 1.5
 
