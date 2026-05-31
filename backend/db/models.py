@@ -84,7 +84,14 @@ class Detection(Base):
     audio_confirmed: Mapped[bool] = mapped_column(Integer, default=0)
 
     crop_path: Mapped[str] = mapped_column(String)
-    bbox: Mapped[list] = mapped_column(JSON)  # [x, y, w, h]
+    bbox: Mapped[list] = mapped_column(JSON)  # [x, y, w, h] — best frame
+    # Every per-frame YOLO bbox in the track that produced this detection,
+    # not just the saved best one. Same `[x, y, w, h]` shape, in full-frame
+    # 4K coords. Used by the size-prior calibration to compute a
+    # track-median max(w, h) instead of trusting the single best frame's
+    # noisy bbox. Nullable because rows inserted before this column existed
+    # don't have it.
+    track_bboxes: Mapped[list | None] = mapped_column(JSON, nullable=True)
     track_id: Mapped[int] = mapped_column(Integer)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

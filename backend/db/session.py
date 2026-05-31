@@ -28,6 +28,10 @@ class Base(DeclarativeBase):
 # remember to list every new column here. Tuples are (table, column, sql_type).
 _ADDITIVE_COLUMNS = [
     ("detections", "yolo_confidence", "REAL"),
+    # Track-history bboxes for the size-prior smoothing experiment. NULL
+    # for rows written before the column existed; populated by
+    # pipeline/process.py for new detections.
+    ("detections", "track_bboxes", "JSON"),
 ]
 
 

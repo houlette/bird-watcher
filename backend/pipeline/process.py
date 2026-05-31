@@ -112,6 +112,14 @@ def process_visit(visit: Visit, db: Session) -> int:
             continue
         best = ranked[0]
 
+        # Snapshot every per-frame bbox in the track for downstream
+        # smoothing analysis (the size-prior may benefit from a
+        # track-median bbox instead of the single best frame's noisy one
+        # — see scripts/depth/compare_track_smoothed.py once we have
+        # enough labeled data with this column populated). All bboxes are
+        # in full-frame 4K coords, same shape as Detection.bbox.
+        track_bboxes_for_db = [list(d.bbox) for d in track.detections]
+
         # Always save the YOLO-detected crop. If the classifier later rejects
         # it, the row still goes into the feed as "Unidentified" so the user
         # can tag it via the picker (real species OR "Not a bird" / "Unknown
@@ -154,6 +162,7 @@ def process_visit(visit: Visit, db: Session) -> int:
                 audio_confirmed=False,
                 crop_path=str(crop_rel_path),
                 bbox=list(best.bbox),
+                track_bboxes=track_bboxes_for_db,
                 track_id=track.track_id,
             ))
             frames_to_save[track.track_id] = best.frame_index
@@ -199,6 +208,7 @@ def process_visit(visit: Visit, db: Session) -> int:
             audio_confirmed=bool(top.audio_confirmed),
             crop_path=str(crop_rel_path),
             bbox=list(best.bbox),
+            track_bboxes=track_bboxes_for_db,
             track_id=track.track_id,
         )
         db.add(detection)
