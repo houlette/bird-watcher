@@ -90,26 +90,34 @@ def test_is_masked_outside_hot_zone():
 def test_filter_drops_low_conf_detection_in_hot_zone():
     hot = {(17, 5)}
     d = _FakeDet(bbox=(1710, 510, 80, 80), confidence=0.30)
-    assert scene_mask.filter_detections([d], hot) == []
+    kept, suppressed = scene_mask.filter_detections([d], hot)
+    assert kept == []
+    assert suppressed == 1
 
 
 def test_filter_preserves_high_conf_detection_in_hot_zone():
     """User wants a hummingbird AT the feeder to still be reported."""
     hot = {(17, 5)}
     d = _FakeDet(bbox=(1710, 510, 80, 80), confidence=0.90)
-    assert scene_mask.filter_detections([d], hot) == [d]
+    kept, suppressed = scene_mask.filter_detections([d], hot)
+    assert kept == [d]
+    assert suppressed == 0
 
 
 def test_filter_preserves_detections_outside_hot_zone():
     hot = {(17, 5)}
     d = _FakeDet(bbox=(100, 100, 80, 80), confidence=0.30)
-    assert scene_mask.filter_detections([d], hot) == [d]
+    kept, suppressed = scene_mask.filter_detections([d], hot)
+    assert kept == [d]
+    assert suppressed == 0
 
 
 def test_filter_with_no_hot_zones_is_passthrough():
     d1 = _FakeDet(bbox=(0, 0, 10, 10), confidence=0.30)
     d2 = _FakeDet(bbox=(1000, 1000, 10, 10), confidence=0.90)
-    assert scene_mask.filter_detections([d1, d2], set()) == [d1, d2]
+    kept, suppressed = scene_mask.filter_detections([d1, d2], set())
+    assert kept == [d1, d2]
+    assert suppressed == 0
 
 
 def test_compute_hot_zones_clusters_dense_nabs(session_maker):

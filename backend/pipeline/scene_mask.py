@@ -131,7 +131,9 @@ def is_masked(bbox, hot_zones: set[tuple[int, int]]) -> bool:
 
 def filter_detections(detections, hot_zones: set[tuple[int, int]] | None = None):
     """Drop detections inside hot zones unless their YOLO confidence
-    overrides the mask. Returns the kept list (mutation-free).
+    overrides the mask. Returns `(kept, suppressed_count)` — the count
+    is bubbled up to the worker so it can persist on the Visit row and
+    aggregate into the daily stats funnel.
 
     Pass an explicit `hot_zones` set in tests to make the function fully
     deterministic; production calls let it consult the cached set.
@@ -139,7 +141,7 @@ def filter_detections(detections, hot_zones: set[tuple[int, int]] | None = None)
     if hot_zones is None:
         hot_zones = get_hot_zones()
     if not hot_zones:
-        return detections
+        return list(detections), 0
     kept = []
     suppressed = 0
     for d in detections:
@@ -153,5 +155,5 @@ def filter_detections(detections, hot_zones: set[tuple[int, int]] | None = None)
             continue
         kept.append(d)
     if suppressed:
-        log.debug("Scene mask suppressed %d detection(s)", suppressed)
-    return kept
+        log.info("Scene mask suppressed %d detection(s)", suppressed)
+    return kept, suppressed

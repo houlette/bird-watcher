@@ -54,6 +54,12 @@ def process_visit(visit: Visit, db: Session) -> int:
 
     tracker = Tracker()
     any_frame_decoded = False
+    # Aggregate count of YOLO detections the scene mask suppressed
+    # across all frames in this visit. Persisted on the Visit row at
+    # the end so the Stats page can show this hidden funnel stage and
+    # we can spot-check when real birds get filtered (e.g., a
+    # woodpecker on the lilac near the hummingbird feeder).
+    scene_mask_suppressed = 0
 
     # We sample at 3 fps (vs the source's 20 fps) — every ~7th frame.
     # Combined with the 10 s clip-duration cap in frames.py, this gives the
@@ -74,7 +80,8 @@ def process_visit(visit: Visit, db: Session) -> int:
         # repeatedly labeled as Not-a-bird (hummingbird feeder, etc.).
         # Detections with strong YOLO confidence override the mask, so
         # an actual bird at the feeder still gets through.
-        dets = _scene_mask_filter(dets)
+        dets, this_frame_suppressed = _scene_mask_filter(dets)
+        scene_mask_suppressed += this_frame_suppressed
         for d in dets:
             d.crop = _extract_crop_from_image(d, frame.image)
         tracker.update(frame.index, dets)
@@ -85,6 +92,7 @@ def process_visit(visit: Visit, db: Session) -> int:
         # Empty/corrupted clip — mark processed so we don't retry forever.
         visit.processed_at = utcnow()
         visit.processing_error = "no frames decoded"
+        visit.scene_mask_suppressed = scene_mask_suppressed
         db.commit()
         return 0
 
@@ -240,6 +248,7 @@ def process_visit(visit: Visit, db: Session) -> int:
     visit.processed_at = utcnow()
     visit.ended_at = utcnow()
     visit.processing_error = None
+    visit.scene_mask_suppressed = scene_mask_suppressed
     db.commit()
     return len(tracks)
 

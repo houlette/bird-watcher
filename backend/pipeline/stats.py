@@ -129,6 +129,15 @@ def compute_daily_stats(db: Session, d: date) -> PipelineStatsDaily:
 
     detections_audio_confirmed = base_dets.filter(Detection.audio_confirmed == True).count()  # noqa: E712
 
+    # Aggregate scene-mask suppression count across all visits in window.
+    # NULL on old rows (column added later) → COALESCE to 0 in SUM.
+    detections_scene_mask_suppressed = int(
+        visits_q.with_entities(
+            func.coalesce(func.sum(Visit.scene_mask_suppressed), 0)
+        ).scalar()
+        or 0
+    )
+
     # --- Correction-level metrics -------------------------------------------
     # User-corrected detections in this window.
     corrected_q = (
@@ -216,6 +225,7 @@ def compute_daily_stats(db: Session, d: date) -> PipelineStatsDaily:
         classifier_eligible=classifier_eligible,
         visits_with_processing_error=visits_with_processing_error,
         detections_audio_confirmed=detections_audio_confirmed,
+        detections_scene_mask_suppressed=detections_scene_mask_suppressed,
         payload=payload,
         computed_at=datetime.utcnow(),
     )
@@ -242,6 +252,7 @@ def upsert_daily_stats(db: Session, d: date) -> PipelineStatsDaily:
             "classifier_eligible",
             "visits_with_processing_error",
             "detections_audio_confirmed",
+            "detections_scene_mask_suppressed",
             "payload",
             "computed_at",
         ):
@@ -376,6 +387,7 @@ def serialize_daily(row: PipelineStatsDaily) -> dict:
         "classifier_eligible": row.classifier_eligible,
         "visits_with_processing_error": row.visits_with_processing_error,
         "detections_audio_confirmed": row.detections_audio_confirmed,
+        "detections_scene_mask_suppressed": row.detections_scene_mask_suppressed or 0,
         # Derived rates (caller doesn't have to recompute).
         "yolo_bird_rate": yolo_bird_rate,
         "classifier_label_rate": classifier_label_rate,

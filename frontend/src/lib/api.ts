@@ -84,6 +84,7 @@ export type DailyStats = {
   classifier_eligible: number;
   visits_with_processing_error: number;
   detections_audio_confirmed: number;
+  detections_scene_mask_suppressed: number;
   yolo_bird_rate: number | null;
   classifier_label_rate: number | null;
   user_fp_rate: number | null;

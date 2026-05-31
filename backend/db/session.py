@@ -32,6 +32,11 @@ _ADDITIVE_COLUMNS = [
     # for rows written before the column existed; populated by
     # pipeline/process.py for new detections.
     ("detections", "track_bboxes", "JSON"),
+    # Per-visit count of YOLO detections suppressed by the scene mask.
+    # Surfaces an invisible funnel stage on the Stats page.
+    ("visits", "scene_mask_suppressed", "INTEGER"),
+    # Daily aggregate of the per-visit column above.
+    ("pipeline_stats_daily", "detections_scene_mask_suppressed", "INTEGER"),
 ]
 
 

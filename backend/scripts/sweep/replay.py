@@ -127,7 +127,11 @@ def apply_config(cfg: dict[str, Any]):
     # ─── Scene-mask toggle ────────────────────────────────────────────────
     if "scene_mask_enabled" in cfg and not cfg["scene_mask_enabled"]:
         # Identity filter: pass detections through unchanged.
-        patch(process, "_scene_mask_filter", lambda dets, hot_zones=None: dets)
+        patch(process, "_scene_mask_filter", lambda dets, hot_zones=None: (list(dets), 0))
+
+    # ─── Multi-frame fusion toggle (Step 2) ──────────────────────────────
+    if "use_multi_frame_fusion" in cfg:
+        patch(process, "_USE_MULTI_FRAME_FUSION", cfg["use_multi_frame_fusion"])
 
     # ─── NMM toggle (fall back to plain NMS-on-IoU-only) ─────────────────
     if "nmm_enabled" in cfg and not cfg["nmm_enabled"]:

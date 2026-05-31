@@ -57,6 +57,11 @@ class Visit(Base):
     # so we can retry or surface bad clips.
     processed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     processing_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # How many YOLO detections the scene mask dropped during processing.
+    # Tracked so the Stats page can surface the otherwise-invisible
+    # "real bird at the hummingbird feeder got silently filtered" failure
+    # mode. Nullable for rows written before this column existed.
+    scene_mask_suppressed: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     detections: Mapped[list["Detection"]] = relationship(back_populates="visit", cascade="all, delete-orphan")
 
@@ -163,6 +168,11 @@ class PipelineStatsDaily(Base):
     # Operational signals.
     visits_with_processing_error: Mapped[int] = mapped_column(Integer, default=0)
     detections_audio_confirmed: Mapped[int] = mapped_column(Integer, default=0)
+    # Aggregate count of YOLO detections the scene mask silently dropped
+    # across all visits on this date. A spike here means lots of motion
+    # is happening in NAB-clustered regions (sun glints, leaves, hummingbird
+    # feeder) — and possibly real birds being filtered along with them.
+    detections_scene_mask_suppressed: Mapped[int] = mapped_column(Integer, default=0)
 
     # Variable-shape extras: top species (list), per-species accuracy
     # (list), hour-of-day histogram, YOLO-confidence buckets.

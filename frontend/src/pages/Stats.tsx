@@ -73,10 +73,15 @@ function HeadlineCards({ data }: { data: StatsResponse }) {
       value: String(data.totals.ready_to_fine_tune_species),
       sub: "species ≥ 50 labels",
     },
+    {
+      label: "Mask-suppressed today",
+      value: String(today.detections_scene_mask_suppressed ?? 0),
+      sub: "YOLO hits dropped by hot-zone mask",
+    },
   ];
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
       {cards.map((c) => (
         <div key={c.label} className="bg-white rounded-lg shadow-sm p-3">
           <div className="text-xs text-slate-500">{c.label}</div>
@@ -99,6 +104,7 @@ function FunnelChart({ daily }: { daily: DailyStats[] }) {
         Detections: d.detections_total,
         "Classifier-labeled": d.detections_labeled_by_classifier,
         Corrected: d.detections_user_corrected,
+        "Mask-suppressed": d.detections_scene_mask_suppressed ?? 0,
       })),
     [daily],
   );
@@ -117,6 +123,18 @@ function FunnelChart({ daily }: { daily: DailyStats[] }) {
           <Line type="monotone" dataKey="Detections" stroke={COLOR_FOREST} strokeWidth={2} dot={false} />
           <Line type="monotone" dataKey="Classifier-labeled" stroke={COLOR_BLUE} strokeWidth={2} dot={false} />
           <Line type="monotone" dataKey="Corrected" stroke={COLOR_SAND} strokeWidth={2} dot={false} />
+          {/* Dashed so the line reads as "diagnostic" rather than a
+              first-class funnel stage. A spike here means lots of
+              motion is being silently filtered — and may include real
+              birds that landed in NAB-clustered regions. */}
+          <Line
+            type="monotone"
+            dataKey="Mask-suppressed"
+            stroke={COLOR_RED}
+            strokeWidth={2}
+            strokeDasharray="4 3"
+            dot={false}
+          />
         </LineChart>
       </ResponsiveContainer>
     </section>
