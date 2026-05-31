@@ -40,4 +40,4 @@ astral==3.2                 # sunrise / sunset for daylight-only processing gate
 # Anthropic SDK — only used by scripts/llm_classify_unidentified.py for
 # the one-time backlog labeling pass. Not imported by the live pipeline,
 # so a missing ANTHROPIC_API_KEY doesn't break anything in production.
-anthropic==0.42.0
+anthropic==0.105.2
