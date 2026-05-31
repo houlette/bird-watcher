@@ -162,11 +162,15 @@ def process_visit(visit: Visit, db: Session) -> int:
 
         averaged = _average_predictions(per_crop_predictions)
 
-        # Phase 4: fuse averaged visual predictions with audio + seasonal priors.
+        # Phase 4: fuse averaged visual predictions with audio + seasonal + size priors.
+        # `best.bbox` is the saved crop's bbox in full-frame 4K coords; the size
+        # prior reads max(w, h) from it. When no size_priors.json is present
+        # (fresh DB / haven't calibrated yet), the prior is a no-op.
         fused = fuse(
             [(p.species, p.probability) for p in averaged],
             db=db,
             when=visit.started_at,
+            bbox=tuple(best.bbox),
         )
         if not fused:
             continue

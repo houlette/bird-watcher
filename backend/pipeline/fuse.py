@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 
 from db.models import HaikuboxDetection
 from db.utils import utcnow
-from pipeline import calibration
+from pipeline import calibration, size_prior
 from settings import settings
 
 log = logging.getLogger(__name__)
@@ -52,6 +52,7 @@ class FusedPrediction:
     probability: float
     audio_confirmed: bool
     seasonal_boost: float  # 1.0 means no effect
+    size_mult: float = 1.0  # 1.0 means no effect (no size calibration / unknown species)
 
 
 def _audio_species_set(db: Session, window_end: datetime) -> set[str]:
@@ -117,27 +118,42 @@ def fuse(
     *,
     db: Session,
     when: datetime | None = None,
+    bbox: tuple[float, float, float, float] | list[float] | None = None,
 ) -> list[FusedPrediction]:
     """Re-rank visual predictions by combining with audio + seasonal priors.
 
     `predictions` is the top-K from the classifier as (species, probability).
+    `bbox`, if given, enables the per-species size prior (max(w, h) under
+    the log-normal fit from `data/calibration/size_priors.json`). When
+    `bbox` is None or the calibration file is absent, the size prior is
+    a no-op (1.0 multiplier) — preserving pre-prior behavior.
+
     Returns a list of FusedPrediction sorted by posterior probability desc.
     """
     when = when or utcnow()
     audio_heard = _audio_species_set(db, when) if (settings.haikubox_serial and settings.haikubox_api_key) else set()
     month = when.month
 
+    # max(w, h) is the proxy `compare_proxies.py` selected for songbird
+    # discrimination. Compute it once per fuse() call, not per candidate.
+    max_wh: float | None = None
+    if bbox is not None and len(bbox) == 4:
+        _, _, w, h = bbox
+        max_wh = float(max(w, h))
+
     scored: list[FusedPrediction] = []
     for species, p_visual in predictions:
         audio_mult = AUDIO_BOOST if species in audio_heard else AUDIO_FLOOR
         seasonal_mult = _seasonal_multiplier(species, month)
-        posterior = p_visual * audio_mult * seasonal_mult
+        size_mult = size_prior.size_multiplier(species, max_wh) if max_wh else 1.0
+        posterior = p_visual * audio_mult * seasonal_mult * size_mult
         scored.append(
             FusedPrediction(
                 species=species,
                 probability=posterior,
                 audio_confirmed=species in audio_heard,
                 seasonal_boost=seasonal_mult,
+                size_mult=size_mult,
             )
         )
 
