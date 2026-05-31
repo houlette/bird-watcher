@@ -134,18 +134,15 @@ def fuse(
     audio_heard = _audio_species_set(db, when) if (settings.haikubox_serial and settings.haikubox_api_key) else set()
     month = when.month
 
-    # max(w, h) is the proxy `compare_proxies.py` selected for songbird
-    # discrimination. Compute it once per fuse() call, not per candidate.
-    max_wh: float | None = None
-    if bbox is not None and len(bbox) == 4:
-        _, _, w, h = bbox
-        max_wh = float(max(w, h))
+    # `pipeline.size_prior.size_multiplier()` handles aspect-ratio gating
+    # and perch scaling internally; we only need to forward the bbox.
+    bbox_for_prior: tuple | None = tuple(bbox) if bbox is not None and len(bbox) == 4 else None
 
     scored: list[FusedPrediction] = []
     for species, p_visual in predictions:
         audio_mult = AUDIO_BOOST if species in audio_heard else AUDIO_FLOOR
         seasonal_mult = _seasonal_multiplier(species, month)
-        size_mult = size_prior.size_multiplier(species, max_wh) if max_wh else 1.0
+        size_mult = size_prior.size_multiplier(species, bbox_for_prior) if bbox_for_prior else 1.0
         posterior = p_visual * audio_mult * seasonal_mult * size_mult
         scored.append(
             FusedPrediction(
