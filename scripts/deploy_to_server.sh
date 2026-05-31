@@ -36,6 +36,13 @@ echo "Syncing repo to $TARGET:~/BirdWatcher/ …"
 #     after would wipe the key on every deploy and force every push
 #     subscription to re-register from scratch.
 ssh "$TARGET" "mkdir -p ~/BirdWatcher"
+# --no-perms / --no-owner / --no-group avoid the "partial transfer due to
+# vanished files" (exit 23) race that aborts `set -e` deploys when local
+# sweep output rotates mid-transfer. The bootstrap step that rebuilds the
+# frontend and the API image is the important part — losing it because a
+# stale build artifact disappeared between rsync's enumeration and copy
+# phases is a regular footgun.
+RSYNC_RC=0
 rsync -avz --delete-after \
   --exclude='.venv/' \
   --exclude='node_modules/' \
@@ -52,7 +59,13 @@ rsync -avz --delete-after \
   --exclude='*.pyc' \
   --exclude='.DS_Store' \
   --exclude='/.env' \
-  ./ "$TARGET:~/BirdWatcher/"
+  ./ "$TARGET:~/BirdWatcher/" || RSYNC_RC=$?
+# Treat "vanished files" (24) and "partial transfer" (23) as soft — the
+# subsequent bootstrap step is what matters; hard-fail on anything else.
+if [ "$RSYNC_RC" -ne 0 ] && [ "$RSYNC_RC" -ne 23 ] && [ "$RSYNC_RC" -ne 24 ]; then
+  echo "rsync failed with code $RSYNC_RC" >&2
+  exit "$RSYNC_RC"
+fi
 
 # Note on /.env: that's the project-root .env which bootstrap_server.sh
 # generates on the remote (as a mirror of backend/.env) so docker compose's
