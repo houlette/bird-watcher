@@ -42,6 +42,7 @@ vapid_*.pem
 backend/scripts/sweep/results/
 backend/scripts/sweep/data/
 backend/scripts/depth/results/
+backend/scripts/llm_classify_results/
 
 # Local backup of the production-style data dir, stashed while the sweep
 # harness's symlink is active. backend/data/ is already ignored above.
