@@ -1,7 +1,7 @@
 """SQLAlchemy ORM models."""
-from datetime import datetime
+from datetime import date as _date, datetime
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Date, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.session import Base
@@ -116,6 +116,52 @@ class PushSubscription(Base):
     # absence pings; a House Sparrow showing up for the hundredth time doesn't.
     notify_window_days: Mapped[int] = mapped_column(Integer, default=30)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class PipelineStatsDaily(Base):
+    """One row per UTC date of pipeline funnel metrics.
+
+    Written by the nightly job in pipeline.worker and re-used by the
+    /api/stats endpoint. Today's row is recomputed on every read so the
+    page is always current; yesterday-and-older are cached snapshots.
+
+    The `payload` JSON column holds variable-shape bits the schema can't
+    easily express (top species, per-species accuracy, hour-of-day
+    histogram). New bonus charts should usually add a key to payload
+    rather than a new column — keeps additive migrations rare.
+    """
+
+    __tablename__ = "pipeline_stats_daily"
+
+    # UTC date (Visit.started_at's date). Used both as PK and as the
+    # natural sort key; SQLite stores it as ISO text.
+    date: Mapped[_date] = mapped_column(Date, primary_key=True)
+
+    # Funnel stage counts (see backend/pipeline/stats.py docstring for the
+    # exact GROUP BY definitions).
+    clips_received: Mapped[int] = mapped_column(Integer, default=0)
+    clips_daylight: Mapped[int] = mapped_column(Integer, default=0)
+    clips_with_detections: Mapped[int] = mapped_column(Integer, default=0)
+    detections_total: Mapped[int] = mapped_column(Integer, default=0)
+    detections_labeled_by_classifier: Mapped[int] = mapped_column(Integer, default=0)
+    detections_user_corrected: Mapped[int] = mapped_column(Integer, default=0)
+    corrections_nab: Mapped[int] = mapped_column(Integer, default=0)
+    corrections_unknown: Mapped[int] = mapped_column(Integer, default=0)
+    corrections_real_species: Mapped[int] = mapped_column(Integer, default=0)
+    # Of corrections to a real species (denominator excludes NAB / Unknown),
+    # how many did the classifier's species_id already match? Used to compute
+    # classifier accuracy.
+    classifier_correct: Mapped[int] = mapped_column(Integer, default=0)
+    classifier_eligible: Mapped[int] = mapped_column(Integer, default=0)
+    # Operational signals.
+    visits_with_processing_error: Mapped[int] = mapped_column(Integer, default=0)
+    detections_audio_confirmed: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Variable-shape extras: top species (list), per-species accuracy
+    # (list), hour-of-day histogram, YOLO-confidence buckets.
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    computed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class Correction(Base):

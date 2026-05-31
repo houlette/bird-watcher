@@ -14,10 +14,11 @@ from __future__ import annotations
 import logging
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
 
 from db.models import Correction, Detection, Visit
@@ -25,7 +26,9 @@ from db.session import SessionLocal
 from db.utils import utcnow
 from ingest.haikubox import POLL_INTERVAL_SECONDS as HAIKUBOX_POLL_SECONDS
 from ingest.haikubox import poll_once as poll_haikubox
+from db.models import PipelineStatsDaily
 from pipeline.daylight import is_daylight
+from pipeline.stats import dates_with_visits, upsert_daily_stats
 from pipeline.exceptions import SkipFile
 from pipeline.frames import IMAGE_EXTS, VIDEO_EXTS
 from pipeline.process import FRAMES_DIR, process_visit
@@ -302,6 +305,42 @@ def _cleanup_old_clips() -> int:
     return deleted
 
 
+def _compute_nightly_stats() -> int:
+    """Compute (or refresh) PipelineStatsDaily for yesterday + any gap days.
+
+    Runs at 02:15 UTC daily. Why also backfill gap days: if the worker
+    process was down for a few days, the snapshot table would have holes
+    that the /api/stats endpoint would render as zero-bars on the chart.
+    Re-running compute_daily_stats over the full Visit-date history is
+    cheap (a few seconds even on prod's ~tens-of-thousands of rows)
+    because the queries are all indexed scans.
+    """
+    db = SessionLocal()
+    written = 0
+    try:
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+        # Re-upsert yesterday unconditionally so late-arriving corrections
+        # (the user labels a backlog detection this morning) get folded in.
+        upsert_daily_stats(db, yesterday)
+        written += 1
+
+        existing = {
+            row.date
+            for row in db.query(PipelineStatsDaily.date).all()
+        }
+        for d in dates_with_visits(db):
+            if d in existing or d == yesterday or d >= datetime.now(timezone.utc).date():
+                continue
+            upsert_daily_stats(db, d)
+            written += 1
+        log.info("Nightly stats: upserted %d PipelineStatsDaily row(s)", written)
+    except Exception:
+        log.exception("Nightly stats job failed")
+    finally:
+        db.close()
+    return written
+
+
 def start_worker() -> BackgroundScheduler:
     scheduler = BackgroundScheduler(daemon=True)
     scheduler.add_job(
@@ -337,6 +376,17 @@ def start_worker() -> BackgroundScheduler:
         coalesce=True,
         id="cleanup_old_clips",
         next_run_time=datetime.now(timezone.utc),  # run once at startup
+    )
+    # Nightly funnel stats snapshot at 02:15 UTC. The endpoint recomputes
+    # today's row on demand, so we only need the cron to lock in
+    # yesterday + backfill any missing historical days.
+    scheduler.add_job(
+        _compute_nightly_stats,
+        CronTrigger(hour=2, minute=15),
+        max_instances=1,
+        coalesce=True,
+        id="compute_nightly_stats",
+        next_run_time=datetime.now(timezone.utc),  # also run once at startup to populate fresh DBs
     )
     scheduler.start()
     log.info(

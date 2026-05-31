@@ -3,6 +3,7 @@ import { NavLink, Route, Routes } from "react-router-dom";
 import Feed from "./pages/Feed";
 import Settings from "./pages/Settings";
 import Species from "./pages/Species";
+import Stats from "./pages/Stats";
 
 export default function App() {
   return (
@@ -16,6 +17,7 @@ export default function App() {
           <Route path="/" element={<Feed />} />
           <Route path="/labels" element={<Feed mode="nab" />} />
           <Route path="/species/:id" element={<Species />} />
+          <Route path="/stats" element={<Stats />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
       </main>
@@ -23,6 +25,7 @@ export default function App() {
       <nav className="bg-white border-t flex justify-around py-2 sticky bottom-0">
         <Tab to="/" label="Feed" />
         <Tab to="/labels" label="Labels" />
+        <Tab to="/stats" label="Stats" />
         <Tab to="/settings" label="Settings" />
       </nav>
     </div>

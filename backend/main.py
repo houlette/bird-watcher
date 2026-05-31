@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from db.session import init_db
 from pipeline.worker import start_worker
-from routers import corrections, detections, ingest, push, species
+from routers import corrections, detections, ingest, push, species, stats
 
 # uvicorn sets up its own loggers (uvicorn, uvicorn.access) but does NOT
 # configure the root logger. Our app modules use logging.getLogger(__name__)
@@ -49,6 +49,7 @@ app.include_router(detections.router, prefix="/api/detections", tags=["detection
 app.include_router(push.router, prefix="/api/push", tags=["push"])
 app.include_router(corrections.router, prefix="/api/corrections", tags=["corrections"])
 app.include_router(species.router, prefix="/api/species", tags=["species"])
+app.include_router(stats.router, prefix="/api/stats", tags=["stats"])
 
 # Serve uploaded clips/crops at /media (the PWA reads from here)
 app.mount("/media", StaticFiles(directory=DATA_DIR), name="media")

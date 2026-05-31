@@ -67,6 +67,56 @@ export async function submitCorrection(detection_id: number, correct_species_nam
   return (await r.json()) as { ok: boolean; species_id: number; species: string };
 }
 
+// ---- Stats ---------------------------------------------------------------
+
+export type DailyStats = {
+  date: string;
+  clips_received: number;
+  clips_daylight: number;
+  clips_with_detections: number;
+  detections_total: number;
+  detections_labeled_by_classifier: number;
+  detections_user_corrected: number;
+  corrections_nab: number;
+  corrections_unknown: number;
+  corrections_real_species: number;
+  classifier_correct: number;
+  classifier_eligible: number;
+  visits_with_processing_error: number;
+  detections_audio_confirmed: number;
+  yolo_bird_rate: number | null;
+  classifier_label_rate: number | null;
+  user_fp_rate: number | null;
+  classifier_accuracy: number | null;
+  payload: {
+    hour_of_day?: number[];
+    yolo_confidence_hist?: { nab: number[]; species: number[] };
+    [k: string]: unknown;
+  };
+};
+
+export type StatsResponse = {
+  daily: DailyStats[];
+  totals: {
+    visits_total: number;
+    detections_total: number;
+    corrections_total: number;
+    pending_backlog: number;
+    ready_to_fine_tune_species: number;
+    top_species: { species: string; count: number }[];
+    species_accuracy: { species: string; n: number; accuracy: number }[];
+  };
+  as_of: string;
+};
+
+export async function fetchStats(days = 30): Promise<StatsResponse> {
+  const url = new URL("/api/stats", window.location.origin);
+  url.searchParams.set("days", String(days));
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`fetchStats: ${r.status}`);
+  return (await r.json()) as StatsResponse;
+}
+
 export async function bulkCorrection(detection_ids: number[], correct_species_name: string) {
   const r = await fetch("/api/corrections/bulk", {
     method: "POST",
