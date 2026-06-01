@@ -130,6 +130,19 @@ export async function fetchStats(days = 30): Promise<StatsResponse> {
   return (await r.json()) as StatsResponse;
 }
 
+export async function confirmLlmCorrection(detection_id: number) {
+  const r = await fetch(`/api/corrections/llm-confirm/${detection_id}`, {
+    method: "POST",
+  });
+  if (!r.ok) throw new Error(`confirmLlmCorrection: ${r.status}`);
+  return (await r.json()) as {
+    ok: boolean;
+    detection_id: number;
+    source: string;
+    species: string | null;
+  };
+}
+
 export async function bulkCorrection(detection_ids: number[], correct_species_name: string) {
   const r = await fetch("/api/corrections/bulk", {
     method: "POST",

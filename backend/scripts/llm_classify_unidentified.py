@@ -93,9 +93,22 @@ EFFORT = "medium"
 # vision pipeline and stays well under tier limits.
 REQUEST_INTERVAL_SECONDS = 1.0
 
-# Tag so we can later distinguish LLM-generated labels from user labels
-# (training data hygiene — see Correction.source docstring).
-CORRECTION_SOURCE = "llm-claude"
+# Source tags written to Correction.source so downstream code can
+# distinguish where a label came from:
+#   - llm-claude        HIGH-confidence Claude call, auto-committed
+#   - llm-claude-medium MEDIUM-confidence call, auto-committed and
+#                       awaiting user confirm/reject in the LLM-review
+#                       feed filter. Distinct tag so the review UI can
+#                       surface only the ones that still need a human
+#                       look (HIGH is treated as already-reviewed by
+#                       virtue of the 99%+ measured accuracy).
+#   - llm-claude-confirmed  Promoted by the user via the Confirm button
+#                       in the review feed. Tag is upgraded so the row
+#                       falls out of the review queue but stays
+#                       distinguishable from user-originated labels for
+#                       training-data hygiene.
+CORRECTION_SOURCE_HIGH = "llm-claude"
+CORRECTION_SOURCE_MEDIUM = "llm-claude-medium"
 
 
 def _build_species_lists() -> tuple[list[str], list[str]]:
@@ -384,14 +397,14 @@ def main() -> int:
                     result["rationale"][:80],
                 )
 
-                if conf == "HIGH" and args.auto_commit and not args.dry_run:
+                if conf in ("HIGH", "MEDIUM") and args.auto_commit and not args.dry_run:
                     try:
                         sp = _resolve_species_for_correction(db, result["label"])
                         det.species_id = sp.id  # mirror corrections.py behavior
                         db.add(Correction(
                             detection_id=det.id,
                             correct_species_id=sp.id,
-                            source=CORRECTION_SOURCE,
+                            source=(CORRECTION_SOURCE_HIGH if conf == "HIGH" else CORRECTION_SOURCE_MEDIUM),
                             rationale=result.get("rationale"),
                         ))
                         db.commit()

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import { submitCorrection, type Detection } from "../lib/api";
+import { confirmLlmCorrection, submitCorrection, type Detection } from "../lib/api";
 import AudioBadge from "./AudioBadge";
 import ImageZoom from "./ImageZoom";
 import SpeciesPicker, { NOT_A_BIRD } from "./SpeciesPicker";
@@ -44,7 +44,22 @@ export default function DetectionCard({
     },
   });
 
-  const ringClass = selected ? "ring-2 ring-forest" : "ring-1 ring-transparent";
+  // ✓ Confirm path for the LLM MEDIUM-review queue. Promotes the
+  // Correction's source from "llm-claude-medium" → "llm-claude-confirmed"
+  // so the card drops out of the review filter on the next refetch.
+  const confirmMutation = useMutation({
+    mutationFn: () => confirmLlmCorrection(detection.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["detections"] });
+    },
+  });
+
+  const isLlmMediumReview = detection.correction_source === "llm-claude-medium";
+  const ringClass = selected
+    ? "ring-2 ring-forest"
+    : isLlmMediumReview
+      ? "ring-1 ring-amber-300"   // visual cue: distinguish MEDIUM-review cohort from HIGH
+      : "ring-1 ring-transparent";
 
   return (
     <div className={`bg-white rounded-lg shadow-sm overflow-hidden flex flex-col relative ${ringClass}`}>
@@ -128,7 +143,42 @@ export default function DetectionCard({
           );
         })()}
 
-        {!compact && (
+        {!compact && isLlmMediumReview && (
+          // MEDIUM-review quick-action row: ✓ Confirm (one tap, no picker),
+          // 🚫 NAB (existing fast path), ✏️ Change (opens picker). Keeps
+          // the per-card review time ≤ 1 second for the confirm case so
+          // 700+ items is tractable.
+          <div className="mt-2 flex items-center justify-between gap-2 text-xs">
+            <button
+              className="flex-1 px-2 py-1 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+              onClick={() => confirmMutation.mutate()}
+              disabled={confirmMutation.isPending || correctionMutation.isPending}
+              title="Confirm Claude's label"
+              aria-label="Confirm"
+            >
+              {confirmMutation.isPending ? "Saving…" : "✓ Confirm"}
+            </button>
+            <button
+              className="px-2 py-1 rounded border border-slate-200 text-slate-600 hover:bg-red-50 hover:border-red-300 hover:text-red-700 disabled:opacity-50"
+              onClick={() => correctionMutation.mutate(NOT_A_BIRD)}
+              disabled={confirmMutation.isPending || correctionMutation.isPending}
+              title="Mark as not a bird (false positive)"
+              aria-label="Mark as not a bird"
+            >
+              🚫
+            </button>
+            <button
+              className="px-2 py-1 rounded border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+              onClick={() => setPickerOpen(true)}
+              disabled={confirmMutation.isPending || correctionMutation.isPending}
+              title="Change species"
+              aria-label="Change species"
+            >
+              ✏️
+            </button>
+          </div>
+        )}
+        {!compact && !isLlmMediumReview && (
           <div className="mt-2 flex items-center justify-between gap-2 text-xs">
             <button
               className="text-slate-500 hover:text-forest underline disabled:opacity-50"
@@ -153,6 +203,11 @@ export default function DetectionCard({
               🚫
             </button>
           </div>
+        )}
+        {confirmMutation.isError && (
+          <p className="text-xs text-red-600 mt-1">
+            Couldn't confirm: {(confirmMutation.error as Error).message}
+          </p>
         )}
         {correctionMutation.isError && (
           <p className="text-xs text-red-600 mt-1">

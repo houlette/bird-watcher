@@ -63,10 +63,15 @@ export default function Feed({ mode = "default" }: Props = {}) {
         only_not_a_bird: isNabReview,
         only_unidentified: effectiveFilter.mode === "unidentified",
         species_name: effectiveFilter.mode === "species" ? effectiveFilter.name : undefined,
-        // "LLM-labeled (review)" mode: filter to detections whose
-        // Correction.source is the script's tag, so the user only sees
-        // Claude's outputs and can spot-check them.
-        source: effectiveFilter.mode === "llm_review" ? "llm-claude" : undefined,
+        // LLM-review modes: filter by Correction.source.
+        //   llm_review        → HIGH-confidence committed (already reviewed)
+        //   llm_medium_review → MEDIUM, surfaced with ✓/🚫/✏️ buttons on the card
+        source:
+          effectiveFilter.mode === "llm_review"
+            ? "llm-claude"
+            : effectiveFilter.mode === "llm_medium_review"
+              ? "llm-claude-medium"
+              : undefined,
       }),
     initialPageParam: "" as string,
     getNextPageParam: (lastPage: Detection[]) => {

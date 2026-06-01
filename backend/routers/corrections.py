@@ -51,6 +51,46 @@ async def submit_correction(req: CorrectionRequest, db: Session = Depends(get_db
     return {"ok": True, "species_id": species.id, "species": species.common_name}
 
 
+@router.post("/llm-confirm/{detection_id}")
+async def confirm_llm_correction(detection_id: int, db: Session = Depends(get_db)) -> dict:
+    """One-tap confirm of an LLM MEDIUM-confidence Correction.
+
+    The PWA's LLM-review feed exposes a ✓ Confirm button on
+    `source="llm-claude-medium"` cards. Tapping it calls here; we
+    promote the source tag to `"llm-claude-confirmed"` so the row falls
+    out of the MEDIUM review queue, and stamp `created_at` to now so
+    the row sorts as freshly-acted-upon in any future audit.
+
+    The Detection.species_id is left as-is — confirming means "the
+    species the script picked is right," so no value change. Disagreeing
+    with the LLM is done via the normal /api/corrections POST instead,
+    which overwrites both the species and the Correction.
+    """
+    from datetime import datetime, timezone
+
+    correction = (
+        db.query(Correction)
+        .filter(Correction.detection_id == detection_id)
+        .filter(Correction.source == "llm-claude-medium")
+        .one_or_none()
+    )
+    if correction is None:
+        raise HTTPException(
+            404,
+            f"no llm-claude-medium correction for detection {detection_id}",
+        )
+    correction.source = "llm-claude-confirmed"
+    correction.created_at = datetime.now(timezone.utc)
+    db.commit()
+    species = db.get(Species, correction.correct_species_id)
+    return {
+        "ok": True,
+        "detection_id": detection_id,
+        "source": correction.source,
+        "species": species.common_name if species else None,
+    }
+
+
 class BulkCorrectionRequest(BaseModel):
     detection_ids: list[int]
     correct_species_name: str
