@@ -160,35 +160,38 @@ export default function DetectionCard({
             .filter((p) => p.species && p.species !== detection.species && p.p >= 0.02)
             .slice(0, 2);
           if (alts.length === 0) return null;
+          // Two-line clamp instead of single-line truncate: the
+          // alternates are useful for sanity-checking the top-1, so
+          // the user would rather see "Northern Goshawk 14% · Cooper's
+          // Hawk 9%" than "Northern Goshawk…".
           return (
-            <div className="text-xs text-slate-400 mt-0.5 truncate">
+            <div className="text-xs text-slate-400 mt-0.5 line-clamp-2">
               {alts.map((a) => `${a.species} ${Math.round(a.p * 100)}%`).join(" · ")}
             </div>
           );
         })()}
 
+        {/* Quick-review action row used by two filters: LLM-labeled MEDIUM
+            and "Awaiting review" (production classifier output). Same buttons,
+            same semantics; the ✓ mutation routes to the appropriate endpoint
+            based on the card's state. Three equal-width grid columns so the
+            pencil never gets clipped on narrow cards (the lg:grid-cols-5 feed
+            gives each card ~180px). Confirm becomes icon-only — green border
+            + checkmark + tooltip carry the meaning at a fraction of the
+            horizontal cost. */}
         {!compact && (isLlmMediumReview || isAwaitingClassifierReview) && (
-          // Quick-review action row used by two filters:
-          //   - LLM-labeled MEDIUM (review)
-          //   - Awaiting review (production classifier output)
-          // Same buttons, same semantics; the ✓ mutation routes to the
-          // appropriate endpoint based on the card's state.
-          // MEDIUM-review quick-action row: ✓ Confirm (one tap, no picker),
-          // 🚫 NAB (existing fast path), ✏️ Change (opens picker). Keeps
-          // the per-card review time ≤ 1 second for the confirm case so
-          // 700+ items is tractable.
-          <div className="mt-2 flex items-center justify-between gap-2 text-xs">
+          <div className="mt-2 grid grid-cols-3 gap-1 text-xs">
             <button
-              className="flex-1 px-2 py-1 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+              className="px-1 py-1 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
               onClick={() => confirmMutation.mutate()}
               disabled={confirmMutation.isPending || correctionMutation.isPending}
-              title="Confirm Claude's label"
+              title="Confirm — keep this label"
               aria-label="Confirm"
             >
-              {confirmMutation.isPending ? "Saving…" : "✓ Confirm"}
+              {confirmMutation.isPending ? "…" : "✓"}
             </button>
             <button
-              className="px-2 py-1 rounded border border-slate-200 text-slate-600 hover:bg-red-50 hover:border-red-300 hover:text-red-700 disabled:opacity-50"
+              className="px-1 py-1 rounded border border-slate-200 text-slate-600 hover:bg-red-50 hover:border-red-300 hover:text-red-700 disabled:opacity-50"
               onClick={() => correctionMutation.mutate(NOT_A_BIRD)}
               disabled={confirmMutation.isPending || correctionMutation.isPending}
               title="Mark as not a bird (false positive)"
@@ -197,7 +200,7 @@ export default function DetectionCard({
               🚫
             </button>
             <button
-              className="px-2 py-1 rounded border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+              className="px-1 py-1 rounded border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50"
               onClick={() => setPickerOpen(true)}
               disabled={confirmMutation.isPending || correctionMutation.isPending}
               title="Change species"
