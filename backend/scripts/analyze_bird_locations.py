@@ -164,10 +164,15 @@ def _render_heatmap(
         norm, extent=(0, W, H, 0), aspect="auto",
         cmap=cmap_name, alpha=0.55, interpolation="bilinear",
     )
-    # 50% and 90% density contours
+    # 25 / 50 / 75% density contours. Pass an explicit (X, Y) meshgrid
+    # instead of extent — matplotlib's contour() handles flipped-y
+    # extents differently from imshow(), and the two end up rotated
+    # relative to each other if you let extent do the work.
+    ys_grid = np.linspace(0, H, norm.shape[0])
+    xs_grid = np.linspace(0, W, norm.shape[1])
+    X, Y = np.meshgrid(xs_grid, ys_grid)
     cs = ax.contour(
-        norm,
-        extent=(0, W, H, 0),
+        X, Y, norm,
         levels=[0.25, 0.5, 0.75],
         colors=["white"],
         alpha=0.7,
