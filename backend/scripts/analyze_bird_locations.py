@@ -51,9 +51,19 @@ DEFAULT_RESULTS_DIR = DATA_DIR / "heatmaps"
 # Image dimensions (4K Reolink full frame, after tile reassembly).
 W, H = 3840, 2160
 
-# Background frame for the overlay — same one the depth-map experiment
-# used (a clean morning capture). If absent, we render on a black canvas.
-BG_FRAME_REL = "clips/upload/2026/05/29/Birdfeeder_00_20260529102542.jpg"
+# Background frame for the overlay. Preference order:
+#   1. data/calibration/heatmap_bg.jpg — a hand-curated stable reference
+#      snapshot (preferred; survives clip retention, doesn't change when
+#      the camera repositions).
+#   2. The most recent JPG under data/clips/upload/ — auto-fallback so
+#      the heatmap still has a visual base after a camera move even if
+#      nobody's curated a new reference yet.
+#   3. Black canvas if neither exists.
+#
+# After a camera move, refresh the reference with:
+#   docker compose exec api bash -c \
+#     "cp $(ls -t data/clips/upload/**/*.jpg | head -1) data/calibration/heatmap_bg.jpg"
+BG_FRAME_REL = "calibration/heatmap_bg.jpg"
 
 
 def _load_real_bird_detections() -> list[tuple[int, int, int, int]]:
@@ -104,6 +114,7 @@ def _load_real_bird_detections() -> list[tuple[int, int, int, int]]:
 
 
 def _bg_image() -> np.ndarray:
+    # Tier 1: curated stable reference.
     bg_path = DATA_DIR / BG_FRAME_REL
     if bg_path.exists():
         img = cv2.imread(str(bg_path))
@@ -111,9 +122,23 @@ def _bg_image() -> np.ndarray:
             if img.shape[:2] != (H, W):
                 img = cv2.resize(img, (W, H))
             return img
-        log.warning("Could not decode bg frame %s; falling back to black", bg_path)
-    else:
-        log.warning("Bg frame missing at %s; falling back to black", bg_path)
+        log.warning("Could not decode %s; trying recent-clip fallback", bg_path)
+
+    # Tier 2: latest JPG under data/clips/upload/. Clip retention is 24h,
+    # so this is always a recent frame (post-move if the camera was
+    # recently relocated).
+    clips_dir = DATA_DIR / "clips" / "upload"
+    candidates = sorted(clips_dir.rglob("*.jpg"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for candidate in candidates[:5]:
+        img = cv2.imread(str(candidate))
+        if img is not None:
+            log.info("Using auto-picked bg frame %s", candidate)
+            if img.shape[:2] != (H, W):
+                img = cv2.resize(img, (W, H))
+            return img
+
+    # Tier 3: black canvas.
+    log.warning("No bg frame found; rendering on black")
     return np.zeros((H, W, 3), dtype=np.uint8)
 
 
