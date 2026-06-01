@@ -32,6 +32,7 @@ export async function fetchDetections(params: {
   before?: string;
   only_not_a_bird?: boolean;
   only_unidentified?: boolean;
+  awaiting_review?: boolean;
   source?: string;
 } = {}) {
   const url = new URL("/api/detections", window.location.origin);
@@ -41,6 +42,7 @@ export async function fetchDetections(params: {
   if (params.before) url.searchParams.set("before", params.before);
   if (params.only_not_a_bird) url.searchParams.set("only_not_a_bird", "true");
   if (params.only_unidentified) url.searchParams.set("only_unidentified", "true");
+  if (params.awaiting_review) url.searchParams.set("awaiting_review", "true");
   if (params.source) url.searchParams.set("source", params.source);
   const r = await fetch(url);
   if (!r.ok) throw new Error(`fetchDetections: ${r.status}`);
@@ -128,6 +130,19 @@ export async function fetchStats(days = 30): Promise<StatsResponse> {
   const r = await fetch(url);
   if (!r.ok) throw new Error(`fetchStats: ${r.status}`);
   return (await r.json()) as StatsResponse;
+}
+
+export async function confirmClassifierLabel(detection_id: number) {
+  const r = await fetch(`/api/corrections/confirm/${detection_id}`, {
+    method: "POST",
+  });
+  if (!r.ok) throw new Error(`confirmClassifierLabel: ${r.status}`);
+  return (await r.json()) as {
+    ok: boolean;
+    detection_id: number;
+    source: string;
+    species: string | null;
+  };
 }
 
 export async function confirmLlmCorrection(detection_id: number) {

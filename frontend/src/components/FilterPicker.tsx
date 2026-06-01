@@ -16,6 +16,7 @@ import { fetchSpecies, type SpeciesEntry } from "../lib/api";
 export type Filter =
   | { mode: "all" }
   | { mode: "unidentified" }
+  | { mode: "awaiting_review" }    // classifier-labeled, user hasn't acted yet
   | { mode: "llm_review" }         // HIGH-confidence committed labels
   | { mode: "llm_medium_review" }  // MEDIUM-confidence — quick-review queue
   | { mode: "species"; name: string };
@@ -31,6 +32,8 @@ export function filterLabel(f: Filter): string {
       return "All birds";
     case "unidentified":
       return "Unidentified only";
+    case "awaiting_review":
+      return "Awaiting review";
     case "llm_review":
       return "LLM-labeled HIGH";
     case "llm_medium_review":
@@ -130,6 +133,15 @@ export default function FilterPicker({ value, onChange }: Props) {
                 onClick={() => pick({ mode: "unidentified" })}
               >
                 ❓ Unidentified only
+              </button>
+              <button
+                className={`w-full text-left px-3 py-2 hover:bg-slate-50 text-sm border-b border-slate-100 ${
+                  value.mode === "awaiting_review" ? "bg-cream font-semibold" : ""
+                }`}
+                onClick={() => pick({ mode: "awaiting_review" })}
+                title="Classifier labeled them; you haven't reviewed yet. ✓ Confirm to record agreement, ✏️ to change."
+              >
+                📋 Awaiting review
               </button>
               <button
                 className={`w-full text-left px-3 py-2 hover:bg-slate-50 text-sm border-b border-slate-100 ${

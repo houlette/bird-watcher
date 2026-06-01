@@ -51,6 +51,60 @@ async def submit_correction(req: CorrectionRequest, db: Session = Depends(get_db
     return {"ok": True, "species_id": species.id, "species": species.common_name}
 
 
+@router.post("/confirm/{detection_id}")
+async def confirm_classifier_label(detection_id: int, db: Session = Depends(get_db)) -> dict:
+    """Record a user confirmation of the classifier's existing label.
+
+    Writes a Correction row with source="user-confirmed" and
+    correct_species_id matching Detection.species_id. The Detection
+    species value doesn't change — confirming means "the species the
+    classifier picked is correct."
+
+    Without this signal we can't measure true-positive rate: the only
+    Corrections that exist today are disagreements (you only tap
+    'Wrong species?' when the model is wrong), so the classifier
+    accuracy metric is selection-biased to ~0%. Confirmations give us
+    the other half of the picture, and let the eventual fine-tune use
+    BOTH positive and negative labels.
+
+    Rejects detections that already have any Correction (the picker
+    flow already handled them) or that have no classifier species (the
+    Unidentified queue handles those).
+    """
+    detection = db.query(Detection).filter(Detection.id == detection_id).one_or_none()
+    if detection is None:
+        raise HTTPException(404, f"detection {detection_id} not found")
+    if detection.species_id is None:
+        raise HTTPException(
+            400,
+            f"detection {detection_id} has no classifier species to confirm",
+        )
+    existing = (
+        db.query(Correction).filter(Correction.detection_id == detection_id).one_or_none()
+    )
+    if existing is not None:
+        raise HTTPException(
+            409,
+            f"detection {detection_id} already has a Correction (source={existing.source!r})",
+        )
+
+    species = db.get(Species, detection.species_id)
+    db.add(
+        Correction(
+            detection_id=detection_id,
+            correct_species_id=detection.species_id,
+            source="user-confirmed",
+        )
+    )
+    db.commit()
+    return {
+        "ok": True,
+        "detection_id": detection_id,
+        "source": "user-confirmed",
+        "species": species.common_name if species else None,
+    }
+
+
 @router.post("/llm-confirm/{detection_id}")
 async def confirm_llm_correction(detection_id: int, db: Session = Depends(get_db)) -> dict:
     """One-tap confirm of an LLM MEDIUM-confidence Correction.

@@ -62,6 +62,10 @@ export default function Feed({ mode = "default" }: Props = {}) {
         before: pageParam || undefined,
         only_not_a_bird: isNabReview,
         only_unidentified: effectiveFilter.mode === "unidentified",
+        // "Awaiting review": classifier-labeled detections the user hasn't
+        // acted on yet. Surfaces the same ✓/🚫/✏️ row on the card so the
+        // user can record true positives, not just disagreements.
+        awaiting_review: effectiveFilter.mode === "awaiting_review",
         species_name: effectiveFilter.mode === "species" ? effectiveFilter.name : undefined,
         // LLM-review modes: filter by Correction.source.
         //   llm_review        → HIGH-confidence committed (already reviewed)
@@ -181,6 +185,11 @@ export default function Feed({ mode = "default" }: Props = {}) {
                 // its non-selectable variant (no checkbox, no image-tap-to-select).
                 selected={batchMode ? selectedIds.has(d.id) : undefined}
                 onToggleSelect={batchMode ? () => toggleSelect(d.id) : undefined}
+                // In "Awaiting review" mode, classifier-labeled-but-unreviewed
+                // cards get the ✓/🚫/✏️ action row so the user can record
+                // true positives in addition to corrections. No other filter
+                // sees these buttons — they're noise in the default feed.
+                reviewMode={effectiveFilter.mode === "awaiting_review"}
               />
             ))}
           </div>

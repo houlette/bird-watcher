@@ -1,7 +1,12 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import { confirmLlmCorrection, submitCorrection, type Detection } from "../lib/api";
+import {
+  confirmClassifierLabel,
+  confirmLlmCorrection,
+  submitCorrection,
+  type Detection,
+} from "../lib/api";
 import AudioBadge from "./AudioBadge";
 import ImageZoom from "./ImageZoom";
 import SpeciesPicker, { NOT_A_BIRD } from "./SpeciesPicker";
@@ -15,6 +20,12 @@ type DetectionCardProps = {
   // (which is how we render in any context without a bulk-action bar).
   selected?: boolean;
   onToggleSelect?: () => void;
+  // When true, classifier-labeled-but-unreviewed cards swap the default
+  // "Wrong species?" row for a ✓ Confirm / 🚫 NAB / ✏️ Change row, so the
+  // user can record true positives. Set by the Feed's "Awaiting review"
+  // filter. Other filters (default, species, NAB, etc.) leave the card
+  // visually unchanged.
+  reviewMode?: boolean;
 };
 
 export default function DetectionCard({
@@ -22,6 +33,7 @@ export default function DetectionCard({
   compact = false,
   selected,
   onToggleSelect,
+  reviewMode = false,
 }: DetectionCardProps) {
   const selectable = selected !== undefined && onToggleSelect !== undefined;
   // Show CAPTURE time (when the camera saw the bird), not the row's
@@ -44,22 +56,34 @@ export default function DetectionCard({
     },
   });
 
-  // ✓ Confirm path for the LLM MEDIUM-review queue. Promotes the
-  // Correction's source from "llm-claude-medium" → "llm-claude-confirmed"
-  // so the card drops out of the review filter on the next refetch.
+  // The ✓ Confirm button has two call-sites with two endpoints:
+  //   - MEDIUM LLM review: promotes the existing llm-claude-medium
+  //     Correction's source to llm-claude-confirmed.
+  //   - Awaiting-review (classifier output, no Correction yet): creates
+  //     a fresh Correction with source="user-confirmed" so we can
+  //     measure classifier true-positive rate.
+  // The card decides which to call based on whether there's already an
+  // llm-claude-medium Correction (the former).
+  const isLlmMediumReview = detection.correction_source === "llm-claude-medium";
+  const isAwaitingClassifierReview =
+    reviewMode && detection.species !== null && detection.correction_source === null;
   const confirmMutation = useMutation({
-    mutationFn: () => confirmLlmCorrection(detection.id),
+    mutationFn: () =>
+      isLlmMediumReview
+        ? confirmLlmCorrection(detection.id)
+        : confirmClassifierLabel(detection.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["detections"] });
     },
   });
 
-  const isLlmMediumReview = detection.correction_source === "llm-claude-medium";
   const ringClass = selected
     ? "ring-2 ring-forest"
     : isLlmMediumReview
       ? "ring-1 ring-amber-300"   // visual cue: distinguish MEDIUM-review cohort from HIGH
-      : "ring-1 ring-transparent";
+      : isAwaitingClassifierReview
+        ? "ring-1 ring-blue-300"  // visual cue: production-classifier review
+        : "ring-1 ring-transparent";
 
   return (
     <div className={`bg-white rounded-lg shadow-sm overflow-hidden flex flex-col relative ${ringClass}`}>
@@ -143,7 +167,12 @@ export default function DetectionCard({
           );
         })()}
 
-        {!compact && isLlmMediumReview && (
+        {!compact && (isLlmMediumReview || isAwaitingClassifierReview) && (
+          // Quick-review action row used by two filters:
+          //   - LLM-labeled MEDIUM (review)
+          //   - Awaiting review (production classifier output)
+          // Same buttons, same semantics; the ✓ mutation routes to the
+          // appropriate endpoint based on the card's state.
           // MEDIUM-review quick-action row: ✓ Confirm (one tap, no picker),
           // 🚫 NAB (existing fast path), ✏️ Change (opens picker). Keeps
           // the per-card review time ≤ 1 second for the confirm case so
@@ -178,7 +207,7 @@ export default function DetectionCard({
             </button>
           </div>
         )}
-        {!compact && !isLlmMediumReview && (
+        {!compact && !isLlmMediumReview && !isAwaitingClassifierReview && (
           <div className="mt-2 flex items-center justify-between gap-2 text-xs">
             <button
               className="text-slate-500 hover:text-forest underline disabled:opacity-50"

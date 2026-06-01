@@ -109,6 +109,10 @@ REQUEST_INTERVAL_SECONDS = 1.0
 #                       training-data hygiene.
 CORRECTION_SOURCE_HIGH = "llm-claude"
 CORRECTION_SOURCE_MEDIUM = "llm-claude-medium"
+# Stable list of source tags treated as "Claude said this" — useful for
+# any downstream report that aggregates LLM activity. Kept here for one
+# place to update if we add more tiers.
+LLM_SOURCE_TAGS = (CORRECTION_SOURCE_HIGH, CORRECTION_SOURCE_MEDIUM, "llm-claude-confirmed")
 
 
 def _build_species_lists() -> tuple[list[str], list[str]]:
