@@ -41,3 +41,10 @@ astral==3.2                 # sunrise / sunset for daylight-only processing gate
 # the one-time backlog labeling pass. Not imported by the live pipeline,
 # so a missing ANTHROPIC_API_KEY doesn't break anything in production.
 anthropic==0.105.2
+
+# Heatmap rendering on the Stats page — scripts/analyze_bird_locations.py.
+# matplotlib pulls in pillow + kiwisolver but those are tiny; scipy is
+# only used for gaussian_filter (we could do without, but the script is
+# clearer this way).
+matplotlib==3.9.2
+scipy==1.14.1

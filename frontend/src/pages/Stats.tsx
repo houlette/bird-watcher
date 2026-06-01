@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Bar,
@@ -354,6 +354,79 @@ function YoloConfidenceHist({ daily }: { daily: DailyStats[] }) {
   );
 }
 
+// ─── Location heatmaps ──────────────────────────────────────────────────
+
+/**
+ * Three PNGs rendered server-side by `scripts/analyze_bird_locations.py`,
+ * refreshed nightly at 02:20 UTC by the worker cron (plus once on every
+ * container start). Files live under `data/heatmaps/` which is exposed
+ * via the existing `/media/` static mount — no API call needed.
+ *
+ * The `key` busts the PWA service worker's cache once a day so we don't
+ * end up showing yesterday's image after the nightly re-render.
+ */
+function LocationHeatmaps() {
+  const dayBust = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const tabs: { id: "density" | "small" | "size"; label: string; src: string; caption: string }[] = [
+    {
+      id: "density",
+      label: "Density",
+      src: `/media/heatmaps/location_heatmap.png?d=${dayBust}`,
+      caption: "Where real-bird detections cluster. White contours mark the 25 / 50 / 75% density isolines.",
+    },
+    {
+      id: "small",
+      label: "Small birds",
+      src: `/media/heatmaps/small_birds_heatmap.png?d=${dayBust}`,
+      caption: "Detections with bbox-diagonal below the median — the resolution-bottleneck zones. If these clusters sit far from the camera, a closer second camera (or zoom) there is the highest-leverage move.",
+    },
+    {
+      id: "size",
+      label: "Size grid",
+      src: `/media/heatmaps/size_by_region.png?d=${dayBust}`,
+      caption: "Median bbox diagonal per grid cell, color-coded. Cool = small birds; warm = big birds. The number in each cell is the sample count.",
+    },
+  ];
+  const [active, setActive] = useState<typeof tabs[number]["id"]>("density");
+  const tab = tabs.find((t) => t.id === active)!;
+
+  return (
+    <section className="bg-white rounded-lg shadow-sm p-3">
+      <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+        <h3 className="text-sm font-semibold">Where the birds are</h3>
+        <div className="flex gap-1 text-xs">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              className={`px-2 py-1 rounded border ${
+                t.id === active
+                  ? "border-forest text-forest bg-cream font-medium"
+                  : "border-slate-200 text-slate-600 hover:border-forest hover:text-forest"
+              }`}
+              onClick={() => setActive(t.id)}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <img
+        src={tab.src}
+        alt={tab.label}
+        className="w-full rounded border border-slate-100"
+        loading="lazy"
+        onError={(e) => {
+          // Show a small placeholder if the cron hasn't rendered yet
+          // (fresh container, missing background frame, etc.).
+          (e.currentTarget as HTMLImageElement).style.display = "none";
+        }}
+      />
+      <p className="text-xs text-slate-500 mt-1">{tab.caption}</p>
+    </section>
+  );
+}
+
+
 // ─── Page ────────────────────────────────────────────────────────────────
 
 export default function Stats() {
@@ -379,6 +452,7 @@ export default function Stats() {
       <RatesChart daily={data.daily} />
       <SpeciesAccuracy totals={data.totals} />
       <TopSpeciesTable totals={data.totals} />
+      <LocationHeatmaps />
       <div className="grid gap-4 md:grid-cols-2">
         <HourOfDayHeatmap daily={data.daily} />
         <YoloConfidenceHist daily={data.daily} />

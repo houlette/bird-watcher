@@ -305,6 +305,23 @@ def _cleanup_old_clips() -> int:
     return deleted
 
 
+def _render_heatmaps() -> int:
+    """Render the bird-location heatmaps surfaced on the Stats page.
+
+    The PNGs land in `data/heatmaps/` so the existing `/media/` static
+    mount serves them at `/media/heatmaps/<name>.png`. Cheap to rerun
+    (< 5 s for the current data scale), so we schedule it nightly
+    alongside the stats compute. Also runs once on startup so a fresh
+    container has images immediately.
+    """
+    try:
+        from scripts.analyze_bird_locations import main as render
+        return render()
+    except Exception:
+        log.exception("Heatmap render failed")
+        return 1
+
+
 def _compute_nightly_stats() -> int:
     """Compute (or refresh) PipelineStatsDaily for yesterday + any gap days.
 
@@ -387,6 +404,16 @@ def start_worker() -> BackgroundScheduler:
         coalesce=True,
         id="compute_nightly_stats",
         next_run_time=datetime.now(timezone.utc),  # also run once at startup to populate fresh DBs
+    )
+    # Nightly heatmap re-render at 02:20 UTC, just after the stats compute
+    # so the Stats page picks up a fresh set of pictures.
+    scheduler.add_job(
+        _render_heatmaps,
+        CronTrigger(hour=2, minute=20),
+        max_instances=1,
+        coalesce=True,
+        id="render_heatmaps",
+        next_run_time=datetime.now(timezone.utc),  # render once on container start
     )
     scheduler.start()
     log.info(
