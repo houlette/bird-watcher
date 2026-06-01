@@ -33,6 +33,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from db.families import FAMILY_NAMES  # noqa: E402
 from db.models import SENTINEL_LABELS, Species  # noqa: E402
 from db.session import SessionLocal, init_db  # noqa: E402
+from na_birds import NA_BIRD_SPECIES  # noqa: E402
+from pipeline import calibration  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("fetch_reference_images")
@@ -97,6 +99,30 @@ def main() -> int:
     init_db()
     db = SessionLocal()
     try:
+        # Ensure every picker species has a Species row before we start
+        # looking up images. The picker draws from the curated NA list +
+        # the yard calibration; species that haven't been corrected to
+        # yet don't exist in the DB, which would leave them URL-less in
+        # the picker. Seed missing rows now so backfill covers everyone.
+        picker_names: set[str] = set(NA_BIRD_SPECIES)
+        cal = calibration._load_calibration()  # noqa: SLF001
+        if cal and isinstance(cal.get("species"), dict):
+            picker_names.update(
+                name for name, info in cal["species"].items()
+                if isinstance(info, dict)
+                and info.get("total", 0) >= calibration.MIN_DETECTIONS_FOR_ALLOWLIST
+            )
+        existing = {sp.common_name for sp in db.query(Species.common_name).all()}
+        seeded = 0
+        for name in picker_names:
+            if name in existing or name in SENTINEL_LABELS or name in FAMILY_NAMES:
+                continue
+            db.add(Species(common_name=name, scientific_name="", is_rare=False))
+            seeded += 1
+        if seeded:
+            db.commit()
+            log.info("Seeded %d picker-list Species row(s) lacking a DB entry", seeded)
+
         q = db.query(Species)
         species_rows: list[Species] = []
         cutoff = datetime.now(timezone.utc) - timedelta(days=RECHECK_DAYS)
