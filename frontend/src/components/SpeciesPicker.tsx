@@ -200,18 +200,18 @@ export default function SpeciesPicker({ open, current, suggestions, onSelect, on
                 {familiesFiltered.map((f) => (
                   <li key={`family-${f.name}`}>
                     <button
-                      className={`w-full text-left px-3 py-2 hover:bg-slate-50 text-sm ${
+                      className={`w-full text-left px-3 py-2 hover:bg-slate-50 text-sm flex items-start gap-2 ${
                         f.name === current ? "bg-cream font-semibold" : ""
                       }`}
                       onClick={() => onSelect(f.name)}
                     >
-                      <span className="flex items-center gap-2">
-                        <span aria-hidden>👥</span>
-                        <span>{f.name}</span>
-                      </span>
-                      <span className="block ml-7 text-xs text-slate-400 truncate">
-                        e.g., {f.members.slice(0, 3).join(", ")}
-                        {f.members.length > 3 ? ", …" : ""}
+                      <SpeciesThumb url={f.reference_image_url} fallback="👥" />
+                      <span className="flex-1 min-w-0">
+                        <span className="block">{f.name}</span>
+                        <span className="block text-xs text-slate-400 truncate">
+                          e.g., {f.members.slice(0, 3).join(", ")}
+                          {f.members.length > 3 ? ", …" : ""}
+                        </span>
                       </span>
                     </button>
                   </li>
@@ -230,14 +230,15 @@ export default function SpeciesPicker({ open, current, suggestions, onSelect, on
                 {yardFiltered.map((s) => (
                   <li key={`yard-${s.name}`}>
                     <button
-                      className={`w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center justify-between text-sm ${
+                      className={`w-full text-left px-3 py-2 hover:bg-slate-50 text-sm flex items-center gap-2 ${
                         s.name === current ? "bg-cream font-semibold" : ""
                       }`}
                       onClick={() => onSelect(s.name)}
                     >
-                      <span>{s.name}</span>
+                      <SpeciesThumb url={s.reference_image_url} />
+                      <span className="flex-1 min-w-0">{s.name}</span>
                       {s.total > 0 && (
-                        <span className="text-xs text-slate-400">
+                        <span className="text-xs text-slate-400 flex-shrink-0">
                           {s.total >= 1000 ? `${Math.round(s.total / 1000)}k` : s.total}
                         </span>
                       )}
@@ -258,12 +259,13 @@ export default function SpeciesPicker({ open, current, suggestions, onSelect, on
                 {extraFiltered.map((s) => (
                   <li key={`extra-${s.name}`}>
                     <button
-                      className={`w-full text-left px-3 py-2 hover:bg-slate-50 text-sm ${
+                      className={`w-full text-left px-3 py-2 hover:bg-slate-50 text-sm flex items-center gap-2 ${
                         s.name === current ? "bg-cream font-semibold" : ""
                       }`}
                       onClick={() => onSelect(s.name)}
                     >
-                      {s.name}
+                      <SpeciesThumb url={s.reference_image_url} />
+                      <span className="flex-1 min-w-0">{s.name}</span>
                     </button>
                   </li>
                 ))}
@@ -283,6 +285,44 @@ export default function SpeciesPicker({ open, current, suggestions, onSelect, on
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Small reference thumbnail rendered inside each picker row. Falls back
+ * to a slate placeholder square (with an optional emoji glyph) when the
+ * species has no URL yet, so the row layout stays consistent. Width is
+ * fixed so the species names align vertically across the list.
+ */
+function SpeciesThumb({
+  url,
+  fallback,
+}: {
+  url?: string | null;
+  fallback?: string;
+}) {
+  if (url) {
+    return (
+      <img
+        src={url}
+        aria-hidden
+        className="w-12 h-12 rounded object-cover border border-slate-200 flex-shrink-0"
+        loading="lazy"
+        onError={(e) => {
+          // Hot-link blocked or URL stale — collapse to the placeholder.
+          const img = e.currentTarget as HTMLImageElement;
+          img.style.display = "none";
+        }}
+      />
+    );
+  }
+  return (
+    <div
+      aria-hidden
+      className="w-12 h-12 rounded border border-slate-200 bg-slate-50 flex-shrink-0 flex items-center justify-center text-slate-300 text-lg"
+    >
+      {fallback ?? "🐦"}
     </div>
   );
 }

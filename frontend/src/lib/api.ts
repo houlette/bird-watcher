@@ -53,8 +53,16 @@ export async function fetchDetections(params: {
   return (await r.json()) as Detection[];
 }
 
-export type SpeciesEntry = { name: string; total: number };
-export type FamilyEntry = { name: string; members: string[] };
+export type SpeciesEntry = {
+  name: string;
+  total: number;
+  reference_image_url?: string | null;
+};
+export type FamilyEntry = {
+  name: string;
+  members: string[];
+  reference_image_url?: string | null;
+};
 export type SpeciesList = {
   source: "calibration" | "fallback";
   // Yard-known species (Haikubox-heard) sorted by detection count desc.

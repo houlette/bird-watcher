@@ -131,31 +131,39 @@ export default function DetectionCard({
           loading="lazy"
         />
       </div>
-      <div className={`p-2 ${compact ? "text-xs" : "text-sm"}`}>
-        <div className="flex items-start justify-between gap-2">
-          <div className="flex items-start gap-2 min-w-0 flex-1">
-            {/* Reference thumbnail surfaced only on review-mode cards so the
-                user can compare their crop against a clean reference photo
-                without leaving the feed. Sized for the narrow column; the
-                browser caches across cards of the same species. */}
-            {(isLlmMediumReview || isAwaitingClassifierReview) &&
-              detection.reference_image_url && (
-                <img
-                  src={detection.reference_image_url}
-                  alt={detection.species ? `${detection.species} reference` : "reference"}
-                  className="w-10 h-10 rounded object-cover border border-slate-200 flex-shrink-0 mt-0.5"
-                  loading="lazy"
-                  title={detection.species ? `Reference: ${detection.species}` : undefined}
-                  onError={(e) => {
-                    // Wikipedia URL gone or hot-link blocked → hide gracefully.
-                    (e.currentTarget as HTMLImageElement).style.display = "none";
-                  }}
-                />
-              )}
-            <span className="font-semibold leading-tight">
-              {detection.species ?? "Unidentified"}
+      {/* In review mode (LLM-MEDIUM or Awaiting-review), stack a
+          reference photo of the proposed species directly below the
+          user's crop at the same width and aspect ratio. Lets the user
+          compare two same-size images side-by-side without leaving the
+          feed. A small "REF" badge in the corner distinguishes it from
+          the user's crop. Falls back to nothing if the species has no
+          reference URL (sentinel, family, or unfetched). */}
+      {(isLlmMediumReview || isAwaitingClassifierReview) &&
+        detection.reference_image_url && (
+          <div className="relative w-full aspect-[4/3] overflow-hidden border-t border-slate-200">
+            <img
+              src={detection.reference_image_url}
+              aria-hidden
+              className="absolute inset-0 w-full h-full object-cover blur-2xl scale-110 opacity-70"
+              loading="lazy"
+            />
+            <img
+              src={detection.reference_image_url}
+              alt={detection.species ? `${detection.species} reference photo` : "reference"}
+              className="relative w-full h-full object-contain"
+              loading="lazy"
+              onError={(e) => {
+                (e.currentTarget.parentElement as HTMLElement).style.display = "none";
+              }}
+            />
+            <span className="absolute top-1 left-1 px-1.5 py-0.5 rounded bg-white/85 text-[10px] font-medium text-slate-600 uppercase tracking-wide">
+              ref
             </span>
           </div>
+        )}
+      <div className={`p-2 ${compact ? "text-xs" : "text-sm"}`}>
+        <div className="flex items-center justify-between gap-2">
+          <span className="font-semibold">{detection.species ?? "Unidentified"}</span>
           {detection.audio_confirmed && <AudioBadge />}
         </div>
         <div className="text-slate-500">{Math.round(detection.confidence * 100)}% · {time}</div>

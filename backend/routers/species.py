@@ -10,10 +10,12 @@ groups — the picker surfaces them separately pinned at the top.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
 
 from db.families import FAMILY_MEMBERS, FAMILY_NAMES
-from db.models import SENTINEL_LABELS
+from db.models import SENTINEL_LABELS, Species
+from db.session import get_db
 from na_birds import NA_BIRD_SPECIES
 from pipeline import calibration
 from pipeline.classify import NA_BACKYARD_ALLOWLIST, _normalize_for_display
@@ -22,7 +24,7 @@ router = APIRouter()
 
 
 @router.get("")
-async def list_species() -> dict:
+async def list_species(db: Session = Depends(get_db)) -> dict:
     """Return picker options as two groups: yard (Haikubox-heard) and broader NA."""
     cal = calibration._load_calibration()  # noqa: SLF001 — module-internal but stable
     if cal and isinstance(cal.get("species"), dict):
@@ -66,6 +68,31 @@ async def list_species() -> dict:
         for fam, members in FAMILY_MEMBERS.items()
     ]
     families.sort(key=lambda r: r["name"])
+
+    # Annotate every yard/extra entry with its Wikipedia thumbnail URL
+    # so the picker can show a reference photo next to the name.
+    # One DB hit pulls all species rows; ~hundreds of rows is negligible.
+    ref_urls: dict[str, str] = {
+        sp.common_name: sp.reference_image_url
+        for sp in db.query(Species.common_name, Species.reference_image_url).all()
+        if sp.reference_image_url
+    }
+    for item in yard_items:
+        item["reference_image_url"] = ref_urls.get(item["name"])
+    for item in extra_items:
+        item["reference_image_url"] = ref_urls.get(item["name"])
+    # For families, use the first member-species' thumbnail as a
+    # representative reference (e.g., House Sparrow for Sparrow). Not
+    # perfect — a juvenile House Sparrow doesn't look like a junco — but
+    # better than nothing.
+    for fam_item in families:
+        for member in fam_item["members"]:
+            url = ref_urls.get(member)
+            if url:
+                fam_item["reference_image_url"] = url
+                break
+        else:
+            fam_item["reference_image_url"] = None
 
     return {
         "source": source,
