@@ -2,9 +2,10 @@
 
 AI-powered bird-feeder camera that complements a Haikubox (audio bird-ID) with vision-based detection and species classification.
 
-- **Camera**: Reolink RLC-811WA (4K, WiFi, varifocal) → motion-event JPGs + MP4 clips pushed via FTPS
-- **Backend**: FastAPI on a small cloud VM. Tiled YOLO11-small detection → per-bird IoU tracking → sharpness-aware multi-frame crop selection → EfficientNet-B2 species classifier (allow-list filtered) → Bayesian fusion with Haikubox audio prior + seasonal prior → multi-crop voting
-- **Frontend**: Vite/React/TS PWA with Web Push for rare-species notifications, infinite-scroll feed, searchable species picker including a "Not a bird" sentinel for active-learning false-positive labels
+- **Camera**: Reolink RLC-810WA (4K, WiFi, fixed 4 mm lens) → motion-event JPGs + MP4 clips pushed via FTPS
+- **Backend**: FastAPI on a small cloud VM. Daylight-gated tiled YOLO11-small detection → NMM seam-stitching → scene-mask suppression → IoU tracking → sharpness-aware crop ranking → phase-correlation multi-frame fusion → CLAHE → EfficientNet-B2 species classifier (allow-list filtered, post-softmax mass threshold) → Bayesian fusion with audio + seasonal + per-species log-normal **size** priors. The Stats page surfaces the full funnel as daily snapshots plus server-side-rendered bird-location heatmaps.
+- **Frontend**: Vite/React/TS PWA with Web Push for rare-species notifications, infinite-scroll feed with multiple filter modes (Unidentified, Awaiting review, LLM-labeled HIGH, LLM-labeled MEDIUM review, per-species), bulk-label batch mode, image-zoom on tap, and a searchable species picker that includes yard-heard species, a curated North American list, four family-level catch-alls (Sparrow / Warbler / Woodpecker / Finch), and `Not a bird` / `Unknown bird` sentinels.
+- **Backlog labeling**: a one-shot script (`scripts/llm_classify_unidentified.py`) asks Claude (Opus 4.8 with vision) to ID the ~4,000 detections the production classifier rejected. HIGH-confidence answers auto-commit; MEDIUM goes to a one-tap PWA review queue.
 - **Host**: `birdwatcher.ryanhoulette.com`
 
 - **Design plan**: `/Users/ryan/.claude/plans/my-wife-has-many-buzzing-noodle.md`
