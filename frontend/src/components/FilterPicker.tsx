@@ -16,6 +16,7 @@ import { fetchSpecies, type SpeciesEntry } from "../lib/api";
 export type Filter =
   | { mode: "all" }
   | { mode: "unidentified" }
+  | { mode: "llm_review" }
   | { mode: "species"; name: string };
 
 type Props = {
@@ -29,6 +30,8 @@ export function filterLabel(f: Filter): string {
       return "All birds";
     case "unidentified":
       return "Unidentified only";
+    case "llm_review":
+      return "LLM-labeled (review)";
     case "species":
       return f.name;
   }
@@ -118,12 +121,21 @@ export default function FilterPicker({ value, onChange }: Props) {
                 All birds
               </button>
               <button
-                className={`w-full text-left px-3 py-2 hover:bg-slate-50 text-sm border-b border-slate-200 ${
+                className={`w-full text-left px-3 py-2 hover:bg-slate-50 text-sm border-b border-slate-100 ${
                   value.mode === "unidentified" ? "bg-cream font-semibold" : ""
                 }`}
                 onClick={() => pick({ mode: "unidentified" })}
               >
                 ❓ Unidentified only
+              </button>
+              <button
+                className={`w-full text-left px-3 py-2 hover:bg-slate-50 text-sm border-b border-slate-200 ${
+                  value.mode === "llm_review" ? "bg-cream font-semibold" : ""
+                }`}
+                onClick={() => pick({ mode: "llm_review" })}
+                title="Detections labeled by the LLM backlog-classifier pass — review and correct any wrong ones."
+              >
+                ✨ LLM-labeled (review)
               </button>
 
               {isLoading && <p className="p-3 text-sm text-slate-500">Loading species…</p>}

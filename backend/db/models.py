@@ -206,3 +206,8 @@ class Correction(Base):
     # the size prior (sizes are objective) but suspect for any future
     # classifier fine-tune where we'd train on our own mistakes.
     source: Mapped[str | None] = mapped_column(String, nullable=True)
+    # One-line explanation when source is non-NULL. For LLM-sourced
+    # corrections this is the rationale Claude provided ("Bright red
+    # plumage with crest") so the user can spot-check the label without
+    # having to second-guess every crop. NULL for user-via-UI corrections.
+    rationale: Mapped[str | None] = mapped_column(Text, nullable=True)

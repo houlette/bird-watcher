@@ -17,6 +17,12 @@ export type Detection = {
   created_at: string;
   // Opaque cursor — pass back as `before` to get the next (older) page.
   cursor: string;
+  // Non-null only when the current Detection.species came from a non-UI
+  // source. `"llm-claude"` means scripts/llm_classify_unidentified.py
+  // generated this label and we should surface the rationale (below) so
+  // the user can spot-check what Claude saw.
+  correction_source: string | null;
+  correction_rationale: string | null;
 };
 
 export async function fetchDetections(params: {
@@ -26,6 +32,7 @@ export async function fetchDetections(params: {
   before?: string;
   only_not_a_bird?: boolean;
   only_unidentified?: boolean;
+  source?: string;
 } = {}) {
   const url = new URL("/api/detections", window.location.origin);
   if (params.limit) url.searchParams.set("limit", String(params.limit));
@@ -34,6 +41,7 @@ export async function fetchDetections(params: {
   if (params.before) url.searchParams.set("before", params.before);
   if (params.only_not_a_bird) url.searchParams.set("only_not_a_bird", "true");
   if (params.only_unidentified) url.searchParams.set("only_unidentified", "true");
+  if (params.source) url.searchParams.set("source", params.source);
   const r = await fetch(url);
   if (!r.ok) throw new Error(`fetchDetections: ${r.status}`);
   return (await r.json()) as Detection[];

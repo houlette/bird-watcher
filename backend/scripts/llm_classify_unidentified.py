@@ -392,6 +392,7 @@ def main() -> int:
                             detection_id=det.id,
                             correct_species_id=sp.id,
                             source=CORRECTION_SOURCE,
+                            rationale=result.get("rationale"),
                         ))
                         db.commit()
                         counts["committed"] += 1

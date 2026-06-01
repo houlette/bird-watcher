@@ -63,6 +63,10 @@ export default function Feed({ mode = "default" }: Props = {}) {
         only_not_a_bird: isNabReview,
         only_unidentified: effectiveFilter.mode === "unidentified",
         species_name: effectiveFilter.mode === "species" ? effectiveFilter.name : undefined,
+        // "LLM-labeled (review)" mode: filter to detections whose
+        // Correction.source is the script's tag, so the user only sees
+        // Claude's outputs and can spot-check them.
+        source: effectiveFilter.mode === "llm_review" ? "llm-claude" : undefined,
       }),
     initialPageParam: "" as string,
     getNextPageParam: (lastPage: Detection[]) => {
