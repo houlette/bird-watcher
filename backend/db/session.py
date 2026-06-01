@@ -45,6 +45,10 @@ _ADDITIVE_COLUMNS = [
     # One-line "why this label" for non-NULL source (e.g., Claude's
     # vision-model rationale for each LLM-generated correction).
     ("corrections", "rationale", "TEXT"),
+    # Wikipedia thumbnail for the species, surfaced in the review-mode
+    # cards so the user can compare their crop against a clean photo.
+    ("species", "reference_image_url", "TEXT"),
+    ("species", "reference_image_checked_at", "DATETIME"),
 ]
 
 

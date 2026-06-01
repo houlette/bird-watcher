@@ -23,6 +23,10 @@ export type Detection = {
   // the user can spot-check what Claude saw.
   correction_source: string | null;
   correction_rationale: string | null;
+  // Wikipedia thumbnail of the species, used for side-by-side
+  // comparison in the review-mode cards. Null when we haven't
+  // fetched one or Wikipedia has no usable image.
+  reference_image_url: string | null;
 };
 
 export async function fetchDetections(params: {

@@ -132,8 +132,30 @@ export default function DetectionCard({
         />
       </div>
       <div className={`p-2 ${compact ? "text-xs" : "text-sm"}`}>
-        <div className="flex items-center justify-between gap-2">
-          <span className="font-semibold">{detection.species ?? "Unidentified"}</span>
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex items-start gap-2 min-w-0 flex-1">
+            {/* Reference thumbnail surfaced only on review-mode cards so the
+                user can compare their crop against a clean reference photo
+                without leaving the feed. Sized for the narrow column; the
+                browser caches across cards of the same species. */}
+            {(isLlmMediumReview || isAwaitingClassifierReview) &&
+              detection.reference_image_url && (
+                <img
+                  src={detection.reference_image_url}
+                  alt={detection.species ? `${detection.species} reference` : "reference"}
+                  className="w-10 h-10 rounded object-cover border border-slate-200 flex-shrink-0 mt-0.5"
+                  loading="lazy"
+                  title={detection.species ? `Reference: ${detection.species}` : undefined}
+                  onError={(e) => {
+                    // Wikipedia URL gone or hot-link blocked → hide gracefully.
+                    (e.currentTarget as HTMLImageElement).style.display = "none";
+                  }}
+                />
+              )}
+            <span className="font-semibold leading-tight">
+              {detection.species ?? "Unidentified"}
+            </span>
+          </div>
           {detection.audio_confirmed && <AudioBadge />}
         </div>
         <div className="text-slate-500">{Math.round(detection.confidence * 100)}% · {time}</div>

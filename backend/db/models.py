@@ -49,6 +49,13 @@ class Species(Base):
     #     top-1 was any member species,
     #   - retraining pipelines treat them as soft labels.
     is_family: Mapped[bool | None] = mapped_column(Integer, nullable=True, default=0)
+    # Wikipedia (or other) thumbnail URL for side-by-side comparison
+    # during the LLM-review and Awaiting-review feed modes. Populated by
+    # `scripts/fetch_reference_images.py`; NULL means we haven't fetched
+    # one yet (or Wikipedia has no usable image, in which case the
+    # backfill records the attempt timestamp so we don't keep retrying).
+    reference_image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reference_image_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class Visit(Base):

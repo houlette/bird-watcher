@@ -137,6 +137,10 @@ async def list_detections(
             "visit_id": d.visit_id,
             "species": d.species.common_name if d.species else None,
             "scientific_name": d.species.scientific_name if d.species else None,
+            # Wikipedia thumbnail surfaced on review-mode cards so the user
+            # can compare their crop against a clean reference photo. NULL
+            # for sentinels / families / un-fetched species.
+            "reference_image_url": d.species.reference_image_url if d.species else None,
             "confidence": d.confidence,
             "audio_confirmed": bool(d.audio_confirmed),
             "raw_predictions": d.raw_predictions,
