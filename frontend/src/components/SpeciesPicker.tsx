@@ -203,7 +203,14 @@ export default function SpeciesPicker({ open, current, suggestions, cropUrl, onS
           </div>
         )}
 
-        <div className="overflow-y-auto flex-1">
+        <div
+          className="overflow-y-auto flex-1"
+          // Once the mouse leaves the list (back to search box, outside
+          // the modal, etc.), revert the compare strip's right pane to
+          // the current classification rather than leaving it stuck on
+          // whatever row was last hovered.
+          onMouseLeave={() => setHovered(null)}
+        >
           {/* Pinned sentinel options — always at the top, distinct styling.
               Shown even with an active query so users can flag false positives
               or species-unknown birds without typing. */}
