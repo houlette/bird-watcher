@@ -286,6 +286,9 @@ export default function DetectionCard({
         // often a single tap away when the top-1 is wrong (#2-#5 frequently
         // contain it for borderline crops).
         suggestions={detection.raw_predictions}
+        // Enables the side-by-side compare strip: user's crop pinned next
+        // to the reference photo of whichever species they're hovering.
+        cropUrl={detection.crop_url}
         onSelect={(name) => correctionMutation.mutate(name)}
         onCancel={() => setPickerOpen(false)}
       />

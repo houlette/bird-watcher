@@ -29,6 +29,11 @@ type Props = {
   open: boolean;
   current?: string | null;
   suggestions?: Suggestion[];
+  // Optional crop URL for side-by-side compare. When provided, the
+  // picker shows the user's crop pinned at the top of the modal next to
+  // the reference photo of whichever species the user is hovering, so
+  // they can do a real A/B visual compare without closing the picker.
+  cropUrl?: string;
   onSelect: (species: string) => void;
   onCancel: () => void;
 };
@@ -44,13 +49,17 @@ type Props = {
  * When the user types a query, both groups are filtered and rendered
  * under the same query result.
  */
-export default function SpeciesPicker({ open, current, suggestions, onSelect, onCancel }: Props) {
+export default function SpeciesPicker({ open, current, suggestions, cropUrl, onSelect, onCancel }: Props) {
   // Filter out the current species (the wrong top-1 that prompted the
   // correction) and cap at the next 3 ranked guesses.
   const suggestionList = (suggestions ?? [])
     .filter((s) => s.species && s.species !== current)
     .slice(0, 3);
   const [query, setQuery] = useState("");
+  // Which species the user is currently hovering / keyboard-focusing.
+  // Drives the right pane of the compare strip so they can visually
+  // A/B their crop against any candidate without closing the picker.
+  const [hovered, setHovered] = useState<{ name: string; url: string | null } | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const { data, isLoading } = useQuery({
     queryKey: ["species"],
@@ -61,6 +70,7 @@ export default function SpeciesPicker({ open, current, suggestions, onSelect, on
   useEffect(() => {
     if (open) {
       setQuery("");
+      setHovered(null);
       requestAnimationFrame(() => inputRef.current?.focus());
     }
   }, [open]);
@@ -96,6 +106,31 @@ export default function SpeciesPicker({ open, current, suggestions, onSelect, on
   const firstMatch =
     familiesFiltered[0]?.name ?? yardFiltered[0]?.name ?? extraFiltered[0]?.name;
 
+  // Reference-URL lookup across all species/families. Built once per
+  // data load so per-row hover handlers can resolve a URL in O(1) for
+  // suggestion-list entries (where we don't have the full row inline).
+  const refUrlByName = useMemo(() => {
+    const m = new Map<string, string | null>();
+    if (!data) return m;
+    for (const f of data.families ?? []) m.set(f.name, f.reference_image_url ?? null);
+    for (const s of data.yard) m.set(s.name, s.reference_image_url ?? null);
+    for (const s of data.extra) m.set(s.name, s.reference_image_url ?? null);
+    return m;
+  }, [data]);
+  const currentRefUrl = current ? refUrlByName.get(current) ?? null : null;
+
+  // Helper to build hover/focus handlers for every selectable row.
+  // Keeps the JSX below readable instead of repeating 4 inline handlers
+  // per group. We treat keyboard focus the same as mouse hover so
+  // tab-through navigation also drives the compare pane.
+  const hoverProps = (name: string, url: string | null | undefined) => ({
+    onMouseEnter: () => setHovered({ name, url: url ?? null }),
+    onFocus: () => setHovered({ name, url: url ?? null }),
+  });
+
+  // Right pane defaults to current species when nothing is hovered.
+  const comparePane = hovered ?? (current ? { name: current, url: currentRefUrl } : null);
+
   if (!open) return null;
 
   return (
@@ -106,7 +141,7 @@ export default function SpeciesPicker({ open, current, suggestions, onSelect, on
       aria-modal="true"
     >
       <div
-        className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 max-h-[70vh] flex flex-col"
+        className="bg-white rounded-lg shadow-xl w-full max-w-lg mx-4 max-h-[80vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="p-3 border-b">
@@ -124,6 +159,50 @@ export default function SpeciesPicker({ open, current, suggestions, onSelect, on
           />
         </div>
 
+        {/* Compare strip: user's crop on the left, hovered/current species
+            reference photo on the right. Pinned above the scrolling list so
+            both stay visible while the user scans candidates. Hidden when
+            no crop URL was supplied (caller didn't opt in to compare mode). */}
+        {cropUrl && (
+          <div className="grid grid-cols-2 gap-px bg-slate-200 border-b border-slate-200">
+            <div className="relative bg-slate-900 aspect-[4/3] overflow-hidden">
+              <img
+                src={cropUrl}
+                alt="your crop"
+                className="absolute inset-0 w-full h-full object-contain"
+              />
+              <span className="absolute top-1 left-1 px-1.5 py-0.5 rounded bg-white/85 text-[10px] font-medium text-slate-600 uppercase tracking-wide">
+                your crop
+              </span>
+            </div>
+            <div className="relative bg-slate-900 aspect-[4/3] overflow-hidden">
+              {comparePane && comparePane.url ? (
+                <>
+                  <img
+                    src={comparePane.url}
+                    aria-hidden
+                    className="absolute inset-0 w-full h-full object-cover blur-2xl scale-110 opacity-70"
+                  />
+                  <img
+                    src={comparePane.url}
+                    alt={comparePane.name}
+                    className="relative w-full h-full object-contain"
+                  />
+                  <span className="absolute top-1 left-1 right-1 px-1.5 py-0.5 rounded bg-white/85 text-[10px] font-medium text-slate-700 truncate">
+                    {comparePane.name}
+                  </span>
+                </>
+              ) : (
+                <div className="absolute inset-0 flex items-center justify-center text-[11px] text-slate-400 text-center px-3">
+                  {comparePane
+                    ? `${comparePane.name}\n(no reference photo)`
+                    : "Hover a species to compare"}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         <div className="overflow-y-auto flex-1">
           {/* Pinned sentinel options — always at the top, distinct styling.
               Shown even with an active query so users can flag false positives
@@ -131,6 +210,7 @@ export default function SpeciesPicker({ open, current, suggestions, onSelect, on
           <button
             className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center justify-between text-sm border-b border-slate-100 text-slate-600"
             onClick={() => onSelect(NOT_A_BIRD)}
+            {...hoverProps(NOT_A_BIRD, null)}
           >
             <span className="flex items-center gap-2">
               <span aria-hidden>🚫</span>
@@ -141,6 +221,7 @@ export default function SpeciesPicker({ open, current, suggestions, onSelect, on
           <button
             className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center justify-between text-sm border-b border-slate-200 text-slate-600"
             onClick={() => onSelect(UNKNOWN_BIRD)}
+            {...hoverProps(UNKNOWN_BIRD, null)}
           >
             <span className="flex items-center gap-2">
               <span aria-hidden>❓</span>
@@ -164,6 +245,7 @@ export default function SpeciesPicker({ open, current, suggestions, onSelect, on
                     <button
                       className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center justify-between text-sm border-b border-slate-50"
                       onClick={() => onSelect(s.species)}
+                      {...hoverProps(s.species, refUrlByName.get(s.species) ?? null)}
                     >
                       <span className="flex items-center gap-2">
                         <span aria-hidden>✨</span>
@@ -204,6 +286,7 @@ export default function SpeciesPicker({ open, current, suggestions, onSelect, on
                         f.name === current ? "bg-cream font-semibold" : ""
                       }`}
                       onClick={() => onSelect(f.name)}
+                      {...hoverProps(f.name, f.reference_image_url)}
                     >
                       <SpeciesThumb url={f.reference_image_url} fallback="👥" />
                       <span className="flex-1 min-w-0">
@@ -234,6 +317,7 @@ export default function SpeciesPicker({ open, current, suggestions, onSelect, on
                         s.name === current ? "bg-cream font-semibold" : ""
                       }`}
                       onClick={() => onSelect(s.name)}
+                      {...hoverProps(s.name, s.reference_image_url)}
                     >
                       <SpeciesThumb url={s.reference_image_url} />
                       <span className="flex-1 min-w-0">{s.name}</span>
@@ -263,6 +347,7 @@ export default function SpeciesPicker({ open, current, suggestions, onSelect, on
                         s.name === current ? "bg-cream font-semibold" : ""
                       }`}
                       onClick={() => onSelect(s.name)}
+                      {...hoverProps(s.name, s.reference_image_url)}
                     >
                       <SpeciesThumb url={s.reference_image_url} />
                       <span className="flex-1 min-w-0">{s.name}</span>
@@ -307,7 +392,7 @@ function SpeciesThumb({
       <img
         src={url}
         aria-hidden
-        className="w-12 h-12 rounded object-cover border border-slate-200 flex-shrink-0"
+        className="w-20 h-20 rounded object-cover border border-slate-200 flex-shrink-0"
         loading="lazy"
         onError={(e) => {
           // Hot-link blocked or URL stale — collapse to the placeholder.
@@ -320,7 +405,7 @@ function SpeciesThumb({
   return (
     <div
       aria-hidden
-      className="w-12 h-12 rounded border border-slate-200 bg-slate-50 flex-shrink-0 flex items-center justify-center text-slate-300 text-lg"
+      className="w-20 h-20 rounded border border-slate-200 bg-slate-50 flex-shrink-0 flex items-center justify-center text-slate-300 text-2xl"
     >
       {fallback ?? "🐦"}
     </div>
