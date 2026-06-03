@@ -346,6 +346,18 @@ def _fuse_crops(crops: list) -> "cv2.Mat | None":
     return np.mean(np.stack(aligned), axis=0).astype(np.uint8)
 
 
+# Cap on how lopsided the saved crop is allowed to get after padding.
+# YOLO sometimes returns very flat-wide or flat-tall boxes around
+# partially-occluded birds (a head poking up over a perch, a tail
+# sticking out behind ivy) — symmetric padding doesn't fix that, so the
+# resulting crop looks like a useless strip in the feed AND deprives the
+# classifier of the rest of the bird. After applying the standard 30 %
+# pad, we expand the *short* axis further until aspect ≤ this cap (in
+# either direction). Squarer crops give both human and model more to
+# work with at near-zero CPU cost.
+_CROP_ASPECT_CAP = 1.6
+
+
 def _extract_crop_from_image(det, image: "cv2.Mat", padding: float = 0.30) -> "cv2.Mat":
     """Crop the padded bbox out of a frame image.
 
@@ -359,6 +371,12 @@ def _extract_crop_from_image(det, image: "cv2.Mat", padding: float = 0.30) -> "c
       - Even if NMM in detect.py misses a tile-split fragment, the extra
         30 % around the (partial) detection often catches the rest of the
         bird in the image data we save to disk.
+
+    Aspect-ratio cap: if the padded crop is more than _CROP_ASPECT_CAP×
+    longer on one axis than the other, the short axis is extended
+    symmetrically until that ratio is hit (clamped at the frame edge).
+    This rescues partial-bird detections that would otherwise save as
+    unusable horizontal/vertical strips.
     """
     x, y, w, h = det.bbox
     fh, fw = image.shape[:2]
@@ -367,6 +385,22 @@ def _extract_crop_from_image(det, image: "cv2.Mat", padding: float = 0.30) -> "c
     y0 = max(0, y - pad_h)
     x1 = min(fw, x + w + pad_w)
     y1 = min(fh, y + h + pad_h)
+
+    # Aspect-cap pass: pad the *short* axis until the crop is at most
+    # _CROP_ASPECT_CAP×1 in either direction. Clipped at frame edges, so
+    # an extreme bbox near the border just gets as much extra context as
+    # the frame allows — never worse than the unpadded behavior.
+    cw, ch = x1 - x0, y1 - y0
+    if cw and ch:
+        if cw / ch > _CROP_ASPECT_CAP:
+            extra = int((cw / _CROP_ASPECT_CAP - ch) / 2)
+            y0 = max(0, y0 - extra)
+            y1 = min(fh, y1 + extra)
+        elif ch / cw > _CROP_ASPECT_CAP:
+            extra = int((ch / _CROP_ASPECT_CAP - cw) / 2)
+            x0 = max(0, x0 - extra)
+            x1 = min(fw, x1 + extra)
+
     return image[y0:y1, x0:x1]
 
 
