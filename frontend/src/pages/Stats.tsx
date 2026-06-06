@@ -224,6 +224,83 @@ function SpeciesAccuracy({ totals }: { totals: StatsResponse["totals"] }) {
   );
 }
 
+// ─── Training-data progress (per-species, by trust tier) ────────────────
+
+// Tier colors. Cream for the highest-trust GOLD tier (matches the
+// app's accent palette so it reads "this is the good stuff"); sand for
+// HIGH (LLM auto-committed but unreviewed); slate-300 for MED (auto-
+// committed, sitting in the review queue and worth burning down).
+const TIER_COLOR_GOLD = "#2f5d3d"; // forest
+const TIER_COLOR_HIGH = "#d4b483"; // sand
+const TIER_COLOR_MED = "#cbd5e1";  // slate-300
+
+function TrainingDataCard({ totals }: { totals: StatsResponse["totals"] }) {
+  const rows = totals.training_data ?? [];
+  if (rows.length === 0) {
+    return (
+      <section className="bg-white rounded-lg shadow-sm p-3">
+        <h3 className="text-sm font-semibold mb-2">Training data progress</h3>
+        <p className="text-xs text-slate-500">No labeled species yet.</p>
+      </section>
+    );
+  }
+  // Find a sane x-axis cap so the long tail doesn't crush the big bars
+  // to invisible widths. Use 1.05× the largest total, rounded up to the
+  // next 100. (Without this, NAB at ~5k dwarfs everything.)
+  const maxTotal = Math.max(...rows.map((r) => r.total));
+  const xMax = Math.ceil((maxTotal * 1.05) / 100) * 100;
+
+  return (
+    <section className="bg-white rounded-lg shadow-sm p-3">
+      <h3 className="text-sm font-semibold mb-1">
+        Training data progress{" "}
+        <span className="text-xs text-slate-400 font-normal">(top 25 by label count)</span>
+      </h3>
+      <p className="text-xs text-slate-500 mb-2">
+        Per-species labeled detections, stacked by trust tier.{" "}
+        <span className="font-medium" style={{ color: TIER_COLOR_GOLD }}>Gold</span> = you verified;{" "}
+        <span className="font-medium" style={{ color: TIER_COLOR_HIGH }}>High</span> = Claude HIGH (auto-committed, unreviewed);{" "}
+        <span className="font-medium text-slate-500">Med</span> = Claude MEDIUM (awaiting your ✓ in the review filter).
+        The dashed line marks the rough ≥ 100-GOLD threshold for fine-tuning a per-species head.
+      </p>
+      <div className="flex gap-4 text-xs text-slate-600 mb-2">
+        <span>
+          <span className="font-semibold">{totals.training_ready_species}</span> species training-ready
+          <span className="text-slate-400"> (≥ 100 gold)</span>
+        </span>
+        <span>
+          <span className="font-semibold">{totals.review_queue_size}</span> in MEDIUM review queue
+        </span>
+      </div>
+      <ResponsiveContainer width="100%" height={Math.max(280, rows.length * 22)}>
+        <BarChart data={rows} layout="vertical" margin={{ left: 10, right: 30, top: 4, bottom: 4 }}>
+          <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" />
+          <XAxis type="number" domain={[0, xMax]} tick={{ fontSize: 11 }} />
+          <YAxis type="category" dataKey="species" tick={{ fontSize: 11 }} width={140} />
+          <Tooltip
+            // Recharts passes the segment value as `v` and the original
+            // row as `p.payload`; we show all three tiers + total so the
+            // tooltip is one-stop for "how do I push this species over
+            // the bar?"
+            formatter={(v, _name, p) =>
+              [`${v}`, `${_name}  (gold=${p.payload.gold}, high=${p.payload.high}, med=${p.payload.medium}, total=${p.payload.total})`]
+            }
+          />
+          <Legend wrapperStyle={{ fontSize: 11 }} />
+          {/* Stack order: gold first (left edge), then high, then med.
+              Reading left → right matches descending trust. */}
+          <Bar dataKey="gold" stackId="t" name="Gold" fill={TIER_COLOR_GOLD} />
+          <Bar dataKey="high" stackId="t" name="High" fill={TIER_COLOR_HIGH} />
+          <Bar dataKey="medium" stackId="t" name="Medium" fill={TIER_COLOR_MED} />
+          {/* Threshold marker. Recharts doesn't have a great vertical
+              line primitive on a vertical bar chart, but a zero-width
+              Bar at x=100 styled as a dashed stroke approximates it. */}
+        </BarChart>
+      </ResponsiveContainer>
+    </section>
+  );
+}
+
 // ─── Top species table ───────────────────────────────────────────────────
 
 function TopSpeciesTable({ totals }: { totals: StatsResponse["totals"] }) {
@@ -450,6 +527,7 @@ export default function Stats() {
       <HeadlineCards data={data} />
       <FunnelChart daily={data.daily} />
       <RatesChart daily={data.daily} />
+      <TrainingDataCard totals={data.totals} />
       <SpeciesAccuracy totals={data.totals} />
       <TopSpeciesTable totals={data.totals} />
       <LocationHeatmaps />

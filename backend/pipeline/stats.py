@@ -349,6 +349,62 @@ def compute_global_stats(db: Session) -> dict:
         if real_species_total[name] >= 5
     ][:15]
 
+    # ----- Per-species training-data breakdown by trust tier ----------
+    # GOLD = user-verified ground truth (no source = pre-tracking user
+    # corrections; user-confirmed = user pressed ✓ on classifier output;
+    # llm-claude-confirmed = user pressed ✓ on an LLM-MEDIUM label).
+    # HIGH = Claude's HIGH-confidence labels, auto-committed but
+    # unreviewed. MED = Claude's MEDIUM labels, awaiting review.
+    # Surfaces three things to the user:
+    #   1. Which species are training-ready (enough verified labels).
+    #   2. How much the MED review queue is worth — confirming MED
+    #      promotes it to GOLD, the most valuable tier.
+    #   3. Class-imbalance reality check before any retrain decision.
+    GOLD_SOURCES = (None, "user-confirmed", "llm-claude-confirmed")
+    HIGH_SOURCES = ("llm-claude",)
+    MED_SOURCES = ("llm-claude-medium",)
+    # One row per (species, source). LATEST correction per detection
+    # avoids double-counting when a user re-labels a Claude-labeled row.
+    sub = (
+        db.query(Correction.detection_id, func.max(Correction.id).label("latest"))
+        .group_by(Correction.detection_id)
+        .subquery()
+    )
+    # NAB is intentionally kept here — it's the most valuable negative
+    # class for retraining a false-positive-suppressing classifier and
+    # the user needs to see its sample count. "Unknown bird" stays
+    # excluded — it's uninformative as supervision.
+    latest_rows = (
+        db.query(Species.common_name, Correction.source)
+        .join(Correction, Correction.correct_species_id == Species.id)
+        .join(sub, Correction.id == sub.c.latest)
+        .filter(Species.common_name != UNKNOWN_BIRD_LABEL)
+        .all()
+    )
+    by_species: dict[str, dict[str, int]] = {}
+    for name, source in latest_rows:
+        entry = by_species.setdefault(name, {"gold": 0, "high": 0, "medium": 0})
+        if source in GOLD_SOURCES:
+            entry["gold"] += 1
+        elif source in HIGH_SOURCES:
+            entry["high"] += 1
+        elif source in MED_SOURCES:
+            entry["medium"] += 1
+    training_data = [
+        {"species": name, **counts, "total": sum(counts.values())}
+        for name, counts in by_species.items()
+    ]
+    training_data.sort(key=lambda r: -r["total"])
+    training_data = training_data[:25]
+
+    # Headline numbers for the card subtitle. "Training-ready" =
+    # species with ≥100 GOLD-tier labels (rough rule of thumb for fine-
+    # tuning a per-class classifier head; below this the rare classes
+    # overfit). Tightened from the older ≥50 threshold used by
+    # `ready_to_fine_tune_species`.
+    training_ready_species = sum(1 for r in training_data if r["gold"] >= 100)
+    review_queue_size = sum(r["medium"] for r in training_data)
+
     return {
         "visits_total": visits_total,
         "detections_total": detections_total,
@@ -357,6 +413,9 @@ def compute_global_stats(db: Session) -> dict:
         "ready_to_fine_tune_species": ready_to_fine_tune,
         "top_species": top_species,
         "species_accuracy": species_accuracy,
+        "training_data": training_data,
+        "training_ready_species": training_ready_species,
+        "review_queue_size": review_queue_size,
     }
 
 

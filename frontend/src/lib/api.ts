@@ -122,6 +122,14 @@ export type DailyStats = {
   };
 };
 
+export type TrainingDataEntry = {
+  species: string;
+  gold: number;
+  high: number;
+  medium: number;
+  total: number;
+};
+
 export type StatsResponse = {
   daily: DailyStats[];
   totals: {
@@ -132,6 +140,12 @@ export type StatsResponse = {
     ready_to_fine_tune_species: number;
     top_species: { species: string; count: number }[];
     species_accuracy: { species: string; n: number; accuracy: number }[];
+    // Per-species breakdown of correction labels by trust tier. Drives
+    // the "Training data progress" card so we can see which species are
+    // ready to fine-tune on and how much the MED-review queue is worth.
+    training_data: TrainingDataEntry[];
+    training_ready_species: number;
+    review_queue_size: number;
   };
   as_of: string;
 };
