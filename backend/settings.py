@@ -31,6 +31,22 @@ class Settings(BaseSettings):
         "dennisjooo/Birds-Classifier-EfficientNetB2",
     )
 
+    # Optional binary bird-vs-NAB post-filter. When BIRD_BINARY_FILTER_MODEL
+    # is set to a path or HF repo, every detection is also scored by a
+    # 2-class head trained on this yard's labeled crops; if it says NAB
+    # with probability above the threshold below, the species classifier's
+    # output is overridden to "Not a bird". Suppresses YOLO false positives
+    # the species classifier lets through (ivy, leaves, debris). Empty
+    # string disables the post-filter entirely.
+    bird_binary_filter_model: str = os.getenv("BIRD_BINARY_FILTER_MODEL", "")
+    # Tunable threshold. Higher = stricter (fewer overrides, more false
+    # bird-keeps); lower = more aggressive (more overrides, more real
+    # birds suppressed). 0.75 matches the best-epoch validation point
+    # where leak-rate and miss-rate were roughly balanced.
+    bird_binary_nab_threshold: float = float(
+        os.getenv("BIRD_BINARY_NAB_THRESHOLD", "0.75")
+    )
+
     # Web Push (VAPID). The public key is sent to the browser at subscription
     # time; the private key signs the JWT in each push request. Generate both
     # via scripts/generate_vapid_keys.py.

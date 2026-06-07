@@ -15,8 +15,13 @@ import cv2
 import numpy as np
 from sqlalchemy.orm import Session
 
-from db.models import Detection, Species, Visit
+from db.models import NOT_A_BIRD_LABEL, Detection, Species, Visit
 from db.utils import utcnow
+from pipeline.binary_filter import (
+    is_enabled as binary_filter_enabled,
+    nab_probability,
+)
+from settings import settings
 from pipeline.classify import SpeciesPrediction, classify_bird
 from pipeline.detect import detect_birds
 from pipeline.exceptions import SkipFile
@@ -197,6 +202,31 @@ def process_visit(visit: Visit, db: Session) -> int:
         raw_labels = {p.species: p.raw_label for preds in per_crop_predictions for p in preds}
 
         top = fused[0]
+
+        # Binary post-filter. The species classifier is fooled by leaves /
+        # ivy / debris with bird-shaped silhouettes; the binary head was
+        # trained specifically on this yard's false positives. When it
+        # disagrees confidently, override to NAB. We score the fused crop
+        # (or best candidate when fusion is off) so the binary head sees
+        # the same pixels the species classifier did.
+        if binary_filter_enabled() and top.species != NOT_A_BIRD_LABEL:
+            filter_crop = fused if _USE_MULTI_FRAME_FUSION else best.crop
+            nab_p = nab_probability(filter_crop) if filter_crop is not None else None
+            if nab_p is not None and nab_p >= settings.bird_binary_nab_threshold:
+                log.info(
+                    "track %d: binary filter override → NAB (was %s @ %.2f; NAB P=%.2f)",
+                    track.track_id, top.species, top.probability, nab_p,
+                )
+                # Replace the top entry's species with NAB but keep the
+                # original raw_predictions intact for transparency —
+                # users can see what was overridden via the feed card.
+                top = SpeciesPrediction(
+                    species=NOT_A_BIRD_LABEL,
+                    raw_label=NOT_A_BIRD_LABEL,
+                    probability=nab_p,
+                    audio_confirmed=False,
+                )
+
         species_id = _resolve_species(db, top.species)
 
         detection = Detection(
