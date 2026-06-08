@@ -12,9 +12,12 @@ dist/
 *.log
 *.tsbuildinfo
 
-# Data + models (large, regenerable)
-backend/models/
-backend/data/
+# Data + models (large, regenerable).
+# Note: NO trailing slash on these — `backend/data/` only matches
+# contents under the directory, but git also surfaces the directory
+# itself as untracked. Dropping the slash matches both forms.
+backend/models
+backend/data
 *.db
 *.sqlite
 *.sqlite3
@@ -50,3 +53,10 @@ backend/data.real-backup/
 
 # YOLO weights are auto-downloaded by ultralytics on first call.
 backend/yolo*.pt
+
+# Local-only experiment / scratch scripts that live under tracked paths
+# (so we can't gitignore the whole parent dir). CLAUDE.md lists these
+# as "do not commit" but git/UIs still surface them as untracked-but-
+# diffable noise; explicitly ignoring them keeps the working tree clean.
+backend/scripts/sweep/run_*.py
+backend/tests/test_fuse_crops.py
