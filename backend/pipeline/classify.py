@@ -46,7 +46,22 @@ TOP_K = 5
 
 # If the total post-softmax mass on allow-listed species is below this fraction,
 # the crop is treated as a false positive and yields no detection.
+# (Applies to the denisjooo allowlist path; ignored when our birdclass-na
+#  model is loaded — that one uses OTHER_REJECTION_THRESHOLD instead.)
 IN_RANGE_THRESHOLD = 0.10
+
+# birdclass-na specific: this model has an explicit "OTHER" class for
+# "this is a bird but not one of the 406 NA species we recognize."
+# When the model puts more than this fraction of mass on OTHER, treat
+# the crop as a non-backyard bird (or YOLO false positive) and reject.
+# Tunable per-deployment via the BIRD_CLASSIFIER_OTHER_THRESHOLD env var.
+# 0.50 is a conservative start — anything truly out-of-distribution
+# should pile mass on OTHER well above this.
+OTHER_REJECTION_THRESHOLD = 0.50
+
+# Sentinel label name our birdclass-na model uses for the catch-all class.
+# MUST match the canonical name in birdclass-na/data/build_unified_taxonomy.py.
+OTHER_CLASS_LABEL = "OTHER"
 
 # Eastern-NA backyard / feeder species. All match the uppercase, mixed-hyphen
 # convention used by the gpiosenka dataset that the default model is trained on
@@ -138,6 +153,10 @@ _model: "PreTrainedModel | None" = None
 _processor: "BaseImageProcessor | None" = None
 _allowed_idxs: np.ndarray | None = None
 _allowed_mask: np.ndarray | None = None
+# birdclass-na: index of the "OTHER" catch-all class. None when a non-
+# birdclass-na model is loaded (e.g. denisjooo) — we fall back to the
+# allowlist filter in that case.
+_other_idx: int | None = None
 
 
 def _hyphen_insensitive(label: str) -> str:
@@ -216,7 +235,7 @@ def _normalize_for_display(uppercase_label: str) -> str:
 
 
 def _load() -> tuple["PreTrainedModel", "BaseImageProcessor"]:
-    global _model, _processor, _allowed_idxs, _allowed_mask
+    global _model, _processor, _allowed_idxs, _allowed_mask, _other_idx
     if _model is not None and _processor is not None:
         return _model, _processor
     with _lock:
@@ -231,6 +250,36 @@ def _load() -> tuple["PreTrainedModel", "BaseImageProcessor"]:
             _model.eval()
 
             id2label = _model.config.id2label
+
+            # ── Branch on model type ────────────────────────────────────
+            # birdclass-na (and any model with our 407-way taxonomy) has
+            # an explicit OTHER class for "is a bird but not one of our NA
+            # species." Detect by label-name presence. When OTHER exists,
+            # the model is already NA-focused so we SKIP the allowlist
+            # post-filter entirely — rejection happens on OTHER mass in
+            # classify_bird() instead.
+            other_indices = [int(i) for i, l in id2label.items() if l == OTHER_CLASS_LABEL]
+            if other_indices:
+                _other_idx = other_indices[0]
+                # All classes EXCEPT OTHER are valid bird predictions.
+                mask = np.ones(len(id2label), dtype=bool)
+                mask[_other_idx] = False
+                _allowed_mask = mask
+                _allowed_idxs = np.where(mask)[0].astype(np.int64)
+                log.info(
+                    "birdclass-na taxonomy detected (OTHER at index %d, %d real species). "
+                    "Skipping allow-list filter; rejection threshold = OTHER mass > %.2f.",
+                    _other_idx, int(_allowed_mask.sum()), OTHER_REJECTION_THRESHOLD,
+                )
+                _ = torch
+                return _model, _processor
+
+            # ── Else: legacy denisjooo path — build the NA allow-list ──
+            # The allow-list filter exists because denisjooo's 525-way
+            # model emits exotic species (Fiordland Penguin, etc.) for any
+            # bird-shaped crop. Filtering keeps the labels honest. With
+            # birdclass-na this is intrinsic to the taxonomy, so we skip it.
+            _other_idx = None
             # Build the allow-list as the UNION of:
             #   (a) yard-specific list (yard_priors.json from
             #       scripts/calibrate_from_haikubox.py — species the Haikubox
@@ -319,6 +368,34 @@ def classify_bird(crop_bgr: np.ndarray) -> list[SpeciesPrediction]:
         logits = model(**inputs).logits[0]
         probs = torch.softmax(logits, dim=-1).cpu().numpy()
 
+    id2label = model.config.id2label
+
+    # ── birdclass-na path: OTHER-mass rejection, no allow-list filter ──
+    if _other_idx is not None:
+        other_mass = float(probs[_other_idx])
+        if other_mass > OTHER_REJECTION_THRESHOLD:
+            log.debug("Rejecting crop: OTHER mass %.3f > %.2f",
+                      other_mass, OTHER_REJECTION_THRESHOLD)
+            return []
+        # Zero OTHER, renormalize over the 406 real species, take top-K.
+        filtered = probs.copy()
+        filtered[_other_idx] = 0.0
+        total = filtered.sum()
+        if total <= 0:
+            return []
+        filtered = filtered / total
+        top_idxs = np.argsort(filtered)[::-1][:TOP_K]
+        return [
+            SpeciesPrediction(
+                species=_normalize_for_display(id2label[int(i)]),
+                probability=float(filtered[i]),
+                raw_label=id2label[int(i)],
+            )
+            for i in top_idxs
+            if filtered[i] > 0
+        ]
+
+    # ── legacy denisjooo path: allow-list filter ──
     # Reject crops whose mass is mostly on non-NA species — likely a false
     # positive from YOLO (leaf, shadow, partial bird).
     in_range_mass = float(probs[_allowed_mask].sum())
@@ -331,7 +408,6 @@ def classify_bird(crop_bgr: np.ndarray) -> list[SpeciesPrediction]:
     filtered = filtered / filtered.sum()
 
     top_idxs = np.argsort(filtered)[::-1][:TOP_K]
-    id2label = model.config.id2label
     return [
         SpeciesPrediction(
             species=_normalize_for_display(id2label[int(i)]),
