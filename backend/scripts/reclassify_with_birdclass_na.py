@@ -70,10 +70,10 @@ def _resolve_species(db, common_name: str) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--low-conf", type=float, default=LOW_CONFIDENCE_DEFAULT,
-                    show_default=True,
-                    help="Re-classify detections whose existing confidence is below this. "
-                         "Detections with confidence ≥ this are left alone (assumes old "
-                         "model was probably right when it was confident).")
+                    help=f"Re-classify detections whose existing confidence is below "
+                         f"this (default: {LOW_CONFIDENCE_DEFAULT}). Detections with "
+                         f"confidence ≥ this are left alone (assumes old model was "
+                         f"probably right when it was confident).")
     ap.add_argument("--limit", type=int, default=0,
                     help="Cap candidates processed (0 = no cap).")
     ap.add_argument("--dry-run", action="store_true",
