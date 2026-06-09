@@ -42,6 +42,7 @@ from pipeline.binary_filter import (  # noqa: E402
     is_enabled as binary_filter_enabled,
     nab_probability,
 )
+from pipeline import classify as _classify_module  # noqa: E402
 from pipeline.classify import classify_bird  # noqa: E402
 from settings import settings  # noqa: E402
 
@@ -81,7 +82,20 @@ def main() -> int:
     ap.add_argument("--skip-binary-filter", action="store_true",
                     help="Don't apply the binary NAB filter on top of species classifier "
                          "(otherwise mimics full production semantics).")
+    ap.add_argument("--other-threshold", type=float, default=None,
+                    help="Override classify.OTHER_REJECTION_THRESHOLD for this run only "
+                         "(production default: 0.50). Lower → rescues more crops with "
+                         "lower confidence, all of which still land in the user's review "
+                         "queue. 0.30 is a reasonable one-shot rescue value.")
     args = ap.parse_args()
+
+    # One-shot override of the rejection threshold without editing the
+    # production module constant. classify_bird() reads the module attr
+    # at call time, so monkey-patching here is sufficient.
+    if args.other_threshold is not None:
+        log.info("Overriding OTHER_REJECTION_THRESHOLD: %.2f → %.2f",
+                 _classify_module.OTHER_REJECTION_THRESHOLD, args.other_threshold)
+        _classify_module.OTHER_REJECTION_THRESHOLD = args.other_threshold
 
     db = SessionLocal()
     try:
@@ -181,13 +195,16 @@ def main() -> int:
                     f"{top.species} @ {top.probability:.2f}",
                 ))
 
-            if not args.dry_run and i % COMMIT_BATCH == 0:
-                db.commit()
+            # Periodic progress log every COMMIT_BATCH detections regardless
+            # of dry-run — without this, dry-run runs are silent for hours.
+            if i % COMMIT_BATCH == 0:
+                if not args.dry_run:
+                    db.commit()
                 log.info("  %d/%d  accepted=%d  rejected_other=%d  rejected_nab=%d  "
-                         "(elapsed %.0fs)",
+                         "(elapsed %.0fs, %.2f /s)",
                          i, len(candidates),
                          n_accepted, n_rejected_other, n_rejected_nab,
-                         time.time() - t0)
+                         time.time() - t0, i / max(time.time() - t0, 1))
 
         if not args.dry_run:
             db.commit()
