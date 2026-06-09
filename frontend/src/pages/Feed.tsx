@@ -76,6 +76,10 @@ export default function Feed({ mode = "default" }: Props = {}) {
             : effectiveFilter.mode === "llm_medium_review"
               ? "llm-claude-medium"
               : undefined,
+        // "Bad crops" filter: too dark / small / blurry. Backend ORs
+        // the three quality thresholds; the user can mass-NAB these or
+        // skip them in review queues.
+        bad_quality: effectiveFilter.mode === "bad_quality",
       }),
     initialPageParam: "" as string,
     getNextPageParam: (lastPage: Detection[]) => {

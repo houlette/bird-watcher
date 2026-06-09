@@ -19,6 +19,7 @@ export type Filter =
   | { mode: "awaiting_review" }    // classifier-labeled, user hasn't acted yet
   | { mode: "llm_review" }         // HIGH-confidence committed labels
   | { mode: "llm_medium_review" }  // MEDIUM-confidence — quick-review queue
+  | { mode: "bad_quality" }        // too dark / small / blurry
   | { mode: "species"; name: string };
 
 type Props = {
@@ -38,6 +39,8 @@ export function filterLabel(f: Filter): string {
       return "LLM-labeled HIGH";
     case "llm_medium_review":
       return "LLM-labeled MEDIUM (review)";
+    case "bad_quality":
+      return "🚧 Bad crops";
     case "species":
       return f.name;
   }
@@ -160,6 +163,15 @@ export default function FilterPicker({ value, onChange }: Props) {
                 title="MEDIUM-confidence LLM labels — quick-review queue: ✓ Confirm, 🚫 NAB, or ✏️ Change."
               >
                 ⚠️ LLM-labeled MEDIUM (review)
+              </button>
+              <button
+                className={`w-full text-left px-3 py-2 hover:bg-slate-50 text-sm border-b border-slate-200 ${
+                  value.mode === "bad_quality" ? "bg-cream font-semibold" : ""
+                }`}
+                onClick={() => pick({ mode: "bad_quality" })}
+                title="Crops that are too small (<80px), too dark (mean <30), or too blurry (Laplacian variance <30). Use for triage — mass-NAB the unusable, or sort to the bottom of review piles."
+              >
+                🚧 Bad crops
               </button>
 
               {isLoading && <p className="p-3 text-sm text-slate-500">Loading species…</p>}

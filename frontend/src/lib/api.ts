@@ -27,6 +27,12 @@ export type Detection = {
   // comparison in the review-mode cards. Null when we haven't
   // fetched one or Wikipedia has no usable image.
   reference_image_url: string | null;
+  // Per-crop quality metrics populated at ingest. NULL on legacy
+  // rows that haven't been backfilled. Drives the "bad crops" filter
+  // and the small score footer on each card.
+  crop_area_px: number | null;
+  brightness: number | null;     // 0-255 (mean grayscale)
+  sharpness: number | null;      // Laplacian variance
 };
 
 export async function fetchDetections(params: {
@@ -38,6 +44,7 @@ export async function fetchDetections(params: {
   only_unidentified?: boolean;
   awaiting_review?: boolean;
   source?: string;
+  bad_quality?: boolean;
 } = {}) {
   const url = new URL("/api/detections", window.location.origin);
   if (params.limit) url.searchParams.set("limit", String(params.limit));
@@ -48,6 +55,7 @@ export async function fetchDetections(params: {
   if (params.only_unidentified) url.searchParams.set("only_unidentified", "true");
   if (params.awaiting_review) url.searchParams.set("awaiting_review", "true");
   if (params.source) url.searchParams.set("source", params.source);
+  if (params.bad_quality) url.searchParams.set("bad_quality", "true");
   const r = await fetch(url);
   if (!r.ok) throw new Error(`fetchDetections: ${r.status}`);
   return (await r.json()) as Detection[];

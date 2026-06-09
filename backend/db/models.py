@@ -115,6 +115,19 @@ class Detection(Base):
     track_bboxes: Mapped[list | None] = mapped_column(JSON, nullable=True)
     track_id: Mapped[int] = mapped_column(Integer)
 
+    # ── Crop-quality metrics (populated at ingest; nullable for old rows) ──
+    # Used by the "bad crops" feed filter so the review queue can be
+    # triaged (skip / sort by ease of identification), and by the next
+    # birdclass-na retrain to exclude unreliable training data.
+    # All three are computed from the saved crop after CLAHE but before
+    # classifier resize. None means the row predates this instrumentation.
+    crop_area_px: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Mean grayscale brightness 0-255. < 30 = "too dark", roughly.
+    brightness: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Laplacian variance — classic blur metric. < 30 = "too blurry",
+    # roughly; calibration depends on crop size.
+    sharpness: Mapped[float | None] = mapped_column(Float, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     visit: Mapped[Visit] = relationship(back_populates="detections")

@@ -49,6 +49,14 @@ _ADDITIVE_COLUMNS = [
     # cards so the user can compare their crop against a clean photo.
     ("species", "reference_image_url", "TEXT"),
     ("species", "reference_image_checked_at", "DATETIME"),
+    # Crop-quality metrics populated at ingest in pipeline/process.py.
+    # Drive the "bad crops" feed filter and feed training-data quality
+    # gates in the next birdclass-na retrain. NULL for rows written
+    # before this column existed; backfilled by
+    # scripts/backfill_crop_quality.py.
+    ("detections", "crop_area_px", "INTEGER"),
+    ("detections", "brightness", "REAL"),
+    ("detections", "sharpness", "REAL"),
 ]
 
 

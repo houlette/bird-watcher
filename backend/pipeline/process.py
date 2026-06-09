@@ -166,6 +166,7 @@ def process_visit(visit: Visit, db: Session) -> int:
             # Classifier rejected every crop. Persist with species_id=NULL;
             # the user can correct via the "Wrong species?" picker.
             log.info("track %d: classifier rejected; persisting as Unidentified", track.track_id)
+            area_px, brightness, sharpness = _crop_quality(best.crop, list(best.bbox))
             db.add(Detection(
                 visit_id=visit.id,
                 species_id=None,
@@ -177,6 +178,9 @@ def process_visit(visit: Visit, db: Session) -> int:
                 bbox=list(best.bbox),
                 track_bboxes=track_bboxes_for_db,
                 track_id=track.track_id,
+                crop_area_px=area_px,
+                brightness=brightness,
+                sharpness=sharpness,
             ))
             frames_to_save[track.track_id] = best.frame_index
             persisted += 1
@@ -229,6 +233,7 @@ def process_visit(visit: Visit, db: Session) -> int:
 
         species_id = _resolve_species(db, top.species)
 
+        area_px, brightness, sharpness = _crop_quality(best.crop, list(best.bbox))
         detection = Detection(
             visit_id=visit.id,
             species_id=species_id,
@@ -247,6 +252,9 @@ def process_visit(visit: Visit, db: Session) -> int:
             crop_path=str(crop_rel_path),
             bbox=list(best.bbox),
             track_bboxes=track_bboxes_for_db,
+            crop_area_px=area_px,
+            brightness=brightness,
+            sharpness=sharpness,
             track_id=track.track_id,
         )
         db.add(detection)
@@ -281,6 +289,32 @@ def process_visit(visit: Visit, db: Session) -> int:
     visit.scene_mask_suppressed = scene_mask_suppressed
     db.commit()
     return len(tracks)
+
+
+def _crop_quality(crop_bgr: "cv2.Mat", bbox: list) -> tuple[int | None, float | None, float | None]:
+    """Compute (crop_area_px, brightness, sharpness) for the saved crop.
+
+    Persisted on the Detection row so the feed can filter / sort by
+    quality without re-loading every JPEG. Returns (None, None, None)
+    for empty / unreadable crops.
+
+    - crop_area_px: bbox area from the stored YOLO bbox (NOT the padded
+      saved-crop area, so this is "how big was the bird itself"). Drives
+      a "too small" filter at e.g. < 6400 px (~80×80).
+    - brightness: mean of grayscale-converted crop, 0-255. Drives a
+      "too dark" filter at e.g. < 30.
+    - sharpness: Laplacian variance — same metric `_rank_detections`
+      uses to score crop quality within a track. Drives a "too blurry"
+      filter at e.g. < 30. Content-dependent so use as a rough signal.
+    """
+    if crop_bgr is None or crop_bgr.size == 0 or len(bbox) < 4:
+        return None, None, None
+    w, h = bbox[2], bbox[3]
+    area = int(w * h)
+    gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY) if crop_bgr.ndim == 3 else crop_bgr
+    brightness = float(gray.mean())
+    sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    return area, brightness, sharpness
 
 
 def _laplacian_variance(image: "cv2.Mat") -> float:
