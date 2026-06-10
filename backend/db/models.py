@@ -26,10 +26,20 @@ NOT_A_BIRD_LABEL = "Not a bird"
 # Unlike NOT_A_BIRD, these DO show in the feed (they're real bird sightings).
 UNKNOWN_BIRD_LABEL = "Unknown bird"
 
+# Reserved Species.common_name for "this crop is too blurry/small/dark to
+# ever be ID'd, retire it from any review queue forever." Semantically a
+# stronger Unknown Bird: the user is asserting the crop is unidentifiable
+# *as a matter of image quality*, not because they're unsure. We keep it
+# distinct from UNKNOWN_BIRD so the retraining pipeline knows to EXCLUDE
+# these crops entirely (they're noise as training data) rather than treat
+# them as soft-positive examples the way UNKNOWN_BIRD is. Hidden from the
+# default feed by the SENTINEL filter just like NAB.
+POOR_QUALITY_LABEL = "Poor quality"
+
 # Sentinel labels that aren't real species. Used by /api/species to exclude
 # them from the picker's species lists (they're surfaced separately) and by
 # the eventual retraining script to handle them with their own logic.
-SENTINEL_LABELS = frozenset({NOT_A_BIRD_LABEL, UNKNOWN_BIRD_LABEL})
+SENTINEL_LABELS = frozenset({NOT_A_BIRD_LABEL, UNKNOWN_BIRD_LABEL, POOR_QUALITY_LABEL})
 
 
 class Species(Base):

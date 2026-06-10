@@ -42,6 +42,7 @@ from sqlalchemy.orm import Session
 from db.families import family_contains, is_family_label
 from db.models import (
     NOT_A_BIRD_LABEL,
+    POOR_QUALITY_LABEL,
     SENTINEL_LABELS,
     UNKNOWN_BIRD_LABEL,
     Correction,
@@ -401,13 +402,15 @@ def compute_global_stats(db: Session) -> dict:
     )
     # NAB is intentionally kept here — it's the most valuable negative
     # class for retraining a false-positive-suppressing classifier and
-    # the user needs to see its sample count. "Unknown bird" stays
-    # excluded — it's uninformative as supervision.
+    # the user needs to see its sample count. "Unknown bird" and
+    # "Poor quality" stay excluded: the former is an uninformative
+    # soft-positive, the latter is an explicit "exclude from training"
+    # marker on crops the user has retired from any review queue.
     latest_rows = (
         db.query(Species.common_name, Correction.source)
         .join(Correction, Correction.correct_species_id == Species.id)
         .join(sub, Correction.id == sub.c.latest)
-        .filter(Species.common_name != UNKNOWN_BIRD_LABEL)
+        .filter(~Species.common_name.in_([UNKNOWN_BIRD_LABEL, POOR_QUALITY_LABEL]))
         .all()
     )
     by_species: dict[str, dict[str, int]] = {}

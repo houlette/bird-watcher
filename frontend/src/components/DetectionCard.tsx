@@ -9,7 +9,7 @@ import {
 } from "../lib/api";
 import AudioBadge from "./AudioBadge";
 import ImageZoom from "./ImageZoom";
-import SpeciesPicker, { NOT_A_BIRD } from "./SpeciesPicker";
+import SpeciesPicker, { NOT_A_BIRD, POOR_QUALITY } from "./SpeciesPicker";
 
 type DetectionCardProps = {
   detection: Detection;
@@ -234,7 +234,13 @@ export default function DetectionCard({
             + checkmark + tooltip carry the meaning at a fraction of the
             horizontal cost. */}
         {!compact && (isLlmMediumReview || isAwaitingClassifierReview) && (
-          <div className="mt-2 grid grid-cols-3 gap-1 text-xs">
+          // Four-column grid: ✓ confirm, 🚫 NAB, 🫥 Poor Quality, ✏️ change.
+          // 🫥 retires the crop from any review queue forever — same DB
+          // mechanism as NAB (a Correction to a sentinel species) but
+          // semantically "this image will never be identifiable, stop
+          // showing it to me." Useful for the blurry / tiny crops the
+          // classifier can't help with regardless of model.
+          <div className="mt-2 grid grid-cols-4 gap-1 text-xs">
             <button
               className="px-1 py-1 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
               onClick={() => confirmMutation.mutate()}
@@ -252,6 +258,15 @@ export default function DetectionCard({
               aria-label="Mark as not a bird"
             >
               🚫
+            </button>
+            <button
+              className="px-1 py-1 rounded border border-slate-200 text-slate-600 hover:bg-amber-50 hover:border-amber-300 hover:text-amber-700 disabled:opacity-50"
+              onClick={() => correctionMutation.mutate(POOR_QUALITY)}
+              disabled={confirmMutation.isPending || correctionMutation.isPending}
+              title="Poor quality — too blurry / small / dark to ever ID. Retires from review queues."
+              aria-label="Mark as poor quality"
+            >
+              🫥
             </button>
             <button
               className="px-1 py-1 rounded border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50"

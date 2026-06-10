@@ -15,6 +15,13 @@ export const NOT_A_BIRD = "Not a bird";
 // YOLO detector even without species info.
 export const UNKNOWN_BIRD = "Unknown bird";
 
+// Must match backend/db/models.py:POOR_QUALITY_LABEL. The picker pins
+// this alongside the other sentinels so the user can retire a too-
+// blurry / too-small / too-dark crop from any review queue in one tap.
+// Semantically "this image will never be identifiable" — stronger than
+// Unknown bird (which is "I'm not sure right now").
+export const POOR_QUALITY = "Poor quality";
+
 /**
  * Optional list of the classifier's top-K predictions surfaced as a
  * "Suggested" group at the top of the picker. When the user taps
@@ -226,7 +233,7 @@ export default function SpeciesPicker({ open, current, suggestions, cropUrl, onS
             <span className="text-xs text-slate-400">false positive</span>
           </button>
           <button
-            className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center justify-between text-sm border-b border-slate-200 text-slate-600"
+            className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center justify-between text-sm border-b border-slate-100 text-slate-600"
             onClick={() => onSelect(UNKNOWN_BIRD)}
             {...hoverProps(UNKNOWN_BIRD, null)}
           >
@@ -235,6 +242,17 @@ export default function SpeciesPicker({ open, current, suggestions, cropUrl, onS
               <span>{UNKNOWN_BIRD}</span>
             </span>
             <span className="text-xs text-slate-400">bird, species unsure</span>
+          </button>
+          <button
+            className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center justify-between text-sm border-b border-slate-200 text-slate-600"
+            onClick={() => onSelect(POOR_QUALITY)}
+            {...hoverProps(POOR_QUALITY, null)}
+          >
+            <span className="flex items-center gap-2">
+              <span aria-hidden>🫥</span>
+              <span>{POOR_QUALITY}</span>
+            </span>
+            <span className="text-xs text-slate-400">unidentifiable crop</span>
           </button>
 
           {/* Classifier's next-best guesses for this crop (top-1 excluded — it's

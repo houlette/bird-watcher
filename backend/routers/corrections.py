@@ -33,6 +33,30 @@ class CorrectionRequest(BaseModel):
     correct_species_name: str
 
 
+def _retire_stale_review_queue_rows(db: Session, detection_id: int) -> None:
+    """When the user submits a fresh correction for a detection that's
+    sitting in an LLM-MEDIUM review queue, drop the queue marker so the
+    detection actually falls out of that queue on the next refresh.
+
+    Without this, the source=llm-claude-medium feed-filter join still
+    matches the OLD correction row even after the user has overridden
+    it (NAB, Poor Quality, picker, etc.), so the card stays visible in
+    MEDIUM review forever. The user-just-spoke correction is the
+    canonical record; the medium-suggestion correction is no longer
+    informative.
+
+    Only llm-claude-medium is retired — llm-claude (HIGH committed) and
+    llm-claude-confirmed are kept because they're audit trail of LLM
+    work the user already accepted.
+    """
+    (
+        db.query(Correction)
+        .filter(Correction.detection_id == detection_id)
+        .filter(Correction.source == "llm-claude-medium")
+        .delete(synchronize_session=False)
+    )
+
+
 @router.post("")
 async def submit_correction(req: CorrectionRequest, db: Session = Depends(get_db)) -> dict:
     detection = db.query(Detection).filter(Detection.id == req.detection_id).one_or_none()
@@ -44,6 +68,7 @@ async def submit_correction(req: CorrectionRequest, db: Session = Depends(get_db
         raise HTTPException(400, "correct_species_name cannot be empty")
 
     species = _resolve_species(db, name)
+    _retire_stale_review_queue_rows(db, detection.id)
     db.add(Correction(detection_id=detection.id, correct_species_id=species.id))
     # Update the detection in-place so the feed reflects the correction immediately.
     detection.species_id = species.id
@@ -187,6 +212,7 @@ async def submit_bulk_correction(req: BulkCorrectionRequest, db: Session = Depen
     species = _resolve_species(db, name)
     results = []
     for d in detections:
+        _retire_stale_review_queue_rows(db, d.id)
         db.add(Correction(detection_id=d.id, correct_species_id=species.id))
         d.species_id = species.id
         results.append({"id": d.id, "species_id": species.id, "species": species.common_name})
