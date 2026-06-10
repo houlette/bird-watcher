@@ -38,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from db.models import SENTINEL_LABELS, Correction, Detection, Species  # noqa: E402
 from db.session import SessionLocal, init_db  # noqa: E402
+from pipeline import scene_mask  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("analyze_bird_locations")
@@ -142,12 +143,39 @@ def _bg_image() -> np.ndarray:
     return np.zeros((H, W, 3), dtype=np.uint8)
 
 
+def _draw_scene_mask(ax, hot_zones: set[tuple[int, int]]) -> int:
+    """Overlay the current scene-mask hot cells as translucent red
+    rectangles with cross-hatching. Returns the number of cells drawn.
+
+    Hot zones are 100×100 px cells (scene_mask.GRID_PX) where the user
+    has labeled enough NABs to suppress new YOLO hits there. We hatch
+    rather than solid-fill so the underlying density signal stays
+    visible — a real-bird cluster sitting inside a hot zone is the
+    interesting failure case to spot.
+    """
+    if not hot_zones:
+        return 0
+    import matplotlib.patches as patches
+    g = scene_mask.GRID_PX
+    for (cx, cy) in hot_zones:
+        rect = patches.Rectangle(
+            (cx * g, cy * g), g, g,
+            linewidth=0.6,
+            edgecolor=(1.0, 0.2, 0.2, 0.85),
+            facecolor=(1.0, 0.2, 0.2, 0.18),
+            hatch="///",
+        )
+        ax.add_patch(rect)
+    return len(hot_zones)
+
+
 def _render_heatmap(
     points: list[tuple[int, int]],
     title: str,
     out_path: Path,
     bins: int = 96,
     cmap_name: str = "hot",
+    overlay_scene_mask: bool = False,
 ) -> None:
     """KDE-flavored heatmap by 2D-histogramming bbox centers and
     Gaussian-smoothing. Overlaid on the background frame at 60% alpha."""
@@ -204,6 +232,27 @@ def _render_heatmap(
         linewidths=0.7,
     )
     ax.clabel(cs, inline=True, fontsize=8, fmt={0.25: "25%", 0.5: "50%", 0.75: "75%"})
+
+    if overlay_scene_mask:
+        try:
+            hot = scene_mask.get_hot_zones(force_refresh=True)
+        except Exception:
+            log.exception("Could not load scene-mask hot zones; skipping overlay")
+            hot = set()
+        n_drawn = _draw_scene_mask(ax, hot)
+        if n_drawn:
+            # Single hatched proxy patch for a legend entry — matplotlib
+            # has no built-in "this is what red hatching means" affordance.
+            import matplotlib.patches as patches
+            proxy = patches.Patch(
+                facecolor=(1.0, 0.2, 0.2, 0.18),
+                edgecolor=(1.0, 0.2, 0.2, 0.85),
+                hatch="///",
+                label=f"Scene mask: {n_drawn} hot cells "
+                      f"(suppress YOLO conf < {scene_mask.OVERRIDE_YOLO_CONFIDENCE:.2f})",
+            )
+            ax.legend(handles=[proxy], loc="lower right", fontsize=8, framealpha=0.85)
+
     ax.set_xlim(0, W)
     ax.set_ylim(H, 0)
     ax.set_title(title, fontsize=11)
@@ -334,6 +383,7 @@ def main(output_dir: Path | None = None) -> int:
         centers,
         f"Real-bird detection density ({len(points):,} detections)",
         out_dir / "location_heatmap.png",
+        overlay_scene_mask=True,
     )
 
     small_centers = [(p[0], p[1]) for p in points if p[2] < median_diag]

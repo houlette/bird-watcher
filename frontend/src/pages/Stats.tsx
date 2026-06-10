@@ -449,7 +449,7 @@ function LocationHeatmaps() {
       id: "density",
       label: "Density",
       src: `/media/heatmaps/location_heatmap.png?d=${dayBust}`,
-      caption: "Where real-bird detections cluster. White contours mark the 25 / 50 / 75% density isolines.",
+      caption: "Where real-bird detections cluster. White contours mark the 25 / 50 / 75% density isolines. Red hatched cells are the current scene-mask hot zones — YOLO hits there get suppressed unless confidence beats the override. A density cluster sitting under hatching is a real bird at a NAB hotspot worth checking.",
     },
     {
       id: "small",
