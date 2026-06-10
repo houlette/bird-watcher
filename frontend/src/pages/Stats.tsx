@@ -7,6 +7,7 @@ import {
   Legend,
   Line,
   LineChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -22,6 +23,20 @@ const COLOR_SAND = "#d4b483";
 const COLOR_SLATE = "#64748b";
 const COLOR_RED = "#dc2626";
 const COLOR_BLUE = "#2563eb";
+
+// ─── Model-update markers ────────────────────────────────────────────────
+//
+// Vertical reference lines on the time-series charts mark days when we
+// swapped a model in production, so an accuracy / FP-rate inflection
+// can be read against the cause rather than misread as a data anomaly.
+// Add new entries here (UTC date of the deploy) as we ship more model
+// updates. Matched against the formatted x-axis tick — `date` MUST be
+// the same string `shortDate()` produces, i.e. "Jun 7".
+type ModelMarker = { date: string; label: string };
+const MODEL_MARKERS: ModelMarker[] = [
+  { date: "Jun 7", label: "NAB filter" },
+  { date: "Jun 8", label: "birdclass-na" },
+];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -119,6 +134,15 @@ function FunnelChart({ daily }: { daily: DailyStats[] }) {
           <YAxis tick={{ fontSize: 11 }} />
           <Tooltip />
           <Legend wrapperStyle={{ fontSize: 12 }} />
+          {MODEL_MARKERS.map((m) => (
+            <ReferenceLine
+              key={m.date}
+              x={m.date}
+              stroke={COLOR_SLATE}
+              strokeDasharray="2 3"
+              label={{ value: m.label, position: "top", fontSize: 10, fill: COLOR_SLATE }}
+            />
+          ))}
           <Line type="monotone" dataKey="Clips" stroke={COLOR_SLATE} strokeWidth={2} dot={false} />
           <Line type="monotone" dataKey="Detections" stroke={COLOR_FOREST} strokeWidth={2} dot={false} />
           <Line type="monotone" dataKey="Classifier-labeled" stroke={COLOR_BLUE} strokeWidth={2} dot={false} />
@@ -168,6 +192,15 @@ function RatesChart({ daily }: { daily: DailyStats[] }) {
           <YAxis tick={{ fontSize: 11 }} domain={[0, 1]} tickFormatter={(v) => `${Math.round(v * 100)}%`} />
           <Tooltip formatter={(v) => (v == null ? "—" : fmtPct(Number(v)))} />
           <Legend wrapperStyle={{ fontSize: 12 }} />
+          {MODEL_MARKERS.map((m) => (
+            <ReferenceLine
+              key={m.date}
+              x={m.date}
+              stroke={COLOR_SLATE}
+              strokeDasharray="2 3"
+              label={{ value: m.label, position: "top", fontSize: 10, fill: COLOR_SLATE }}
+            />
+          ))}
           <Line type="monotone" dataKey="YOLO bird rate" stroke={COLOR_FOREST} strokeWidth={2} dot={false} connectNulls />
           <Line type="monotone" dataKey="Classifier label rate" stroke={COLOR_BLUE} strokeWidth={2} dot={false} connectNulls />
           <Line type="monotone" dataKey="User-FP rate" stroke={COLOR_RED} strokeWidth={2} dot={false} connectNulls />
