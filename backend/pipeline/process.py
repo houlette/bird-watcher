@@ -154,9 +154,18 @@ def process_visit(visit: Visit, db: Session) -> int:
         #     soft-average the per-crop top-5 distributions. Three model
         #     calls per track.
         candidate_crops = [d.crop for d in ranked[:3] if d.crop is not None and d.crop.size > 0]
+        # `fused_crop_image` is the multi-frame-aligned composite. Stored
+        # separately because the variable name `fused` is reassigned below
+        # to the prediction-fusion result from pipeline.fuse.fuse(), and
+        # the binary-filter code further down needs the IMAGE, not the
+        # prediction list. Without this rename the binary filter blew up
+        # with "'list' object has no attribute 'size'" because it
+        # received the list of FusedPrediction tuples instead of the
+        # numpy crop.
+        fused_crop_image: "cv2.Mat | None" = None
         if _USE_MULTI_FRAME_FUSION:
-            fused = _fuse_crops(candidate_crops)
-            preds = classify_bird(fused) if fused is not None else []
+            fused_crop_image = _fuse_crops(candidate_crops)
+            preds = classify_bird(fused_crop_image) if fused_crop_image is not None else []
             per_crop_predictions = [preds] if preds else []
         else:
             per_crop_predictions = [classify_bird(c) for c in candidate_crops]
@@ -214,7 +223,7 @@ def process_visit(visit: Visit, db: Session) -> int:
         # (or best candidate when fusion is off) so the binary head sees
         # the same pixels the species classifier did.
         if binary_filter_enabled() and top.species != NOT_A_BIRD_LABEL:
-            filter_crop = fused if _USE_MULTI_FRAME_FUSION else best.crop
+            filter_crop = fused_crop_image if _USE_MULTI_FRAME_FUSION else best.crop
             nab_p = nab_probability(filter_crop) if filter_crop is not None else None
             if nab_p is not None and nab_p >= settings.bird_binary_nab_threshold:
                 log.info(
