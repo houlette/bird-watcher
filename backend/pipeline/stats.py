@@ -221,6 +221,35 @@ def compute_daily_stats(db: Session, d: date) -> PipelineStatsDaily:
             species_hist[bucket] += 1
     payload["yolo_confidence_hist"] = {"nab": nab_hist, "species": species_hist}
 
+    # Crop-quality percentiles for the day. Driven by the columns added
+    # in Detection (`crop_area_px`, `brightness`, `sharpness`) — populated
+    # at ingest and backfilled by scripts/backfill_crop_quality.py. NULLs
+    # (old / unbackfilled rows) are skipped so the percentiles reflect
+    # only the rows the metric is actually defined on.
+    #
+    # We compute p25/p50/p75 instead of a full histogram so the JSON
+    # payload stays small (3 numbers × 3 metrics rather than ~30 buckets)
+    # — sufficient for a time-series with a band, which is the chart we
+    # actually render. If we later want a distribution view, add a
+    # histogram alongside this aggregate.
+    quality_rows = base_dets.with_entities(
+        Detection.sharpness, Detection.brightness, Detection.crop_area_px,
+    ).all()
+
+    def _pcts(values):
+        vals = [float(v) for v in values if v is not None]
+        if not vals:
+            return None
+        import statistics as _s
+        q = _s.quantiles(vals, n=4) if len(vals) >= 2 else [vals[0], vals[0], vals[0]]
+        return {"p25": q[0], "p50": q[1], "p75": q[2], "n": len(vals)}
+
+    payload["crop_quality"] = {
+        "sharpness": _pcts(r[0] for r in quality_rows),
+        "brightness": _pcts(r[1] for r in quality_rows),
+        "area_px": _pcts(r[2] for r in quality_rows),
+    }
+
     return PipelineStatsDaily(
         date=d,
         clips_received=clips_received,

@@ -1,9 +1,11 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
+  Area,
   Bar,
   BarChart,
   CartesianGrid,
+  ComposedChart,
   Legend,
   Line,
   LineChart,
@@ -176,8 +178,12 @@ function RatesChart({ daily }: { daily: DailyStats[] }) {
         // because "no data" ≠ "zero rate."
         "YOLO bird rate": d.yolo_bird_rate,
         "Classifier label rate": d.classifier_label_rate,
-        "User-FP rate": d.user_fp_rate,
-        "Classifier accuracy": d.classifier_accuracy,
+        // Renamed from the older "User-FP rate" / "Classifier accuracy"
+        // labels because both were getting read as population statistics
+        // when they're actually correction-bucket statistics. New names
+        // foreground the denominator.
+        "NAB share of corrections": d.user_fp_rate,
+        "Top-1 hit rate (on reviewed)": d.classifier_accuracy,
       })),
     [daily],
   );
@@ -203,13 +209,32 @@ function RatesChart({ daily }: { daily: DailyStats[] }) {
           ))}
           <Line type="monotone" dataKey="YOLO bird rate" stroke={COLOR_FOREST} strokeWidth={2} dot={false} connectNulls />
           <Line type="monotone" dataKey="Classifier label rate" stroke={COLOR_BLUE} strokeWidth={2} dot={false} connectNulls />
-          <Line type="monotone" dataKey="User-FP rate" stroke={COLOR_RED} strokeWidth={2} dot={false} connectNulls />
-          <Line type="monotone" dataKey="Classifier accuracy" stroke={COLOR_SAND} strokeWidth={2} dot={false} connectNulls />
+          <Line type="monotone" dataKey="NAB share of corrections" stroke={COLOR_RED} strokeWidth={2} dot={false} connectNulls />
+          <Line type="monotone" dataKey="Top-1 hit rate (on reviewed)" stroke={COLOR_SAND} strokeWidth={2} dot={false} connectNulls />
         </LineChart>
       </ResponsiveContainer>
-      <p className="text-xs text-slate-500 mt-1">
-        Gaps mean no data that day (e.g., no clips → no rates to compute).
-      </p>
+      <div className="text-xs text-slate-500 mt-2 space-y-1">
+        <p>
+          <span className="font-medium" style={{ color: COLOR_FOREST }}>YOLO bird rate</span> —
+          daylight clips where YOLO found anything (clips with detections ÷ daylight clips).
+        </p>
+        <p>
+          <span className="font-medium" style={{ color: COLOR_BLUE }}>Classifier label rate</span> —
+          detections the species classifier was confident enough to label (vs. rejecting as
+          "Unidentified"). Denominator: all detections that day.
+        </p>
+        <p>
+          <span className="font-medium" style={{ color: COLOR_RED }}>NAB share of corrections</span> —
+          of the detections you reviewed today, the fraction you marked "Not a bird."
+          A signal of false-positive pressure, but biased by what you chose to review.
+        </p>
+        <p>
+          <span className="font-medium" style={{ color: COLOR_SAND }}>Top-1 hit rate (on reviewed)</span> —
+          of detections where you confirmed a real species, the fraction where the classifier's
+          top-1 already matched. Biased downward: you mostly review wrong answers, so the true
+          population accuracy is higher. Gaps = no corrections-to-real-species that day.
+        </p>
+      </div>
     </section>
   );
 }
@@ -364,6 +389,195 @@ function TopSpeciesTable({ totals }: { totals: StatsResponse["totals"] }) {
     </section>
   );
 }
+
+// ─── Image-quality time series ───────────────────────────────────────────
+//
+// Sharpness (Laplacian variance) is THE bottleneck for the species
+// classifier per README's "future improvements" notes — small/blurry
+// feeder crops cap accuracy regardless of which model we run. Brightness
+// catches the other failure mode (predawn / dusk / cloudy crops the
+// daylight gate didn't fully exclude). Crop area tells us whether the
+// birds are getting closer or farther over time — moving the feeder
+// or zooming the camera should show up here.
+//
+// One stacked panel per metric. Median (p50) line + shaded p25–p75 band
+// so a single noisy day doesn't dominate. Reference dashed line for
+// the rough "too low" threshold called out on the Detection model
+// (sharpness < ~30 = too blurry; brightness < ~30 = too dark).
+const QUALITY_COLOR = "#0f766e"; // teal-700 — distinct from forest/blue
+const QUALITY_BAND = "rgba(15, 118, 110, 0.15)";
+
+type QualityMetric = "sharpness" | "brightness" | "area_px";
+type QualityRow = {
+  date: string;
+  p25: number | null;
+  p50: number | null;
+  p75: number | null;
+  n: number;
+};
+
+function ImageQualityPanel({
+  daily,
+  metric,
+  title,
+  unit,
+  badThreshold,
+  badLabel,
+}: {
+  daily: DailyStats[];
+  metric: QualityMetric;
+  title: string;
+  unit: string;
+  badThreshold?: number;
+  badLabel?: string;
+}) {
+  const rows = useMemo<QualityRow[]>(
+    () =>
+      daily.map((d) => {
+        const cq = d.payload.crop_quality?.[metric];
+        return {
+          date: shortDate(d.date),
+          p25: cq?.p25 ?? null,
+          p50: cq?.p50 ?? null,
+          p75: cq?.p75 ?? null,
+          n: cq?.n ?? 0,
+        };
+      }),
+    [daily, metric],
+  );
+
+  const hasData = rows.some((r) => r.p50 !== null);
+  if (!hasData) {
+    return (
+      <div className="bg-white rounded-lg shadow-sm p-3">
+        <h4 className="text-xs font-semibold text-slate-700 mb-1">{title}</h4>
+        <p className="text-xs text-slate-500">
+          No data yet — populated as new detections come in after the crop-quality
+          column shipped, or backfill via{" "}
+          <code className="bg-slate-100 px-1 rounded">scripts/backfill_crop_quality.py</code>.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white rounded-lg shadow-sm p-3">
+      <h4 className="text-xs font-semibold text-slate-700 mb-1">{title}</h4>
+      <ResponsiveContainer width="100%" height={150}>
+        <ComposedChart data={rows} margin={{ left: -10, right: 10, top: 4, bottom: 4 }}>
+          <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" />
+          <XAxis dataKey="date" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
+          <YAxis tick={{ fontSize: 10 }} />
+          <Tooltip
+            formatter={(v, name, p) => {
+              if (v == null) return "—";
+              const n = p.payload?.n ?? 0;
+              const valStr = `${Number(v).toFixed(metric === "area_px" ? 0 : 1)} ${unit}`;
+              return [valStr, `${name}  (n=${n})`];
+            }}
+          />
+          {MODEL_MARKERS.map((m) => (
+            <ReferenceLine
+              key={m.date}
+              x={m.date}
+              stroke={COLOR_SLATE}
+              strokeDasharray="2 3"
+            />
+          ))}
+          {badThreshold !== undefined && (
+            <ReferenceLine
+              y={badThreshold}
+              stroke={COLOR_RED}
+              strokeDasharray="3 3"
+              label={{
+                value: badLabel ?? `< ${badThreshold}`,
+                position: "insideBottomRight",
+                fontSize: 10,
+                fill: COLOR_RED,
+              }}
+            />
+          )}
+          {/* Shaded p25–p75 band. Recharts draws the lower bound first
+              (transparent) then the upper bound on top — the trick is to
+              stack a transparent Area at p25 + a colored Area at (p75 −
+              p25) to get a band. Easier: two semi-transparent Areas
+              independently anchored at zero would lie about the lower
+              bound. We use Recharts' base-band trick via two Areas with
+              the same stackId. */}
+          <Area
+            type="monotone"
+            dataKey="p25"
+            stackId="band"
+            stroke="none"
+            fill="transparent"
+            isAnimationActive={false}
+          />
+          <Area
+            type="monotone"
+            dataKey={(r: QualityRow) =>
+              r.p25 !== null && r.p75 !== null ? r.p75 - r.p25 : null
+            }
+            name="p25–p75"
+            stackId="band"
+            stroke="none"
+            fill={QUALITY_BAND}
+            isAnimationActive={false}
+          />
+          <Line
+            type="monotone"
+            dataKey="p50"
+            name="median"
+            stroke={QUALITY_COLOR}
+            strokeWidth={2}
+            dot={false}
+            connectNulls
+          />
+        </ComposedChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+function ImageQuality({ daily }: { daily: DailyStats[] }) {
+  return (
+    <section className="bg-white rounded-lg shadow-sm p-3">
+      <h3 className="text-sm font-semibold mb-2">Image quality (30d)</h3>
+      <p className="text-xs text-slate-500 mb-3">
+        Per-day crop-quality percentiles (teal line = median, shaded band = p25–p75).
+        Computed after CLAHE, before classifier resize. Sharpness is the bottleneck
+        we care most about — the species classifier maxes out at whatever this
+        line allows. A drop in median sharpness after a model swap means the
+        new model is seeing different (likely worse) crops, not failing in
+        absolute terms.
+      </p>
+      <div className="grid gap-3 md:grid-cols-3">
+        <ImageQualityPanel
+          daily={daily}
+          metric="sharpness"
+          title="Sharpness (Laplacian variance)"
+          unit=""
+          badThreshold={30}
+          badLabel="~too blurry"
+        />
+        <ImageQualityPanel
+          daily={daily}
+          metric="brightness"
+          title="Brightness (mean grayscale, 0–255)"
+          unit=""
+          badThreshold={30}
+          badLabel="~too dark"
+        />
+        <ImageQualityPanel
+          daily={daily}
+          metric="area_px"
+          title="Crop area (px²)"
+          unit="px²"
+        />
+      </div>
+    </section>
+  );
+}
+
 
 // ─── Hour-of-day heatmap ─────────────────────────────────────────────────
 
@@ -560,6 +774,7 @@ export default function Stats() {
       <HeadlineCards data={data} />
       <FunnelChart daily={data.daily} />
       <RatesChart daily={data.daily} />
+      <ImageQuality daily={data.daily} />
       <TrainingDataCard totals={data.totals} />
       <SpeciesAccuracy totals={data.totals} />
       <TopSpeciesTable totals={data.totals} />

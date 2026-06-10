@@ -126,6 +126,14 @@ export type DailyStats = {
   payload: {
     hour_of_day?: number[];
     yolo_confidence_hist?: { nab: number[]; species: number[] };
+    // Per-day crop-quality percentiles. Each metric is nullable when no
+    // detections that day had the column populated (legacy rows
+    // pre-backfill, or no detections at all).
+    crop_quality?: {
+      sharpness: { p25: number; p50: number; p75: number; n: number } | null;
+      brightness: { p25: number; p50: number; p75: number; n: number } | null;
+      area_px: { p25: number; p50: number; p75: number; n: number } | null;
+    };
     [k: string]: unknown;
   };
 };
