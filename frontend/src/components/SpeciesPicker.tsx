@@ -97,6 +97,15 @@ export default function SpeciesPicker({
 
   const comparePane = hovered ?? (current ? { name: current, url: currentRefUrl } : null);
 
+  // Keep the last reference URL we showed so the <img> elements in the
+  // right compare pane stay mounted with a valid src across the
+  // entire picker session. Without this, hovering from a row with a
+  // photo to a sentinel (no photo) and back tears down the imgs and
+  // reinserts them — the visible "flash + jitter" the user reports.
+  const lastUrlRef = useRef<string | null>(null);
+  if (comparePane?.url) lastUrlRef.current = comparePane.url;
+  const stableUrl = comparePane?.url ?? lastUrlRef.current;
+
   if (!open) return null;
 
   const rowBase =
@@ -144,23 +153,36 @@ export default function SpeciesPicker({
               </span>
             </div>
             <div className="relative bg-panel aspect-[4/3] overflow-hidden">
-              {comparePane && comparePane.url ? (
+              {/* Stable DOM: the two <img>s and the label are always
+                  mounted whenever we've ever shown a reference photo in
+                  this picker session. `style.visibility` hides them when
+                  the currently-hovered row has no URL, instead of
+                  unmounting them — which is what was causing the flash
+                  + jitter when hovering between rows-with-photos and
+                  sentinels-without. The placeholder div is the only
+                  conditionally-mounted element. */}
+              {stableUrl && (
                 <>
                   <img
-                    src={comparePane.url}
+                    src={stableUrl}
                     aria-hidden
                     className="absolute inset-0 w-full h-full object-cover blur-2xl scale-110 opacity-60"
+                    style={{ visibility: comparePane?.url ? "visible" : "hidden" }}
                   />
                   <img
-                    src={comparePane.url}
-                    alt={comparePane.name}
+                    src={stableUrl}
+                    alt={comparePane?.name ?? ""}
                     className="relative w-full h-full object-contain"
+                    style={{ visibility: comparePane?.url ? "visible" : "hidden" }}
                   />
-                  <span className="absolute top-1.5 left-1.5 right-1.5 px-1.5 py-0.5 rounded bg-surface/85 text-[10px] font-semibold text-ink truncate">
-                    {comparePane.name}
-                  </span>
                 </>
-              ) : (
+              )}
+              {comparePane?.url && (
+                <span className="absolute top-1.5 left-1.5 right-1.5 px-1.5 py-0.5 rounded bg-surface/85 text-[10px] font-semibold text-ink truncate">
+                  {comparePane.name}
+                </span>
+              )}
+              {!comparePane?.url && (
                 <div className="absolute inset-0 flex items-center justify-center text-[11px] text-faint text-center px-3 whitespace-pre-line">
                   {comparePane
                     ? `${comparePane.name}\n(no reference photo)`
