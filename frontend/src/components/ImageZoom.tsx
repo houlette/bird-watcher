@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { createPortal } from "react-dom";
 
 import { CloseIcon } from "./FieldIcons";
 
@@ -26,7 +27,11 @@ export default function ImageZoom({ src, alt, onClose }: Props) {
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  return (
+  // Portal so the fixed-position overlay lays out against the viewport
+  // instead of the parent DetectionCard, which has a transform-on-hover
+  // (`.fg-liftable`) that creates a containing block for fixed
+  // descendants and traps the overlay inside the card's bounds.
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4 cursor-zoom-out backdrop-blur-sm bg-[color-mix(in_oklab,#0f110c_88%,transparent)]"
       onClick={onClose}
@@ -48,6 +53,7 @@ export default function ImageZoom({ src, alt, onClose }: Props) {
       >
         <CloseIcon size={20} />
       </button>
-    </div>
+    </div>,
+    document.body,
   );
 }

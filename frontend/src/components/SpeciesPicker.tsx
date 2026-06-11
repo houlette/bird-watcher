@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 
 import { fetchSpecies, type FamilyEntry, type SpeciesEntry } from "../lib/api";
@@ -113,7 +114,14 @@ export default function SpeciesPicker({
   const activeRow = "bg-[color-mix(in_oklab,var(--accent)_12%,transparent)] font-semibold text-ink";
   const sectionLabel = "fg-overline px-3.5 pt-3 pb-1 bg-panel/40 border-t border-line";
 
-  return (
+  // Render via portal so `position: fixed` is laid out against the
+  // viewport, not against whichever ancestor happens to be transformed.
+  // The parent DetectionCard uses `.fg-liftable`, which applies a
+  // `translateY(-2px)` on hover — and `transform` creates a containing
+  // block for fixed descendants, which trapped the picker inside the
+  // card's bounds (tiny dialog) until the card unhovered (full dialog),
+  // producing the flash + jitter as hover state toggled.
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-start justify-center pt-20 backdrop-blur-sm bg-[color-mix(in_oklab,var(--ink)_52%,transparent)]"
       onClick={onCancel}
@@ -362,7 +370,8 @@ export default function SpeciesPicker({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
