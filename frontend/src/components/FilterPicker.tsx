@@ -2,24 +2,20 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { fetchSpecies, type SpeciesEntry } from "../lib/api";
+import { ChevronIcon } from "./FieldIcons";
 
 /**
- * Feed filter. Three states:
- *   - `{ mode: "all" }`             show every detection
- *   - `{ mode: "unidentified" }`    only species_id IS NULL
- *   - `{ mode: "species", name }`   only this species (by common name)
- *
- * The picker is a small modal that mirrors SpeciesPicker's structure: the
- * two special modes pinned at top, then yard + broader NA species lists
- * with a typeahead. Selecting a row closes the modal.
+ * Feed filter. Mirrors SpeciesPicker's structure: special modes pinned at
+ * top, then yard + broader NA species lists with a typeahead. Selecting a
+ * row closes the modal.
  */
 export type Filter =
   | { mode: "all" }
   | { mode: "unidentified" }
-  | { mode: "awaiting_review" }    // classifier-labeled, user hasn't acted yet
-  | { mode: "llm_review" }         // HIGH-confidence committed labels
-  | { mode: "llm_medium_review" }  // MEDIUM-confidence — quick-review queue
-  | { mode: "bad_quality" }        // too dark / small / blurry
+  | { mode: "awaiting_review" } // classifier-labeled, user hasn't acted yet
+  | { mode: "llm_review" } // HIGH-confidence committed labels
+  | { mode: "llm_medium_review" } // MEDIUM-confidence — quick-review queue
+  | { mode: "bad_quality" } // too dark / small / blurry
   | { mode: "species"; name: string };
 
 type Props = {
@@ -40,11 +36,29 @@ export function filterLabel(f: Filter): string {
     case "llm_medium_review":
       return "LLM-labeled MEDIUM (review)";
     case "bad_quality":
-      return "🚧 Bad crops";
+      return "Bad crops";
     case "species":
       return f.name;
   }
 }
+
+// Pinned non-species modes, with a short hint for the row subtitle.
+const PINNED: { filter: Filter; label: string; hint?: string }[] = [
+  { filter: { mode: "all" }, label: "All birds" },
+  { filter: { mode: "unidentified" }, label: "Unidentified only", hint: "species_id IS NULL" },
+  {
+    filter: { mode: "awaiting_review" },
+    label: "Awaiting review",
+    hint: "classifier labeled, not yet reviewed",
+  },
+  { filter: { mode: "llm_review" }, label: "LLM-labeled HIGH", hint: "auto-committed" },
+  {
+    filter: { mode: "llm_medium_review" },
+    label: "LLM-labeled MEDIUM",
+    hint: "quick-review queue",
+  },
+  { filter: { mode: "bad_quality" }, label: "Bad crops", hint: "too small / dark / blurry" },
+];
 
 export default function FilterPicker({ value, onChange }: Props) {
   const [open, setOpen] = useState(false);
@@ -79,38 +93,45 @@ export default function FilterPicker({ value, onChange }: Props) {
     setOpen(false);
   };
 
+  const isActive = (f: Filter) =>
+    f.mode === value.mode && (f.mode !== "species" || true);
+
+  const rowBase =
+    "w-full text-left px-3.5 py-2.5 text-sm border-b border-line/60 transition-colors hover:bg-[color-mix(in_oklab,var(--accent)_10%,transparent)]";
+  const activeRow = "bg-[color-mix(in_oklab,var(--accent)_12%,transparent)] font-semibold text-ink";
+
   return (
     <>
       <button
         type="button"
-        className="px-3 py-1 text-sm rounded border bg-white text-slate-700 border-slate-200 hover:border-forest hover:text-forest inline-flex items-center gap-1"
+        className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface px-3 py-1.5 text-sm text-muted hover:border-leaf hover:text-leaf transition-colors"
         onClick={() => setOpen(true)}
         title="Filter the feed"
       >
-        <span className="text-slate-400">Filter:</span>
-        <span className="font-medium">{filterLabel(value)}</span>
-        <span className="text-slate-400">▾</span>
+        <span className="text-faint">Filter:</span>
+        <span className="font-semibold text-ink">{filterLabel(value)}</span>
+        <ChevronIcon size={14} className="text-faint" />
       </button>
 
       {open && (
         <div
-          className="fixed inset-0 bg-black/40 z-50 flex items-start justify-center pt-16"
+          className="fixed inset-0 z-50 flex items-start justify-center pt-16 backdrop-blur-sm bg-[color-mix(in_oklab,var(--ink)_52%,transparent)]"
           onClick={() => setOpen(false)}
           role="dialog"
           aria-modal="true"
         >
           <div
-            className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 max-h-[75vh] flex flex-col"
+            className="fg-card shadow-pop w-full max-w-md mx-4 max-h-[75vh] flex flex-col overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="p-3 border-b">
+            <div className="p-3 border-b border-line">
               <input
                 ref={inputRef}
                 type="text"
                 placeholder="Search species…"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 rounded outline-none focus:border-forest"
+                className="fg-input"
                 onKeyDown={(e) => {
                   if (e.key === "Escape") setOpen(false);
                 }}
@@ -118,84 +139,41 @@ export default function FilterPicker({ value, onChange }: Props) {
             </div>
 
             <div className="overflow-y-auto flex-1">
-              {/* Pinned: All birds / Unidentified — always shown above the
-                  species list so the user can jump back to the default view
-                  or to the "needs labeling" queue without scrolling. */}
-              <button
-                className={`w-full text-left px-3 py-2 hover:bg-slate-50 text-sm border-b border-slate-100 ${
-                  value.mode === "all" ? "bg-cream font-semibold" : ""
-                }`}
-                onClick={() => pick({ mode: "all" })}
-              >
-                All birds
-              </button>
-              <button
-                className={`w-full text-left px-3 py-2 hover:bg-slate-50 text-sm border-b border-slate-100 ${
-                  value.mode === "unidentified" ? "bg-cream font-semibold" : ""
-                }`}
-                onClick={() => pick({ mode: "unidentified" })}
-              >
-                ❓ Unidentified only
-              </button>
-              <button
-                className={`w-full text-left px-3 py-2 hover:bg-slate-50 text-sm border-b border-slate-100 ${
-                  value.mode === "awaiting_review" ? "bg-cream font-semibold" : ""
-                }`}
-                onClick={() => pick({ mode: "awaiting_review" })}
-                title="Classifier labeled them; you haven't reviewed yet. ✓ Confirm to record agreement, ✏️ to change."
-              >
-                📋 Awaiting review
-              </button>
-              <button
-                className={`w-full text-left px-3 py-2 hover:bg-slate-50 text-sm border-b border-slate-100 ${
-                  value.mode === "llm_review" ? "bg-cream font-semibold" : ""
-                }`}
-                onClick={() => pick({ mode: "llm_review" })}
-                title="HIGH-confidence LLM labels (already auto-committed)."
-              >
-                ✨ LLM-labeled HIGH
-              </button>
-              <button
-                className={`w-full text-left px-3 py-2 hover:bg-slate-50 text-sm border-b border-slate-200 ${
-                  value.mode === "llm_medium_review" ? "bg-cream font-semibold" : ""
-                }`}
-                onClick={() => pick({ mode: "llm_medium_review" })}
-                title="MEDIUM-confidence LLM labels — quick-review queue: ✓ Confirm, 🚫 NAB, or ✏️ Change."
-              >
-                ⚠️ LLM-labeled MEDIUM (review)
-              </button>
-              <button
-                className={`w-full text-left px-3 py-2 hover:bg-slate-50 text-sm border-b border-slate-200 ${
-                  value.mode === "bad_quality" ? "bg-cream font-semibold" : ""
-                }`}
-                onClick={() => pick({ mode: "bad_quality" })}
-                title="Crops that are too small (<80px), too dark (mean <30), or too blurry (Laplacian variance <30). Use for triage — mass-NAB the unusable, or sort to the bottom of review piles."
-              >
-                🚧 Bad crops
-              </button>
+              {PINNED.map((p) => (
+                <button
+                  key={p.label}
+                  className={`${rowBase} flex items-center justify-between gap-2 ${
+                    isActive(p.filter) && value.mode !== "species" ? activeRow : ""
+                  }`}
+                  onClick={() => pick(p.filter)}
+                >
+                  <span>{p.label}</span>
+                  {p.hint && <span className="text-xs text-faint">{p.hint}</span>}
+                </button>
+              ))}
 
-              {isLoading && <p className="p-3 text-sm text-slate-500">Loading species…</p>}
+              {isLoading && <p className="p-3 text-sm text-muted">Loading species…</p>}
               {!isLoading && yardFiltered.length === 0 && extraFiltered.length === 0 && query && (
-                <p className="p-3 text-sm text-slate-500">No species match "{query}".</p>
+                <p className="p-3 text-sm text-muted">No species match "{query}".</p>
               )}
 
               {yardFiltered.length > 0 && (
                 <>
-                  <div className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wide text-slate-400 bg-slate-50/50">
+                  <div className="fg-overline px-3.5 pt-3 pb-1 bg-panel/40">
                     Heard in this yard
                   </div>
                   <ul>
                     {yardFiltered.map((s) => (
                       <li key={`yard-${s.name}`}>
                         <button
-                          className={`w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center justify-between text-sm ${
-                            value.mode === "species" && value.name === s.name ? "bg-cream font-semibold" : ""
+                          className={`${rowBase} flex items-center justify-between ${
+                            value.mode === "species" && value.name === s.name ? activeRow : ""
                           }`}
                           onClick={() => pick({ mode: "species", name: s.name })}
                         >
                           <span>{s.name}</span>
                           {s.total > 0 && (
-                            <span className="text-xs text-slate-400">
+                            <span className="text-xs text-faint tnum">
                               {s.total >= 1000 ? `${Math.round(s.total / 1000)}k` : s.total}
                             </span>
                           )}
@@ -208,15 +186,15 @@ export default function FilterPicker({ value, onChange }: Props) {
 
               {extraFiltered.length > 0 && (
                 <>
-                  <div className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wide text-slate-400 bg-slate-50/50 border-t border-slate-100">
+                  <div className="fg-overline px-3.5 pt-3 pb-1 bg-panel/40 border-t border-line">
                     Other North American species
                   </div>
                   <ul>
                     {extraFiltered.map((s) => (
                       <li key={`extra-${s.name}`}>
                         <button
-                          className={`w-full text-left px-3 py-2 hover:bg-slate-50 text-sm ${
-                            value.mode === "species" && value.name === s.name ? "bg-cream font-semibold" : ""
+                          className={`${rowBase} ${
+                            value.mode === "species" && value.name === s.name ? activeRow : ""
                           }`}
                           onClick={() => pick({ mode: "species", name: s.name })}
                         >

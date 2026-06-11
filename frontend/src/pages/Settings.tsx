@@ -2,6 +2,25 @@ import { useEffect, useState } from "react";
 
 import { getState, subscribe, unsubscribe, type PushState } from "../lib/push";
 
+// Small note box for the non-actionable push states (unsupported / not
+// configured / denied). Tinted with the rust accent so it reads as
+// "attention needed" within the field-guide palette.
+function NoteBox({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="rounded-card border border-[color-mix(in_oklab,var(--rust)_35%,var(--line))] bg-[color-mix(in_oklab,var(--rust)_8%,var(--card))] px-3.5 py-3 text-sm text-ink">
+      {children}
+    </div>
+  );
+}
+
+function Code({ children }: { children: React.ReactNode }) {
+  return (
+    <code className="px-1 mx-0.5 rounded bg-panel border border-line text-[0.85em] text-ink">
+      {children}
+    </code>
+  );
+}
+
 export default function Settings() {
   const [state, setState] = useState<PushState | null>(null);
   const [windowDays, setWindowDays] = useState(30);
@@ -40,93 +59,93 @@ export default function Settings() {
     }
   };
 
-  if (!state) return <p className="text-slate-500">Loading…</p>;
+  if (!state) return <p className="text-muted mt-4">Loading…</p>;
 
   return (
-    <div className="space-y-6">
-      <h2 className="text-lg font-semibold">Notifications</h2>
-
-      {state.kind === "unsupported" && (
-        <p className="text-sm text-slate-600">
-          This browser doesn't support Web Push. Try Chrome on Android, or any recent desktop browser.
+    <div className="max-w-xl">
+      <div className="mb-5">
+        <div className="fg-overline">Preferences</div>
+        <h2 className="font-serif font-medium text-2xl text-ink leading-tight mt-0.5">
+          Notifications
+        </h2>
+        <p className="text-sm text-muted mt-1">
+          A push alert when a rarely-seen species shows up at the feeder.
         </p>
-      )}
+      </div>
 
-      {state.kind === "not_configured" && (
-        <p className="text-sm text-amber-700">
-          Push notifications aren't configured on the server yet. Run
-          <code className="px-1 mx-1 bg-slate-100 rounded text-xs">
-            scripts/generate_vapid_keys.py
-          </code>
-          and restart the backend.
-        </p>
-      )}
+      <div className="space-y-5">
+        {state.kind === "unsupported" && (
+          <NoteBox>
+            This browser doesn't support Web Push. Try Chrome on Android, or any recent
+            desktop browser.
+          </NoteBox>
+        )}
 
-      {state.kind === "denied" && (
-        <p className="text-sm text-amber-700">
-          Notification permission is blocked in your browser settings. Open site permissions and re-allow notifications,
-          then reload this page.
-        </p>
-      )}
+        {state.kind === "not_configured" && (
+          <NoteBox>
+            Push notifications aren't configured on the server yet. Run{" "}
+            <Code>scripts/generate_vapid_keys.py</Code> and restart the backend.
+          </NoteBox>
+        )}
 
-      {(state.kind === "subscribed" || state.kind === "unsubscribed") && (
-        <>
-          <div className="space-y-2">
-            <label className="block text-sm font-medium">
-              Notify on first sighting within the last
-              <span className="ml-2 inline-block w-16 text-right">{windowDays}</span> days
-            </label>
-            <input
-              type="range"
-              min={1}
-              max={90}
-              value={windowDays}
-              onChange={(e) => setWindowDays(Number(e.target.value))}
-              className="w-full"
-              disabled={busy}
-            />
-            <p className="text-xs text-slate-500">
-              A bird species that hasn't been seen in this many days triggers a push. Larger = quieter (more
-              memorable arrivals only). Smaller = chattier.
-            </p>
-          </div>
+        {state.kind === "denied" && (
+          <NoteBox>
+            Notification permission is blocked in your browser settings. Open site
+            permissions and re-allow notifications, then reload this page.
+          </NoteBox>
+        )}
 
-          {state.kind === "subscribed" ? (
-            <div className="flex gap-2">
-              <button
-                onClick={onSubscribe}
+        {(state.kind === "subscribed" || state.kind === "unsubscribed") && (
+          <>
+            <div className="fg-card p-4">
+              <label className="block text-sm font-semibold text-ink">
+                Notify on first sighting within the last{" "}
+                <span className="font-serif text-leaf text-lg tnum">{windowDays}</span> days
+              </label>
+              <input
+                type="range"
+                min={1}
+                max={90}
+                value={windowDays}
+                onChange={(e) => setWindowDays(Number(e.target.value))}
+                className="fg-range w-full mt-3"
                 disabled={busy}
-                className="px-4 py-2 bg-forest text-cream rounded text-sm font-medium disabled:opacity-50"
-              >
-                {busy ? "Updating…" : "Save window setting"}
-              </button>
-              <button
-                onClick={onUnsubscribe}
-                disabled={busy}
-                className="px-4 py-2 bg-white border border-slate-300 rounded text-sm disabled:opacity-50"
-              >
-                Turn off notifications
-              </button>
+              />
+              <div className="flex justify-between text-[11px] text-faint mt-1 tnum">
+                <span>1 day · chatty</span>
+                <span>90 days · only memorable arrivals</span>
+              </div>
+              <p className="text-xs text-muted mt-3">
+                A bird species that hasn't been seen in this many days triggers a push.
+                Larger = quieter; smaller = chattier.
+              </p>
             </div>
-          ) : (
-            <button
-              onClick={onSubscribe}
-              disabled={busy}
-              className="px-4 py-2 bg-forest text-cream rounded text-sm font-medium disabled:opacity-50"
-            >
-              {busy ? "Subscribing…" : "Enable bird notifications"}
-            </button>
-          )}
-        </>
-      )}
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+            {state.kind === "subscribed" ? (
+              <div className="flex flex-wrap gap-2.5">
+                <button onClick={onSubscribe} disabled={busy} className="fg-btn-primary px-4 py-2 text-sm">
+                  {busy ? "Updating…" : "Save window setting"}
+                </button>
+                <button onClick={onUnsubscribe} disabled={busy} className="fg-btn-ghost px-4 py-2 text-sm">
+                  Turn off notifications
+                </button>
+              </div>
+            ) : (
+              <button onClick={onSubscribe} disabled={busy} className="fg-btn-primary px-4 py-2 text-sm">
+                {busy ? "Subscribing…" : "Enable bird notifications"}
+              </button>
+            )}
+          </>
+        )}
 
-      {state.kind === "subscribed" && (
-        <p className="text-xs text-slate-500 break-all">
-          Subscribed endpoint: <code>{state.endpoint.slice(0, 60)}…</code>
-        </p>
-      )}
+        {error && <p className="text-sm text-rust">{error}</p>}
+
+        {state.kind === "subscribed" && (
+          <p className="text-xs text-faint break-all">
+            Subscribed endpoint: <Code>{state.endpoint.slice(0, 60)}…</Code>
+          </p>
+        )}
+      </div>
     </div>
   );
 }

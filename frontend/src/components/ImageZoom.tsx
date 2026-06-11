@@ -1,5 +1,7 @@
 import { useEffect } from "react";
 
+import { CloseIcon } from "./FieldIcons";
+
 type Props = {
   src: string;
   alt: string;
@@ -12,7 +14,8 @@ type Props = {
  * pinch-zoom works on the <img> for finer inspection.
  *
  * Anchored at z-50 so it sits above the sticky toolbar and the bottom
- * action bars.
+ * action bars. The scrim is a deep ink wash (not pure black) so it reads
+ * as part of the field-guide palette rather than a system dialog.
  */
 export default function ImageZoom({ src, alt, onClose }: Props) {
   useEffect(() => {
@@ -25,7 +28,7 @@ export default function ImageZoom({ src, alt, onClose }: Props) {
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4 cursor-zoom-out"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 cursor-zoom-out backdrop-blur-sm bg-[color-mix(in_oklab,#0f110c_88%,transparent)]"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
@@ -34,19 +37,16 @@ export default function ImageZoom({ src, alt, onClose }: Props) {
       <img
         src={src}
         alt={alt}
-        className="max-w-full max-h-full object-contain"
-        // Stop-propagation so tapping the image itself doesn't close —
-        // user can drag/pinch-zoom on the img; closing requires the
-        // backdrop or the close button.
+        className="max-w-full max-h-full object-contain rounded-card"
         onClick={(e) => e.stopPropagation()}
         draggable={false}
       />
       <button
-        className="absolute top-4 right-4 text-white/80 hover:text-white text-3xl leading-none"
+        className="absolute top-4 right-4 grid place-items-center w-10 h-10 rounded-full text-white/80 hover:text-white bg-white/10 hover:bg-white/20 transition-colors"
         onClick={onClose}
         aria-label="Close preview"
       >
-        ×
+        <CloseIcon size={20} />
       </button>
     </div>
   );

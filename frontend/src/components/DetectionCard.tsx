@@ -10,23 +10,28 @@ import {
 import AudioBadge from "./AudioBadge";
 import ImageZoom from "./ImageZoom";
 import SpeciesPicker, { NOT_A_BIRD, POOR_QUALITY } from "./SpeciesPicker";
+import { BanIcon, CheckIcon, EditIcon, FogIcon, ZoomIcon } from "./FieldIcons";
 
 type DetectionCardProps = {
   detection: Detection;
   compact?: boolean;
   // When `selected` is non-undefined the card opts into bulk-select mode:
   // the checkbox appears, the card gains a ring when selected, and tapping
-  // the image toggles selection. When undefined, the card is "view-only"
-  // (which is how we render in any context without a bulk-action bar).
+  // the image toggles selection. When undefined, the card is "view-only".
   selected?: boolean;
   onToggleSelect?: () => void;
   // When true, classifier-labeled-but-unreviewed cards swap the default
-  // "Wrong species?" row for a ✓ Confirm / 🚫 NAB / ✏️ Change row, so the
-  // user can record true positives. Set by the Feed's "Awaiting review"
-  // filter. Other filters (default, species, NAB, etc.) leave the card
-  // visually unchanged.
+  // "Wrong species?" row for a Confirm / NAB / Change row.
   reviewMode?: boolean;
 };
+
+// Confidence → tier. Drives the ribbon under the crop and the dot in the
+// meta line: leaf (high) / muted-leaf (mid) / rust (low).
+function confTier(p: number): "high" | "mid" | "low" {
+  if (p >= 0.85) return "high";
+  if (p >= 0.6) return "mid";
+  return "low";
+}
 
 export default function DetectionCard({
   detection,
@@ -36,34 +41,27 @@ export default function DetectionCard({
   reviewMode = false,
 }: DetectionCardProps) {
   const selectable = selected !== undefined && onToggleSelect !== undefined;
-  // Show CAPTURE time (when the camera saw the bird), not the row's
-  // processing time. The API tags captured_at as naive UTC; JS's Date
-  // parser interprets a naive ISO string as local time, so append 'Z'
-  // before parsing to treat it as UTC and let toLocaleString convert
-  // to the viewer's local zone.
+  // Show CAPTURE time (when the camera saw the bird). The API tags
+  // captured_at as naive UTC; append 'Z' so JS parses it as UTC and
+  // toLocaleString converts to the viewer's zone.
   const time = new Date(detection.captured_at + "Z").toLocaleString();
   const [pickerOpen, setPickerOpen] = useState(false);
   const [zoomOpen, setZoomOpen] = useState(false);
   const queryClient = useQueryClient();
 
+  const identified = detection.species !== null;
+  const pct = Math.round(detection.confidence * 100);
+  const tier = confTier(detection.confidence);
+
   const correctionMutation = useMutation({
     mutationFn: (species: string) => submitCorrection(detection.id, species),
     onSuccess: () => {
-      // Optimistic refresh of the feed — the backend updates Detection.species_id
-      // in place, so the corrected label appears on the next refetch.
       queryClient.invalidateQueries({ queryKey: ["detections"] });
       setPickerOpen(false);
     },
   });
 
-  // The ✓ Confirm button has two call-sites with two endpoints:
-  //   - MEDIUM LLM review: promotes the existing llm-claude-medium
-  //     Correction's source to llm-claude-confirmed.
-  //   - Awaiting-review (classifier output, no Correction yet): creates
-  //     a fresh Correction with source="user-confirmed" so we can
-  //     measure classifier true-positive rate.
-  // The card decides which to call based on whether there's already an
-  // llm-claude-medium Correction (the former).
+  // The Confirm button routes to one of two endpoints (see original notes).
   const isLlmMediumReview = detection.correction_source === "llm-claude-medium";
   const isAwaitingClassifierReview =
     reviewMode && detection.species !== null && detection.correction_source === null;
@@ -77,23 +75,23 @@ export default function DetectionCard({
     },
   });
 
+  // Outline state: selection (leaf), MEDIUM-review cohort (rust/warning),
+  // production-classifier review (soft leaf), or none.
   const ringClass = selected
-    ? "ring-2 ring-forest"
+    ? "ring-2 ring-leaf"
     : isLlmMediumReview
-      ? "ring-1 ring-amber-300"   // visual cue: distinguish MEDIUM-review cohort from HIGH
+      ? "ring-1 ring-rust/50"
       : isAwaitingClassifierReview
-        ? "ring-1 ring-blue-300"  // visual cue: production-classifier review
+        ? "ring-1 ring-leaf/40"
         : "ring-1 ring-transparent";
 
   return (
-    <div className={`bg-white rounded-lg shadow-sm overflow-hidden flex flex-col relative ${ringClass}`}>
+    <div
+      className={`fg-card fg-liftable overflow-hidden flex flex-col relative ${ringClass}`}
+    >
       {selectable && (
-        // Position the checkbox over the top-left of the image. Larger
-        // hit-target than a default 16-px input so mobile thumbs hit it
-        // reliably without zooming. Backdrop ensures contrast on bright
-        // crops.
         <label
-          className="absolute top-1 left-1 z-10 flex items-center justify-center w-7 h-7 rounded bg-white/80 backdrop-blur-sm cursor-pointer"
+          className="absolute top-2 left-2 z-10 flex items-center justify-center w-6 h-6 rounded-md bg-surface/85 backdrop-blur-sm border border-line cursor-pointer"
           onClick={(e) => e.stopPropagation()}
           aria-label={selected ? "Deselect" : "Select"}
         >
@@ -101,27 +99,24 @@ export default function DetectionCard({
             type="checkbox"
             checked={selected}
             onChange={onToggleSelect}
-            className="w-5 h-5 accent-forest cursor-pointer"
+            className="w-4 h-4 fg-range cursor-pointer"
           />
         </label>
       )}
-      {/* Crops vary in aspect ratio (a vertically-perched cardinal vs a
-          horizontally-strutting pigeon), but the feed grid is uniform 4:3.
-          `object-cover` previously clipped tall birds at the head/tail;
-          we now `object-contain` the actual crop and fill the surrounding
-          letterbox with a heavily-blurred copy of the same image. The
-          browser reuses the cached crop_url, so this adds essentially no
-          network cost — and visually we get the full bird with a soft,
-          ambient backdrop. */}
+
+      {/* Crop: heavily-blurred copy fills the 4:3 letterbox; the real crop is
+          object-contain on top so tall/wide birds aren't clipped. A leaf/rust
+          confidence ribbon runs along the bottom edge. */}
       <div
-        className={`relative w-full aspect-[4/3] overflow-hidden ${selectable ? "cursor-pointer" : "cursor-zoom-in"}`}
+        className={`group relative w-full aspect-[4/3] overflow-hidden bg-panel ${
+          selectable ? "cursor-pointer" : "cursor-zoom-in"
+        }`}
         onClick={selectable ? onToggleSelect : () => setZoomOpen(true)}
       >
         <img
           src={detection.crop_url}
           aria-hidden
-          // scale-110 hides the blur's edge halo at the card boundary.
-          className="absolute inset-0 w-full h-full object-cover blur-2xl scale-110"
+          className="absolute inset-0 w-full h-full object-cover blur-2xl scale-110 opacity-30 saturate-[.85]"
           loading="lazy"
         />
         <img
@@ -130,21 +125,25 @@ export default function DetectionCard({
           className="relative w-full h-full object-contain"
           loading="lazy"
         />
+        {!selectable && (
+          <span className="absolute right-2 bottom-2 z-[3] grid place-items-center w-6 h-6 rounded-full bg-surface/80 text-ink backdrop-blur-sm opacity-0 translate-y-1 transition group-hover:opacity-100 group-hover:translate-y-0">
+            <ZoomIcon size={14} />
+          </span>
+        )}
+        <div className={`fg-confbar tier-${tier}`} aria-hidden>
+          <span style={{ width: `${Math.max(6, pct)}%` }} />
+        </div>
       </div>
-      {/* In review mode (LLM-MEDIUM or Awaiting-review), stack a
-          reference photo of the proposed species directly below the
-          user's crop at the same width and aspect ratio. Lets the user
-          compare two same-size images side-by-side without leaving the
-          feed. A small "REF" badge in the corner distinguishes it from
-          the user's crop. Falls back to nothing if the species has no
-          reference URL (sentinel, family, or unfetched). */}
+
+      {/* Review mode: stack the proposed species' reference photo below the
+          crop at the same size for a direct A/B compare. */}
       {(isLlmMediumReview || isAwaitingClassifierReview) &&
         detection.reference_image_url && (
-          <div className="relative w-full aspect-[4/3] overflow-hidden border-t border-slate-200">
+          <div className="relative w-full aspect-[4/3] overflow-hidden border-t border-line">
             <img
               src={detection.reference_image_url}
               aria-hidden
-              className="absolute inset-0 w-full h-full object-cover blur-2xl scale-110 opacity-70"
+              className="absolute inset-0 w-full h-full object-cover blur-2xl scale-110 opacity-50"
               loading="lazy"
             />
             <img
@@ -156,162 +155,182 @@ export default function DetectionCard({
                 (e.currentTarget.parentElement as HTMLElement).style.display = "none";
               }}
             />
-            <span className="absolute top-1 left-1 px-1.5 py-0.5 rounded bg-white/85 text-[10px] font-medium text-slate-600 uppercase tracking-wide">
+            <span className="fg-overline absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded bg-surface/85">
               ref
             </span>
           </div>
         )}
-      <div className={`p-2 ${compact ? "text-xs" : "text-sm"}`}>
-        <div className="flex items-center justify-between gap-2">
-          <span className="font-semibold">{detection.species ?? "Unidentified"}</span>
+
+      <div className={`p-3 ${compact ? "text-xs" : "text-sm"}`}>
+        <div className="flex items-start justify-between gap-2">
+          <span
+            className={`font-serif leading-tight ${
+              identified ? "text-ink font-medium" : "text-muted italic"
+            } ${compact ? "text-sm" : "text-[16px]"}`}
+          >
+            {detection.species ?? "Unidentified"}
+          </span>
           {detection.audio_confirmed && <AudioBadge />}
         </div>
-        <div className="text-slate-500">{Math.round(detection.confidence * 100)}% · {time}</div>
-        {/* Quality footer — only render when ALL three metrics are
-            populated (legacy rows have null). Each metric is rendered
-            in red when it crosses the "bad" threshold so the user can
-            triage at a glance: small (max bbox dim < 80), dark (< 30),
-            blurry (< 30). Bold "🚧" prefix when any of them trips. */}
-        {detection.crop_area_px != null && detection.brightness != null
-          && detection.sharpness != null && (() => {
+
+        <div className="mt-1.5 flex items-center gap-2 text-xs text-muted">
+          <span
+            className={`inline-flex items-center gap-1 font-semibold tnum ${
+              tier === "low" ? "text-rust" : tier === "mid" ? "text-muted" : "text-ink"
+            }`}
+          >
+            <i
+              className="w-1.5 h-1.5 rounded-full"
+              style={{
+                background:
+                  tier === "low"
+                    ? "var(--rust)"
+                    : tier === "mid"
+                      ? "color-mix(in oklab, var(--accent) 55%, var(--faint))"
+                      : "var(--accent)",
+              }}
+            />
+            {pct}%
+          </span>
+          <span className="text-faint tnum">{time}</span>
+        </div>
+
+        {/* Quality footer — only when all three metrics are populated. Each
+            turns rust when it crosses the "bad" threshold (80 / 30 / 30). */}
+        {detection.crop_area_px != null &&
+          detection.brightness != null &&
+          detection.sharpness != null &&
+          (() => {
             const maxDim = Math.round(Math.sqrt(detection.crop_area_px!));
             const isSmall = maxDim < 80;
             const isDark = detection.brightness! < 30;
             const isBlurry = detection.sharpness! < 30;
             const anyBad = isSmall || isDark || isBlurry;
             const cls = (bad: boolean) =>
-              bad ? "text-red-600 font-medium" : "text-slate-400";
+              bad ? "text-rust font-semibold" : "text-faint";
             return (
-              <div className="text-[10px] mt-0.5 flex gap-2 items-center"
-                   title="Per-crop quality: pixel size · mean brightness 0-255 · Laplacian-variance sharpness. Red = below the 'bad' threshold (80 / 30 / 30).">
-                {anyBad && <span className="text-amber-600" aria-hidden>🚧</span>}
-                <span className={cls(isSmall)}>📐 {maxDim}px</span>
-                <span className={cls(isDark)}>💡 {Math.round(detection.brightness!)}</span>
-                <span className={cls(isBlurry)}>✨ {Math.round(detection.sharpness!)}</span>
+              <div
+                className="mt-1.5 flex items-center gap-2.5 text-[10px] tnum"
+                title="Per-crop quality: pixel size · mean brightness 0-255 · Laplacian-variance sharpness. Rust = below the 'bad' threshold (80 / 30 / 30)."
+              >
+                {anyBad && (
+                  <span
+                    className="w-1.5 h-1.5 rounded-full"
+                    style={{ background: "var(--rust)" }}
+                    aria-hidden
+                  />
+                )}
+                <span className={cls(isSmall)}>{maxDim}px</span>
+                <span className="text-line">·</span>
+                <span className={cls(isDark)}>lum {Math.round(detection.brightness!)}</span>
+                <span className="text-line">·</span>
+                <span className={cls(isBlurry)}>shp {Math.round(detection.sharpness!)}</span>
               </div>
             );
           })()}
-        {/* When the label was generated by the LLM backlog-classifier pass,
-            surface the model's one-line rationale so the user can spot-check
-            without having to open and stare at every crop. Hidden when the
-            label came from the user or the production classifier. */}
-        {detection.correction_source === "llm-claude" && detection.correction_rationale && (
-          <div
-            className="text-xs text-slate-500 mt-0.5 italic"
-            title="LLM rationale — open SpeciesPicker if it's wrong"
-          >
-            <span aria-hidden>✨ </span>
-            <span>{detection.correction_rationale}</span>
-          </div>
-        )}
-        {/* Classifier's next-best guesses. dennisjooo's top-5 hit rate is much
-            higher than top-1, so showing the next 2 candidates with their
-            probabilities tells the user when the model was borderline and
-            often surfaces the right answer at a glance. Filter to ≥ 2% to
-            skip the noise tail; cap at 2 to keep the card compact. */}
+
+        {/* LLM rationale for backlog-classifier labels. */}
+        {detection.correction_source === "llm-claude" &&
+          detection.correction_rationale && (
+            <div
+              className="mt-1.5 flex gap-1.5 text-xs text-muted italic"
+              title="LLM rationale — open the species picker if it's wrong"
+            >
+              <span className="not-italic fg-overline shrink-0 mt-px text-leaf">AI</span>
+              <span>{detection.correction_rationale}</span>
+            </div>
+          )}
+
+        {/* Classifier's next-best guesses (top-1 excluded). */}
         {(() => {
           const alts = (detection.raw_predictions ?? [])
             .filter((p) => p.species && p.species !== detection.species && p.p >= 0.02)
             .slice(0, 2);
           if (alts.length === 0) return null;
-          // Two-line clamp instead of single-line truncate: the
-          // alternates are useful for sanity-checking the top-1, so
-          // the user would rather see "Northern Goshawk 14% · Cooper's
-          // Hawk 9%" than "Northern Goshawk…".
           return (
-            <div className="text-xs text-slate-400 mt-0.5 line-clamp-2">
+            <div className="mt-1 text-xs text-faint line-clamp-2 tnum">
               {alts.map((a) => `${a.species} ${Math.round(a.p * 100)}%`).join(" · ")}
             </div>
           );
         })()}
 
-        {/* Quick-review action row used by two filters: LLM-labeled MEDIUM
-            and "Awaiting review" (production classifier output). Same buttons,
-            same semantics; the ✓ mutation routes to the appropriate endpoint
-            based on the card's state. Three equal-width grid columns so the
-            pencil never gets clipped on narrow cards (the lg:grid-cols-5 feed
-            gives each card ~180px). Confirm becomes icon-only — green border
-            + checkmark + tooltip carry the meaning at a fraction of the
-            horizontal cost. */}
+        {/* Quick-review row: Confirm / NAB / Poor quality / Change.
+            Four columns. Poor quality retires the crop from any review
+            queue forever (same Correction-to-sentinel mechanism as NAB);
+            semantically "this image will never be identifiable, stop
+            showing it to me." Uses the FogIcon (dashed rules) and a
+            sand-tinted hover to distinguish from NAB's rust. */}
         {!compact && (isLlmMediumReview || isAwaitingClassifierReview) && (
-          // Four-column grid: ✓ confirm, 🚫 NAB, 🫥 Poor Quality, ✏️ change.
-          // 🫥 retires the crop from any review queue forever — same DB
-          // mechanism as NAB (a Correction to a sentinel species) but
-          // semantically "this image will never be identifiable, stop
-          // showing it to me." Useful for the blurry / tiny crops the
-          // classifier can't help with regardless of model.
-          <div className="mt-2 grid grid-cols-4 gap-1 text-xs">
+          <div className="mt-2.5 grid grid-cols-4 gap-1.5 text-xs">
             <button
-              className="px-1 py-1 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+              className="inline-flex items-center justify-center gap-1 px-1 py-1.5 rounded-md border text-leaf disabled:opacity-50 transition-colors hover:bg-[color-mix(in_oklab,var(--accent)_12%,transparent)]"
+              style={{ borderColor: "color-mix(in oklab, var(--accent) 40%, var(--line))" }}
               onClick={() => confirmMutation.mutate()}
               disabled={confirmMutation.isPending || correctionMutation.isPending}
               title="Confirm — keep this label"
               aria-label="Confirm"
             >
-              {confirmMutation.isPending ? "…" : "✓"}
+              {confirmMutation.isPending ? "…" : <CheckIcon size={15} />}
             </button>
             <button
-              className="px-1 py-1 rounded border border-slate-200 text-slate-600 hover:bg-red-50 hover:border-red-300 hover:text-red-700 disabled:opacity-50"
+              className="inline-flex items-center justify-center px-1 py-1.5 rounded-md border border-line text-muted hover:text-rust hover:border-rust disabled:opacity-50 transition-colors"
               onClick={() => correctionMutation.mutate(NOT_A_BIRD)}
               disabled={confirmMutation.isPending || correctionMutation.isPending}
               title="Mark as not a bird (false positive)"
               aria-label="Mark as not a bird"
             >
-              🚫
+              <BanIcon size={15} />
             </button>
             <button
-              className="px-1 py-1 rounded border border-slate-200 text-slate-600 hover:bg-amber-50 hover:border-amber-300 hover:text-amber-700 disabled:opacity-50"
+              className="inline-flex items-center justify-center px-1 py-1.5 rounded-md border border-line text-muted disabled:opacity-50 transition-colors hover:text-[color:var(--sand,#bc8a3e)] hover:border-[color:var(--sand,#bc8a3e)]"
               onClick={() => correctionMutation.mutate(POOR_QUALITY)}
               disabled={confirmMutation.isPending || correctionMutation.isPending}
               title="Poor quality — too blurry / small / dark to ever ID. Retires from review queues."
               aria-label="Mark as poor quality"
             >
-              🫥
+              <FogIcon size={15} />
             </button>
             <button
-              className="px-1 py-1 rounded border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+              className="inline-flex items-center justify-center px-1 py-1.5 rounded-md border border-line text-muted hover:text-ink disabled:opacity-50 transition-colors"
               onClick={() => setPickerOpen(true)}
               disabled={confirmMutation.isPending || correctionMutation.isPending}
               title="Change species"
               aria-label="Change species"
             >
-              ✏️
+              <EditIcon size={15} />
             </button>
           </div>
         )}
+
+        {/* Default row: Wrong species? + one-tap NAB. */}
         {!compact && !isLlmMediumReview && !isAwaitingClassifierReview && (
-          <div className="mt-2 flex items-center justify-between gap-2 text-xs">
+          <div className="mt-2.5 flex items-center justify-between gap-2 text-xs">
             <button
-              className="text-slate-500 hover:text-forest underline disabled:opacity-50"
+              className="text-muted hover:text-leaf underline underline-offset-2 disabled:opacity-50 transition-colors"
               onClick={() => setPickerOpen(true)}
               disabled={correctionMutation.isPending}
             >
               {correctionMutation.isPending ? "Saving…" : "Wrong species?"}
             </button>
-            {/* One-click false-positive label. Most "Unidentified" crops are
-                YOLO false positives (wind-stirred leaves, sun glints on the
-                feeder), and labeling them via the picker took 2 clicks plus
-                a scroll. This shortcut makes bulk labeling tractable; the
-                Detection is filtered out of the feed immediately afterward,
-                giving the user instant visual confirmation. */}
             <button
-              className="px-2 py-1 rounded border border-slate-200 text-slate-600 hover:bg-red-50 hover:border-red-300 hover:text-red-700 disabled:opacity-50"
+              className="inline-flex items-center justify-center px-2 py-1 rounded-md border border-line text-muted hover:text-rust hover:border-rust disabled:opacity-50 transition-colors"
               onClick={() => correctionMutation.mutate(NOT_A_BIRD)}
               disabled={correctionMutation.isPending}
               title="Mark as not a bird (false positive)"
               aria-label="Mark as not a bird"
             >
-              🚫
+              <BanIcon size={14} />
             </button>
           </div>
         )}
+
         {confirmMutation.isError && (
-          <p className="text-xs text-red-600 mt-1">
+          <p className="text-xs text-rust mt-1.5">
             Couldn't confirm: {(confirmMutation.error as Error).message}
           </p>
         )}
         {correctionMutation.isError && (
-          <p className="text-xs text-red-600 mt-1">
+          <p className="text-xs text-rust mt-1.5">
             Couldn't save correction: {(correctionMutation.error as Error).message}
           </p>
         )}
@@ -320,13 +339,7 @@ export default function DetectionCard({
       <SpeciesPicker
         open={pickerOpen}
         current={detection.species}
-        // The classifier's full top-K is already on the wire in raw_predictions.
-        // Surfacing it pinned at the top of the picker means the correct ID is
-        // often a single tap away when the top-1 is wrong (#2-#5 frequently
-        // contain it for borderline crops).
         suggestions={detection.raw_predictions}
-        // Enables the side-by-side compare strip: user's crop pinned next
-        // to the reference photo of whichever species they're hovering.
         cropUrl={detection.crop_url}
         onSelect={(name) => correctionMutation.mutate(name)}
         onCancel={() => setPickerOpen(false)}

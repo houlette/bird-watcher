@@ -10,24 +10,14 @@ const PAGE_SIZE = 50;
 
 type Props = {
   // "default": the normal feed (hides NAB).
-  // "nab": review-mode showing ONLY 'Not a bird'-labeled crops so the user
-  //   can audit past labels and re-correct mistakes via the SpeciesPicker.
+  // "nab": review-mode showing ONLY 'Not a bird'-labeled crops.
   mode?: "default" | "nab";
 };
 
 export default function Feed({ mode = "default" }: Props = {}) {
   const isNabReview = mode === "nab";
 
-  // Batch-edit mode: opt-in. Checkboxes are off by default to keep the
-  // browsing view uncluttered; the user taps "Select" to enter batch mode,
-  // makes selections, then bulk-labels (or cancels) — at which point we
-  // exit batch mode automatically.
   const [batchMode, setBatchMode] = useState(false);
-
-  // Selection state for bulk labeling. A Set keeps add/remove and "is it in
-  // here" cheap as the user scrolls through many cards. Selection persists
-  // through infinite-scroll page loads and the 30s feed refetch within the
-  // batch session; exiting batch mode clears it.
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const toggleSelect = useCallback((id: number) => {
     setSelectedIds((prev) => {
@@ -42,7 +32,6 @@ export default function Feed({ mode = "default" }: Props = {}) {
     setBatchMode(false);
   }, []);
 
-  // Feed filter — "All birds" by default. Locked to NAB-only on /labels.
   const [filter, setFilter] = useState<Filter>({ mode: "all" });
   const effectiveFilter: Filter = isNabReview ? { mode: "all" } : filter;
 
@@ -62,45 +51,30 @@ export default function Feed({ mode = "default" }: Props = {}) {
         before: pageParam || undefined,
         only_not_a_bird: isNabReview,
         only_unidentified: effectiveFilter.mode === "unidentified",
-        // "Awaiting review": classifier-labeled detections the user hasn't
-        // acted on yet. Surfaces the same ✓/🚫/✏️ row on the card so the
-        // user can record true positives, not just disagreements.
         awaiting_review: effectiveFilter.mode === "awaiting_review",
         species_name: effectiveFilter.mode === "species" ? effectiveFilter.name : undefined,
-        // LLM-review modes: filter by Correction.source.
-        //   llm_review        → HIGH-confidence committed (already reviewed)
-        //   llm_medium_review → MEDIUM, surfaced with ✓/🚫/✏️ buttons on the card
         source:
           effectiveFilter.mode === "llm_review"
             ? "llm-claude"
             : effectiveFilter.mode === "llm_medium_review"
               ? "llm-claude-medium"
               : undefined,
-        // "Bad crops" filter: too dark / small / blurry. Backend ORs
-        // the three quality thresholds; the user can mass-NAB these or
-        // skip them in review queues.
         bad_quality: effectiveFilter.mode === "bad_quality",
       }),
     initialPageParam: "" as string,
     getNextPageParam: (lastPage: Detection[]) => {
-      // The page is empty (or smaller than PAGE_SIZE → last page reached).
       if (lastPage.length < PAGE_SIZE) return undefined;
-      // Cursor for the next request is the last (oldest) row's compound cursor
-      // (capture-time | detection-id). The backend uses it to fetch the next
-      // chronologically-older page.
       return lastPage[lastPage.length - 1].cursor;
     },
   });
 
-  // Refresh the first page periodically so newly-captured detections appear
-  // at the top without the user reloading.
+  // Refresh the first page periodically so new detections appear at the top.
   useEffect(() => {
     const id = setInterval(() => refetch(), 30_000);
     return () => clearInterval(id);
   }, [refetch]);
 
-  // Intersection sentinel: when the placeholder at the bottom scrolls into
-  // view, fetch the next page automatically.
+  // Infinite-scroll sentinel.
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!hasNextPage) return;
@@ -112,30 +86,29 @@ export default function Feed({ mode = "default" }: Props = {}) {
           fetchNextPage();
         }
       },
-      { rootMargin: "200px" }, // start loading slightly before fully in view
+      { rootMargin: "200px" },
     );
     obs.observe(el);
     return () => obs.disconnect();
   }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
-  if (error) return <p className="text-red-600">Failed to load detections.</p>;
+  if (error) return <p className="text-rust mt-4">Failed to load detections.</p>;
 
   const detections = data?.pages.flat() ?? [];
   const isFiltered = effectiveFilter.mode !== "all";
 
-  // Sticky top toolbar — filter on the left (hidden on the /labels NAB-review
-  // page where the filter is meaningless), Select on the right. Extends to
-  // page edges with negative horizontal margins so the sticky background
-  // covers the full width as the grid scrolls underneath.
+  // Sticky toolbar — filter (left) + Select (right). Negative margins so the
+  // blurred sticky background covers the full content width.
   const toolbar = (
-    <div className="sticky top-0 z-30 bg-white border-b border-slate-200 -mx-4 px-4 py-2 flex items-center justify-between gap-2">
+    <div className="sticky top-0 z-30 -mx-4 px-4 py-2.5 mb-1 flex items-center justify-between gap-2 border-b border-line bg-[color-mix(in_oklab,var(--bg)_86%,transparent)] backdrop-blur">
       <div>{!isNabReview && <FilterPicker value={filter} onChange={setFilter} />}</div>
       <button
-        className={`px-3 py-1 text-sm rounded border ${
+        className={`rounded-full px-3.5 py-1.5 text-[12.5px] font-semibold border transition-colors ${
           batchMode
-            ? "bg-forest text-cream border-forest"
-            : "bg-white text-slate-600 border-slate-200 hover:border-forest hover:text-forest"
+            ? "text-surface border-leaf"
+            : "bg-surface text-muted border-line hover:border-leaf hover:text-leaf"
         }`}
+        style={batchMode ? { background: "var(--accent)" } : undefined}
         onClick={() => (batchMode ? exitBatchMode() : setBatchMode(true))}
         aria-pressed={batchMode}
       >
@@ -148,25 +121,27 @@ export default function Feed({ mode = "default" }: Props = {}) {
     <div>
       {toolbar}
       {isNabReview && (
-        <div className="mt-3 mb-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded text-sm text-amber-900">
-          <strong>Reviewing past 'Not a bird' labels.</strong> Use 'Wrong species?' on any crop
-          to re-correct it — it'll move back into the main feed (or get re-labeled to a real
-          species). The active-learning training set updates immediately.
+        <div className="mt-3 mb-3 px-3.5 py-2.5 rounded-card border border-[color-mix(in_oklab,var(--rust)_35%,var(--line))] bg-[color-mix(in_oklab,var(--rust)_8%,var(--card))] text-sm text-ink">
+          <strong className="font-semibold">Reviewing past 'Not a bird' labels.</strong>{" "}
+          Use 'Wrong species?' on any crop to re-correct it — it'll move back into the
+          main feed (or get re-labeled). The active-learning training set updates immediately.
         </div>
       )}
 
       {isLoading ? (
-        <p className="text-slate-500 mt-4">Loading…</p>
+        <p className="text-muted mt-4">Loading…</p>
       ) : detections.length === 0 ? (
-        <div className="text-slate-500 text-center py-10">
-          <p className="text-lg">
+        <div className="text-center py-14">
+          <p className="font-serif italic text-xl text-muted">
             {isFiltered
-              ? `No matches for "${effectiveFilter.mode === "species" ? effectiveFilter.name : "Unidentified"}".`
+              ? `No matches for "${
+                  effectiveFilter.mode === "species" ? effectiveFilter.name : "Unidentified"
+                }".`
               : isNabReview
                 ? "No NAB labels to review."
                 : "No birds yet."}
           </p>
-          <p className="text-sm">
+          <p className="text-sm text-faint mt-1.5">
             {isFiltered
               ? "Try changing the filter at the top."
               : isNabReview
@@ -176,23 +151,15 @@ export default function Feed({ mode = "default" }: Props = {}) {
         </div>
       ) : (
         <>
-          {/* Multi-column grid: shrinking each crop hides the underlying motion
-              blur / low-res-ness of the feeder-cam footage — at ~180-200 px wide
-              the eye smooths over artifacts that are obvious at full width. */}
-          <div className="mt-3 grid gap-3 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+          {/* Multi-column grid: shrinking each crop smooths over the feeder-cam's
+              motion blur / low resolution. */}
+          <div className="mt-3 grid gap-3.5 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
             {detections.map((d) => (
               <DetectionCard
                 key={d.id}
                 detection={d}
-                // Only opt the card into select-mode when batchMode is on.
-                // When off, `selected` is undefined and DetectionCard renders
-                // its non-selectable variant (no checkbox, no image-tap-to-select).
                 selected={batchMode ? selectedIds.has(d.id) : undefined}
                 onToggleSelect={batchMode ? () => toggleSelect(d.id) : undefined}
-                // In "Awaiting review" mode, classifier-labeled-but-unreviewed
-                // cards get the ✓/🚫/✏️ action row so the user can record
-                // true positives in addition to corrections. No other filter
-                // sees these buttons — they're noise in the default feed.
                 reviewMode={effectiveFilter.mode === "awaiting_review"}
               />
             ))}
@@ -201,12 +168,17 @@ export default function Feed({ mode = "default" }: Props = {}) {
             <BulkActionBar selectedIds={[...selectedIds]} onClear={exitBatchMode} />
           )}
 
-          <div ref={sentinelRef} className="py-6 text-center text-sm text-slate-400">
+          <div
+            ref={sentinelRef}
+            className="py-7 text-center text-xs tracking-wide text-faint"
+          >
             {isFetchingNextPage
               ? "Loading more…"
               : hasNextPage
                 ? "Scroll for more"
-                : `End of feed (${detections.length} detection${detections.length === 1 ? "" : "s"})`}
+                : `— end of feed · ${detections.length} detection${
+                    detections.length === 1 ? "" : "s"
+                  } —`}
           </div>
         </>
       )}

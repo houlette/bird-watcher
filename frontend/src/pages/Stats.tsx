@@ -18,92 +18,132 @@ import {
 
 import { fetchStats, type DailyStats, type StatsResponse } from "../lib/api";
 
-// Tailwind palette echoes (forest/cream/slate/sand). Recharts wants raw
-// CSS colors; keeping them inline so this file is self-contained.
-const COLOR_FOREST = "#2f5d3d";
-const COLOR_SAND = "#d4b483";
-const COLOR_SLATE = "#64748b";
-const COLOR_RED = "#dc2626";
-const COLOR_BLUE = "#2563eb";
-
-// ─── Model-update markers ────────────────────────────────────────────────
+// ─── Field-guide chart palette ────────────────────────────────────────────
 //
-// Vertical reference lines on the time-series charts mark days when we
-// swapped a model in production, so an accuracy / FP-rate inflection
-// can be read against the cause rather than misread as a data anomaly.
-// Add new entries here (UTC date of the deploy) as we ship more model
-// updates. Matched against the formatted x-axis tick — `date` MUST be
-// the same string `shortDate()` produces, i.e. "Jun 7".
+// Recharts wants raw CSS colours (it can't read CSS variables), so we keep a
+// light/dark categorical palette here and pick by the active theme. Greens &
+// rust come straight from the design tokens; the blue/sand/teal are tuned to
+// sit harmoniously beside sage in both themes while staying mutually
+// distinguishable on a multi-series line chart.
+type Tokens = {
+  leaf: string;
+  rust: string;
+  blue: string;
+  sand: string;
+  slate: string;
+  teal: string;
+  band: string;
+  ink: string;
+  axis: string;
+  grid: string;
+  tipBg: string;
+};
+const LIGHT: Tokens = {
+  leaf: "#356544",
+  rust: "#b0552f",
+  blue: "#41698c",
+  sand: "#bc8a3e",
+  slate: "#8a8472",
+  teal: "#2a7d72",
+  band: "rgba(42,125,114,0.16)",
+  ink: "#212a1e",
+  axis: "#86927b",
+  grid: "#d2dcc4",
+  tipBg: "#f3f5ec",
+};
+const DARK: Tokens = {
+  leaf: "#84ba90",
+  rust: "#d68a4f",
+  blue: "#8fb4cf",
+  sand: "#d8b877",
+  slate: "#9aa68f",
+  teal: "#74c2b4",
+  band: "rgba(116,194,180,0.18)",
+  ink: "#e9eddf",
+  axis: "#74806b",
+  grid: "#2f3829",
+  tipBg: "#232b1f",
+};
+function readTokens(): Tokens {
+  const dark =
+    typeof document !== "undefined" &&
+    document.documentElement.classList.contains("dark");
+  return dark ? DARK : LIGHT;
+}
+// Shared Tooltip styling so popovers match the surface in both themes.
+function tip(t: Tokens) {
+  return {
+    contentStyle: {
+      background: t.tipBg,
+      border: `1px solid ${t.grid}`,
+      borderRadius: 10,
+      fontSize: 12,
+      color: t.ink,
+      boxShadow: "0 14px 30px -16px rgba(24,26,18,.35)",
+    },
+    labelStyle: { color: t.ink, fontWeight: 600 },
+    itemStyle: { color: t.ink },
+  };
+}
+
+// ─── Model-update markers ──────────────────────────────────────────────────
 type ModelMarker = { date: string; label: string };
 const MODEL_MARKERS: ModelMarker[] = [
   { date: "Jun 7", label: "NAB filter" },
   { date: "Jun 8", label: "birdclass-na" },
 ];
 
-// ─── Helpers ──────────────────────────────────────────────────────────────
-
+// ─── Helpers ────────────────────────────────────────────────────────────────
 function fmtPct(x: number | null | undefined): string {
   if (x === null || x === undefined || Number.isNaN(x)) return "—";
   return `${Math.round(x * 100)}%`;
 }
-
 function shortDate(iso: string): string {
-  // "2026-05-30" → "May 30". Tick labels.
   const d = new Date(iso + "T00:00:00Z");
   return d.toLocaleString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
 }
 
-// ─── Top-level cards ──────────────────────────────────────────────────────
+// ─── Shared layout primitives ───────────────────────────────────────────────
+function Card({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+  return <section className={`fg-card p-4 ${className}`}>{children}</section>;
+}
+function CardTitle({
+  children,
+  hint,
+}: {
+  children: React.ReactNode;
+  hint?: React.ReactNode;
+}) {
+  return (
+    <h3 className="font-serif text-[17px] font-medium text-ink mb-1">
+      {children}
+      {hint && <span className="ml-1.5 text-xs text-faint font-sans font-normal">{hint}</span>}
+    </h3>
+  );
+}
 
+// ─── Top-level cards ──────────────────────────────────────────────────────
 function HeadlineCards({ data }: { data: StatsResponse }) {
   const today = data.daily[data.daily.length - 1];
-  // The "yesterday delta" comparison uses the 2nd-to-last row when present.
   const yesterday = data.daily.length >= 2 ? data.daily[data.daily.length - 2] : null;
-  const corrections30d = data.daily.reduce(
-    (s, d) => s + d.detections_user_corrected,
-    0,
-  );
+  const corrections30d = data.daily.reduce((s, d) => s + d.detections_user_corrected, 0);
 
   const cards: { label: string; value: string; sub?: string }[] = [
-    {
-      label: "Clips today",
-      value: String(today.clips_received),
-      sub: yesterday ? `yesterday ${yesterday.clips_received}` : undefined,
-    },
-    {
-      label: "Detections today",
-      value: String(today.detections_total),
-      sub: yesterday ? `yesterday ${yesterday.detections_total}` : undefined,
-    },
-    {
-      label: "Corrections (30d)",
-      value: String(corrections30d),
-      sub: `${data.totals.corrections_total} all-time`,
-    },
-    {
-      label: "Label backlog",
-      value: String(data.totals.pending_backlog),
-      sub: "model-labeled, awaiting you",
-    },
-    {
-      label: "Ready to fine-tune",
-      value: String(data.totals.ready_to_fine_tune_species),
-      sub: "species ≥ 50 labels",
-    },
-    {
-      label: "Mask-suppressed today",
-      value: String(today.detections_scene_mask_suppressed ?? 0),
-      sub: "YOLO hits dropped by hot-zone mask",
-    },
+    { label: "Clips today", value: String(today.clips_received), sub: yesterday ? `yesterday ${yesterday.clips_received}` : undefined },
+    { label: "Detections today", value: String(today.detections_total), sub: yesterday ? `yesterday ${yesterday.detections_total}` : undefined },
+    { label: "Corrections (30d)", value: String(corrections30d), sub: `${data.totals.corrections_total} all-time` },
+    { label: "Label backlog", value: String(data.totals.pending_backlog), sub: "model-labeled, awaiting you" },
+    { label: "Ready to fine-tune", value: String(data.totals.ready_to_fine_tune_species), sub: "species ≥ 50 labels" },
+    { label: "Mask-suppressed today", value: String(today.detections_scene_mask_suppressed ?? 0), sub: "YOLO hits dropped by hot-zone mask" },
   ];
 
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
       {cards.map((c) => (
-        <div key={c.label} className="bg-white rounded-lg shadow-sm p-3">
-          <div className="text-xs text-slate-500">{c.label}</div>
-          <div className="text-2xl font-semibold text-forest">{c.value}</div>
-          {c.sub && <div className="text-xs text-slate-400">{c.sub}</div>}
+        <div key={c.label} className="fg-card p-3.5">
+          <div className="fg-overline">{c.label}</div>
+          <div className="font-serif text-3xl text-ink leading-none mt-1.5 tnum">{c.value}</div>
+          {c.sub && <div className="text-[11px] text-faint mt-1.5">{c.sub}</div>}
         </div>
       ))}
     </div>
@@ -111,8 +151,8 @@ function HeadlineCards({ data }: { data: StatsResponse }) {
 }
 
 // ─── Funnel chart ─────────────────────────────────────────────────────────
-
 function FunnelChart({ daily }: { daily: DailyStats[] }) {
+  const t = readTokens();
   const rows = useMemo(
     () =>
       daily.map((d) => ({
@@ -127,61 +167,39 @@ function FunnelChart({ daily }: { daily: DailyStats[] }) {
   );
 
   return (
-    <section className="bg-white rounded-lg shadow-sm p-3">
-      <h3 className="text-sm font-semibold mb-2">Pipeline funnel (30d)</h3>
+    <Card>
+      <CardTitle>Pipeline funnel (30d)</CardTitle>
       <ResponsiveContainer width="100%" height={220}>
-        <LineChart data={rows} margin={{ left: -10, right: 10, top: 4, bottom: 4 }}>
-          <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" />
-          <XAxis dataKey="date" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
-          <YAxis tick={{ fontSize: 11 }} />
-          <Tooltip />
-          <Legend wrapperStyle={{ fontSize: 12 }} />
+        <LineChart data={rows} margin={{ left: -10, right: 10, top: 8, bottom: 4 }}>
+          <CartesianGrid stroke={t.grid} strokeDasharray="3 3" />
+          <XAxis dataKey="date" tick={{ fontSize: 11, fill: t.axis }} interval="preserveStartEnd" />
+          <YAxis tick={{ fontSize: 11, fill: t.axis }} />
+          <Tooltip {...tip(t)} />
+          <Legend wrapperStyle={{ fontSize: 12, color: t.ink }} />
           {MODEL_MARKERS.map((m) => (
-            <ReferenceLine
-              key={m.date}
-              x={m.date}
-              stroke={COLOR_SLATE}
-              strokeDasharray="2 3"
-              label={{ value: m.label, position: "top", fontSize: 10, fill: COLOR_SLATE }}
-            />
+            <ReferenceLine key={m.date} x={m.date} stroke={t.slate} strokeDasharray="2 3"
+              label={{ value: m.label, position: "top", fontSize: 10, fill: t.slate }} />
           ))}
-          <Line type="monotone" dataKey="Clips" stroke={COLOR_SLATE} strokeWidth={2} dot={false} />
-          <Line type="monotone" dataKey="Detections" stroke={COLOR_FOREST} strokeWidth={2} dot={false} />
-          <Line type="monotone" dataKey="Classifier-labeled" stroke={COLOR_BLUE} strokeWidth={2} dot={false} />
-          <Line type="monotone" dataKey="Corrected" stroke={COLOR_SAND} strokeWidth={2} dot={false} />
-          {/* Dashed so the line reads as "diagnostic" rather than a
-              first-class funnel stage. A spike here means lots of
-              motion is being silently filtered — and may include real
-              birds that landed in NAB-clustered regions. */}
-          <Line
-            type="monotone"
-            dataKey="Mask-suppressed"
-            stroke={COLOR_RED}
-            strokeWidth={2}
-            strokeDasharray="4 3"
-            dot={false}
-          />
+          <Line type="monotone" dataKey="Clips" stroke={t.slate} strokeWidth={2} dot={false} />
+          <Line type="monotone" dataKey="Detections" stroke={t.leaf} strokeWidth={2} dot={false} />
+          <Line type="monotone" dataKey="Classifier-labeled" stroke={t.blue} strokeWidth={2} dot={false} />
+          <Line type="monotone" dataKey="Corrected" stroke={t.sand} strokeWidth={2} dot={false} />
+          <Line type="monotone" dataKey="Mask-suppressed" stroke={t.rust} strokeWidth={2} strokeDasharray="4 3" dot={false} />
         </LineChart>
       </ResponsiveContainer>
-    </section>
+    </Card>
   );
 }
 
-// ─── Rate chart (the four headline ratios) ────────────────────────────────
-
+// ─── Rate chart ────────────────────────────────────────────────────────────
 function RatesChart({ daily }: { daily: DailyStats[] }) {
+  const t = readTokens();
   const rows = useMemo(
     () =>
       daily.map((d) => ({
         date: shortDate(d.date),
-        // Recharts handles null by leaving a gap — preferred over 0
-        // because "no data" ≠ "zero rate."
         "YOLO bird rate": d.yolo_bird_rate,
         "Classifier label rate": d.classifier_label_rate,
-        // Renamed from the older "User-FP rate" / "Classifier accuracy"
-        // labels because both were getting read as population statistics
-        // when they're actually correction-bucket statistics. New names
-        // foreground the denominator.
         "NAB share of corrections": d.user_fp_rate,
         "Top-1 hit rate (on reviewed)": d.classifier_accuracy,
       })),
@@ -189,240 +207,152 @@ function RatesChart({ daily }: { daily: DailyStats[] }) {
   );
 
   return (
-    <section className="bg-white rounded-lg shadow-sm p-3">
-      <h3 className="text-sm font-semibold mb-2">Pipeline rates (30d)</h3>
+    <Card>
+      <CardTitle>Pipeline rates (30d)</CardTitle>
       <ResponsiveContainer width="100%" height={220}>
-        <LineChart data={rows} margin={{ left: -10, right: 10, top: 4, bottom: 4 }}>
-          <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" />
-          <XAxis dataKey="date" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
-          <YAxis tick={{ fontSize: 11 }} domain={[0, 1]} tickFormatter={(v) => `${Math.round(v * 100)}%`} />
-          <Tooltip formatter={(v) => (v == null ? "—" : fmtPct(Number(v)))} />
-          <Legend wrapperStyle={{ fontSize: 12 }} />
+        <LineChart data={rows} margin={{ left: -10, right: 10, top: 8, bottom: 4 }}>
+          <CartesianGrid stroke={t.grid} strokeDasharray="3 3" />
+          <XAxis dataKey="date" tick={{ fontSize: 11, fill: t.axis }} interval="preserveStartEnd" />
+          <YAxis tick={{ fontSize: 11, fill: t.axis }} domain={[0, 1]} tickFormatter={(v) => `${Math.round(v * 100)}%`} />
+          <Tooltip {...tip(t)} formatter={(v) => (v == null ? "—" : fmtPct(Number(v)))} />
+          <Legend wrapperStyle={{ fontSize: 12, color: t.ink }} />
           {MODEL_MARKERS.map((m) => (
-            <ReferenceLine
-              key={m.date}
-              x={m.date}
-              stroke={COLOR_SLATE}
-              strokeDasharray="2 3"
-              label={{ value: m.label, position: "top", fontSize: 10, fill: COLOR_SLATE }}
-            />
+            <ReferenceLine key={m.date} x={m.date} stroke={t.slate} strokeDasharray="2 3"
+              label={{ value: m.label, position: "top", fontSize: 10, fill: t.slate }} />
           ))}
-          <Line type="monotone" dataKey="YOLO bird rate" stroke={COLOR_FOREST} strokeWidth={2} dot={false} connectNulls />
-          <Line type="monotone" dataKey="Classifier label rate" stroke={COLOR_BLUE} strokeWidth={2} dot={false} connectNulls />
-          <Line type="monotone" dataKey="NAB share of corrections" stroke={COLOR_RED} strokeWidth={2} dot={false} connectNulls />
-          <Line type="monotone" dataKey="Top-1 hit rate (on reviewed)" stroke={COLOR_SAND} strokeWidth={2} dot={false} connectNulls />
+          <Line type="monotone" dataKey="YOLO bird rate" stroke={t.leaf} strokeWidth={2} dot={false} connectNulls />
+          <Line type="monotone" dataKey="Classifier label rate" stroke={t.blue} strokeWidth={2} dot={false} connectNulls />
+          <Line type="monotone" dataKey="NAB share of corrections" stroke={t.rust} strokeWidth={2} dot={false} connectNulls />
+          <Line type="monotone" dataKey="Top-1 hit rate (on reviewed)" stroke={t.sand} strokeWidth={2} dot={false} connectNulls />
         </LineChart>
       </ResponsiveContainer>
-      <div className="text-xs text-slate-500 mt-2 space-y-1">
-        <p>
-          <span className="font-medium" style={{ color: COLOR_FOREST }}>YOLO bird rate</span> —
-          daylight clips where YOLO found anything (clips with detections ÷ daylight clips).
-        </p>
-        <p>
-          <span className="font-medium" style={{ color: COLOR_BLUE }}>Classifier label rate</span> —
-          detections the species classifier was confident enough to label (vs. rejecting as
-          "Unidentified"). Denominator: all detections that day.
-        </p>
-        <p>
-          <span className="font-medium" style={{ color: COLOR_RED }}>NAB share of corrections</span> —
-          of the detections you reviewed today, the fraction you marked "Not a bird."
-          A signal of false-positive pressure, but biased by what you chose to review.
-        </p>
-        <p>
-          <span className="font-medium" style={{ color: COLOR_SAND }}>Top-1 hit rate (on reviewed)</span> —
-          of detections where you confirmed a real species, the fraction where the classifier's
-          top-1 already matched. Biased downward: you mostly review wrong answers, so the true
-          population accuracy is higher. Gaps = no corrections-to-real-species that day.
-        </p>
+      <div className="text-xs text-muted mt-2 space-y-1">
+        <p><span className="font-semibold" style={{ color: t.leaf }}>YOLO bird rate</span> — daylight clips where YOLO found anything (clips with detections ÷ daylight clips).</p>
+        <p><span className="font-semibold" style={{ color: t.blue }}>Classifier label rate</span> — detections the species classifier was confident enough to label (vs. "Unidentified"). Denominator: all detections that day.</p>
+        <p><span className="font-semibold" style={{ color: t.rust }}>NAB share of corrections</span> — of the detections you reviewed today, the fraction you marked "Not a bird." Biased by what you chose to review.</p>
+        <p><span className="font-semibold" style={{ color: t.sand }}>Top-1 hit rate (on reviewed)</span> — of detections where you confirmed a real species, the fraction where the classifier's top-1 already matched. Biased downward.</p>
       </div>
-    </section>
+    </Card>
   );
 }
 
-// ─── Per-species accuracy bar chart ──────────────────────────────────────
-
+// ─── Per-species accuracy ─────────────────────────────────────────────────
 function SpeciesAccuracy({ totals }: { totals: StatsResponse["totals"] }) {
-  const rows = totals.species_accuracy.map((s) => ({
-    species: s.species,
-    accuracy: s.accuracy,
-    n: s.n,
-  }));
+  const t = readTokens();
+  const rows = totals.species_accuracy.map((s) => ({ species: s.species, accuracy: s.accuracy, n: s.n }));
   if (rows.length === 0) {
     return (
-      <section className="bg-white rounded-lg shadow-sm p-3">
-        <h3 className="text-sm font-semibold mb-2">Per-species accuracy</h3>
-        <p className="text-xs text-slate-500">No species has ≥ 5 ground-truth labels yet.</p>
-      </section>
+      <Card>
+        <CardTitle>Per-species accuracy</CardTitle>
+        <p className="text-xs text-muted">No species has ≥ 5 ground-truth labels yet.</p>
+      </Card>
     );
   }
   return (
-    <section className="bg-white rounded-lg shadow-sm p-3">
-      <h3 className="text-sm font-semibold mb-2">
-        Classifier vs corrections <span className="text-xs text-slate-400 font-normal">(top 15 by label count)</span>
-      </h3>
-      <p className="text-xs text-slate-500 mb-2">
-        Of the times you labeled a detection as species X, how often the classifier
-        had already guessed X (top-1). Biased down by the fact that you mostly correct
-        mistakes — low bars don't mean the model is hopeless, they mean you only see it
-        when it's wrong.
+    <Card>
+      <CardTitle hint="(top 15 by label count)">Classifier vs corrections</CardTitle>
+      <p className="text-xs text-muted mb-2">
+        Of the times you labeled a detection as species X, how often the classifier had already
+        guessed X (top-1). Biased down — you mostly correct mistakes, so low bars mean "you only
+        see it when it's wrong," not "hopeless."
       </p>
       <ResponsiveContainer width="100%" height={Math.max(220, rows.length * 24)}>
         <BarChart data={rows} layout="vertical" margin={{ left: 10, right: 30, top: 4, bottom: 4 }}>
-          <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" />
-          <XAxis type="number" domain={[0, 1]} tick={{ fontSize: 11 }} tickFormatter={(v) => `${Math.round(v * 100)}%`} />
-          <YAxis type="category" dataKey="species" tick={{ fontSize: 11 }} width={140} />
-          <Tooltip formatter={(v, _name, p) => [`${fmtPct(Number(v))} of ${p.payload.n}`, "Top-1 accuracy"]} />
-          {/* Single color: the bar length carries the signal. Threshold-
-              based coloring was misleading here because the expected
-              value is near zero (correction-bias). */}
-          <Bar dataKey="accuracy" fill={COLOR_FOREST} radius={[0, 4, 4, 0]} />
+          <CartesianGrid stroke={t.grid} strokeDasharray="3 3" />
+          <XAxis type="number" domain={[0, 1]} tick={{ fontSize: 11, fill: t.axis }} tickFormatter={(v) => `${Math.round(v * 100)}%`} />
+          <YAxis type="category" dataKey="species" tick={{ fontSize: 11, fill: t.axis }} width={140} />
+          <Tooltip {...tip(t)} formatter={(v, _n, p) => [`${fmtPct(Number(v))} of ${p.payload.n}`, "Top-1 accuracy"]} />
+          <Bar dataKey="accuracy" fill={t.leaf} radius={[0, 4, 4, 0]} />
         </BarChart>
       </ResponsiveContainer>
-    </section>
+    </Card>
   );
 }
 
-// ─── Training-data progress (per-species, by trust tier) ────────────────
-
-// Tier colors. Cream for the highest-trust GOLD tier (matches the
-// app's accent palette so it reads "this is the good stuff"); sand for
-// HIGH (LLM auto-committed but unreviewed); slate-300 for MED (auto-
-// committed, sitting in the review queue and worth burning down).
-const TIER_COLOR_GOLD = "#2f5d3d"; // forest
-const TIER_COLOR_HIGH = "#d4b483"; // sand
-const TIER_COLOR_MED = "#cbd5e1";  // slate-300
-
+// ─── Training-data progress ────────────────────────────────────────────────
 function TrainingDataCard({ totals }: { totals: StatsResponse["totals"] }) {
+  const t = readTokens();
   const rows = totals.training_data ?? [];
   if (rows.length === 0) {
     return (
-      <section className="bg-white rounded-lg shadow-sm p-3">
-        <h3 className="text-sm font-semibold mb-2">Training data progress</h3>
-        <p className="text-xs text-slate-500">No labeled species yet.</p>
-      </section>
+      <Card>
+        <CardTitle>Training data progress</CardTitle>
+        <p className="text-xs text-muted">No labeled species yet.</p>
+      </Card>
     );
   }
-  // Find a sane x-axis cap so the long tail doesn't crush the big bars
-  // to invisible widths. Use 1.05× the largest total, rounded up to the
-  // next 100. (Without this, NAB at ~5k dwarfs everything.)
   const maxTotal = Math.max(...rows.map((r) => r.total));
   const xMax = Math.ceil((maxTotal * 1.05) / 100) * 100;
+  const GOLD = t.leaf;
+  const HIGH = t.sand;
+  const MED = t.grid;
 
   return (
-    <section className="bg-white rounded-lg shadow-sm p-3">
-      <h3 className="text-sm font-semibold mb-1">
-        Training data progress{" "}
-        <span className="text-xs text-slate-400 font-normal">(top 25 by label count)</span>
-      </h3>
-      <p className="text-xs text-slate-500 mb-2">
+    <Card>
+      <CardTitle hint="(top 25 by label count)">Training data progress</CardTitle>
+      <p className="text-xs text-muted mb-2">
         Per-species labeled detections, stacked by trust tier.{" "}
-        <span className="font-medium" style={{ color: TIER_COLOR_GOLD }}>Gold</span> = you verified;{" "}
-        <span className="font-medium" style={{ color: TIER_COLOR_HIGH }}>High</span> = Claude HIGH (auto-committed, unreviewed);{" "}
-        <span className="font-medium text-slate-500">Med</span> = Claude MEDIUM (awaiting your ✓ in the review filter).
-        The dashed line marks the rough ≥ 100-GOLD threshold for fine-tuning a per-species head.
+        <span className="font-semibold" style={{ color: GOLD }}>Gold</span> = you verified;{" "}
+        <span className="font-semibold" style={{ color: HIGH }}>High</span> = Claude HIGH (auto-committed, unreviewed);{" "}
+        <span className="font-semibold text-muted">Med</span> = Claude MEDIUM (awaiting your ✓ in the review filter).
       </p>
-      <div className="flex gap-4 text-xs text-slate-600 mb-2">
-        <span>
-          <span className="font-semibold">{totals.training_ready_species}</span> species training-ready
-          <span className="text-slate-400"> (≥ 100 gold)</span>
-        </span>
-        <span>
-          <span className="font-semibold">{totals.review_queue_size}</span> in MEDIUM review queue
-        </span>
+      <div className="flex gap-4 text-xs text-muted mb-2">
+        <span><span className="font-semibold text-ink tnum">{totals.training_ready_species}</span> training-ready <span className="text-faint">(≥ 100 gold)</span></span>
+        <span><span className="font-semibold text-ink tnum">{totals.review_queue_size}</span> in MEDIUM review queue</span>
       </div>
       <ResponsiveContainer width="100%" height={Math.max(280, rows.length * 22)}>
         <BarChart data={rows} layout="vertical" margin={{ left: 10, right: 30, top: 4, bottom: 4 }}>
-          <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" />
-          <XAxis type="number" domain={[0, xMax]} tick={{ fontSize: 11 }} />
-          <YAxis type="category" dataKey="species" tick={{ fontSize: 11 }} width={140} />
-          <Tooltip
-            // Recharts passes the segment value as `v` and the original
-            // row as `p.payload`; we show all three tiers + total so the
-            // tooltip is one-stop for "how do I push this species over
-            // the bar?"
-            formatter={(v, _name, p) =>
-              [`${v}`, `${_name}  (gold=${p.payload.gold}, high=${p.payload.high}, med=${p.payload.medium}, total=${p.payload.total})`]
-            }
-          />
-          <Legend wrapperStyle={{ fontSize: 11 }} />
-          {/* Stack order: gold first (left edge), then high, then med.
-              Reading left → right matches descending trust. */}
-          <Bar dataKey="gold" stackId="t" name="Gold" fill={TIER_COLOR_GOLD} />
-          <Bar dataKey="high" stackId="t" name="High" fill={TIER_COLOR_HIGH} />
-          <Bar dataKey="medium" stackId="t" name="Medium" fill={TIER_COLOR_MED} />
-          {/* Threshold marker. Recharts doesn't have a great vertical
-              line primitive on a vertical bar chart, but a zero-width
-              Bar at x=100 styled as a dashed stroke approximates it. */}
+          <CartesianGrid stroke={t.grid} strokeDasharray="3 3" />
+          <XAxis type="number" domain={[0, xMax]} tick={{ fontSize: 11, fill: t.axis }} />
+          <YAxis type="category" dataKey="species" tick={{ fontSize: 11, fill: t.axis }} width={140} />
+          <Tooltip {...tip(t)}
+            formatter={(v, _n, p) => [`${v}`, `${_n}  (gold=${p.payload.gold}, high=${p.payload.high}, med=${p.payload.medium}, total=${p.payload.total})`]} />
+          <Legend wrapperStyle={{ fontSize: 11, color: t.ink }} />
+          <Bar dataKey="gold" stackId="t" name="Gold" fill={GOLD} />
+          <Bar dataKey="high" stackId="t" name="High" fill={HIGH} />
+          <Bar dataKey="medium" stackId="t" name="Medium" fill={MED} />
         </BarChart>
       </ResponsiveContainer>
-    </section>
+    </Card>
   );
 }
 
-// ─── Top species table ───────────────────────────────────────────────────
-
+// ─── Top species table ─────────────────────────────────────────────────────
 function TopSpeciesTable({ totals }: { totals: StatsResponse["totals"] }) {
   if (totals.top_species.length === 0) return null;
   return (
-    <section className="bg-white rounded-lg shadow-sm p-3">
-      <h3 className="text-sm font-semibold mb-2">Top labeled species (all time)</h3>
+    <Card>
+      <CardTitle>Top labeled species (all time)</CardTitle>
       <table className="w-full text-sm">
         <thead>
-          <tr className="text-xs text-slate-500 text-left">
-            <th className="font-normal">Species</th>
-            <th className="font-normal text-right">Labels</th>
-            <th className="font-normal text-right">→ fine-tune</th>
+          <tr className="fg-overline text-left">
+            <th className="font-semibold pb-1">Species</th>
+            <th className="font-semibold text-right pb-1">Labels</th>
+            <th className="font-semibold text-right pb-1">→ fine-tune</th>
           </tr>
         </thead>
         <tbody>
           {totals.top_species.map((s) => (
-            <tr key={s.species} className="border-t border-slate-100">
-              <td className="py-1">{s.species}</td>
-              <td className="py-1 text-right tabular-nums">{s.count}</td>
-              <td className="py-1 text-right text-xs text-slate-500">
-                {s.count >= 50 ? "✓" : `${50 - s.count} more`}
+            <tr key={s.species} className="border-t border-line">
+              <td className="py-1.5 text-ink">{s.species}</td>
+              <td className="py-1.5 text-right tnum text-ink">{s.count}</td>
+              <td className="py-1.5 text-right text-xs text-muted tnum">
+                {s.count >= 50 ? <span className="text-leaf font-semibold">✓</span> : `${50 - s.count} more`}
               </td>
             </tr>
           ))}
         </tbody>
       </table>
-    </section>
+    </Card>
   );
 }
 
-// ─── Image-quality time series ───────────────────────────────────────────
-//
-// Sharpness (Laplacian variance) is THE bottleneck for the species
-// classifier per README's "future improvements" notes — small/blurry
-// feeder crops cap accuracy regardless of which model we run. Brightness
-// catches the other failure mode (predawn / dusk / cloudy crops the
-// daylight gate didn't fully exclude). Crop area tells us whether the
-// birds are getting closer or farther over time — moving the feeder
-// or zooming the camera should show up here.
-//
-// One stacked panel per metric. Median (p50) line + shaded p25–p75 band
-// so a single noisy day doesn't dominate. Reference dashed line for
-// the rough "too low" threshold called out on the Detection model
-// (sharpness < ~30 = too blurry; brightness < ~30 = too dark).
-const QUALITY_COLOR = "#0f766e"; // teal-700 — distinct from forest/blue
-const QUALITY_BAND = "rgba(15, 118, 110, 0.15)";
-
+// ─── Image-quality time series ─────────────────────────────────────────────
 type QualityMetric = "sharpness" | "brightness" | "area_px";
-type QualityRow = {
-  date: string;
-  p25: number | null;
-  p50: number | null;
-  p75: number | null;
-  n: number;
-};
+type QualityRow = { date: string; p25: number | null; p50: number | null; p75: number | null; n: number };
 
 function ImageQualityPanel({
-  daily,
-  metric,
-  title,
-  unit,
-  badThreshold,
-  badLabel,
+  daily, metric, title, unit, badThreshold, badLabel,
 }: {
   daily: DailyStats[];
   metric: QualityMetric;
@@ -431,17 +361,12 @@ function ImageQualityPanel({
   badThreshold?: number;
   badLabel?: string;
 }) {
+  const t = readTokens();
   const rows = useMemo<QualityRow[]>(
     () =>
       daily.map((d) => {
         const cq = d.payload.crop_quality?.[metric];
-        return {
-          date: shortDate(d.date),
-          p25: cq?.p25 ?? null,
-          p50: cq?.p50 ?? null,
-          p75: cq?.p75 ?? null,
-          n: cq?.n ?? 0,
-        };
+        return { date: shortDate(d.date), p25: cq?.p25 ?? null, p50: cq?.p50 ?? null, p75: cq?.p75 ?? null, n: cq?.n ?? 0 };
       }),
     [daily, metric],
   );
@@ -449,89 +374,43 @@ function ImageQualityPanel({
   const hasData = rows.some((r) => r.p50 !== null);
   if (!hasData) {
     return (
-      <div className="bg-white rounded-lg shadow-sm p-3">
-        <h4 className="text-xs font-semibold text-slate-700 mb-1">{title}</h4>
-        <p className="text-xs text-slate-500">
-          No data yet — populated as new detections come in after the crop-quality
-          column shipped, or backfill via{" "}
-          <code className="bg-slate-100 px-1 rounded">scripts/backfill_crop_quality.py</code>.
+      <div className="fg-card p-3.5">
+        <h4 className="text-xs font-semibold text-ink mb-1">{title}</h4>
+        <p className="text-xs text-muted">
+          No data yet — populated as new detections come in, or backfill via{" "}
+          <code className="bg-panel border border-line px-1 rounded">scripts/backfill_crop_quality.py</code>.
         </p>
       </div>
     );
   }
 
   return (
-    <div className="bg-white rounded-lg shadow-sm p-3">
-      <h4 className="text-xs font-semibold text-slate-700 mb-1">{title}</h4>
+    <div className="fg-card p-3.5">
+      <h4 className="text-xs font-semibold text-ink mb-1">{title}</h4>
       <ResponsiveContainer width="100%" height={150}>
         <ComposedChart data={rows} margin={{ left: -10, right: 10, top: 4, bottom: 4 }}>
-          <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" />
-          <XAxis dataKey="date" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
-          <YAxis tick={{ fontSize: 10 }} />
-          <Tooltip
+          <CartesianGrid stroke={t.grid} strokeDasharray="3 3" />
+          <XAxis dataKey="date" tick={{ fontSize: 10, fill: t.axis }} interval="preserveStartEnd" />
+          <YAxis tick={{ fontSize: 10, fill: t.axis }} />
+          <Tooltip {...tip(t)}
             formatter={(v, name, p) => {
               if (v == null) return "—";
               const n = p.payload?.n ?? 0;
               const valStr = `${Number(v).toFixed(metric === "area_px" ? 0 : 1)} ${unit}`;
               return [valStr, `${name}  (n=${n})`];
-            }}
-          />
+            }} />
           {MODEL_MARKERS.map((m) => (
-            <ReferenceLine
-              key={m.date}
-              x={m.date}
-              stroke={COLOR_SLATE}
-              strokeDasharray="2 3"
-            />
+            <ReferenceLine key={m.date} x={m.date} stroke={t.slate} strokeDasharray="2 3" />
           ))}
           {badThreshold !== undefined && (
-            <ReferenceLine
-              y={badThreshold}
-              stroke={COLOR_RED}
-              strokeDasharray="3 3"
-              label={{
-                value: badLabel ?? `< ${badThreshold}`,
-                position: "insideBottomRight",
-                fontSize: 10,
-                fill: COLOR_RED,
-              }}
-            />
+            <ReferenceLine y={badThreshold} stroke={t.rust} strokeDasharray="3 3"
+              label={{ value: badLabel ?? `< ${badThreshold}`, position: "insideBottomRight", fontSize: 10, fill: t.rust }} />
           )}
-          {/* Shaded p25–p75 band. Recharts draws the lower bound first
-              (transparent) then the upper bound on top — the trick is to
-              stack a transparent Area at p25 + a colored Area at (p75 −
-              p25) to get a band. Easier: two semi-transparent Areas
-              independently anchored at zero would lie about the lower
-              bound. We use Recharts' base-band trick via two Areas with
-              the same stackId. */}
-          <Area
-            type="monotone"
-            dataKey="p25"
-            stackId="band"
-            stroke="none"
-            fill="transparent"
-            isAnimationActive={false}
-          />
-          <Area
-            type="monotone"
-            dataKey={(r: QualityRow) =>
-              r.p25 !== null && r.p75 !== null ? r.p75 - r.p25 : null
-            }
-            name="p25–p75"
-            stackId="band"
-            stroke="none"
-            fill={QUALITY_BAND}
-            isAnimationActive={false}
-          />
-          <Line
-            type="monotone"
-            dataKey="p50"
-            name="median"
-            stroke={QUALITY_COLOR}
-            strokeWidth={2}
-            dot={false}
-            connectNulls
-          />
+          <Area type="monotone" dataKey="p25" stackId="band" stroke="none" fill="transparent" isAnimationActive={false} />
+          <Area type="monotone"
+            dataKey={(r: QualityRow) => (r.p25 !== null && r.p75 !== null ? r.p75 - r.p25 : null)}
+            name="p25–p75" stackId="band" stroke="none" fill={t.band} isAnimationActive={false} />
+          <Line type="monotone" dataKey="p50" name="median" stroke={t.teal} strokeWidth={2} dot={false} connectNulls />
         </ComposedChart>
       </ResponsiveContainer>
     </div>
@@ -540,51 +419,24 @@ function ImageQualityPanel({
 
 function ImageQuality({ daily }: { daily: DailyStats[] }) {
   return (
-    <section className="bg-white rounded-lg shadow-sm p-3">
-      <h3 className="text-sm font-semibold mb-2">Image quality (30d)</h3>
-      <p className="text-xs text-slate-500 mb-3">
-        Per-day crop-quality percentiles (teal line = median, shaded band = p25–p75).
-        Computed after CLAHE, before classifier resize. Sharpness is the bottleneck
-        we care most about — the species classifier maxes out at whatever this
-        line allows. A drop in median sharpness after a model swap means the
-        new model is seeing different (likely worse) crops, not failing in
-        absolute terms.
+    <Card>
+      <CardTitle>Image quality (30d)</CardTitle>
+      <p className="text-xs text-muted mb-3">
+        Per-day crop-quality percentiles (teal line = median, shaded band = p25–p75). Computed
+        after CLAHE, before classifier resize. Sharpness is the bottleneck — the species
+        classifier maxes out at whatever this line allows.
       </p>
       <div className="grid gap-3 md:grid-cols-3">
-        <ImageQualityPanel
-          daily={daily}
-          metric="sharpness"
-          title="Sharpness (Laplacian variance)"
-          unit=""
-          badThreshold={30}
-          badLabel="~too blurry"
-        />
-        <ImageQualityPanel
-          daily={daily}
-          metric="brightness"
-          title="Brightness (mean grayscale, 0–255)"
-          unit=""
-          badThreshold={30}
-          badLabel="~too dark"
-        />
-        <ImageQualityPanel
-          daily={daily}
-          metric="area_px"
-          title="Crop area (px²)"
-          unit="px²"
-        />
+        <ImageQualityPanel daily={daily} metric="sharpness" title="Sharpness (Laplacian variance)" unit="" badThreshold={30} badLabel="~too blurry" />
+        <ImageQualityPanel daily={daily} metric="brightness" title="Brightness (mean grayscale, 0–255)" unit="" badThreshold={30} badLabel="~too dark" />
+        <ImageQualityPanel daily={daily} metric="area_px" title="Crop area (px²)" unit="px²" />
       </div>
-    </section>
+    </Card>
   );
 }
 
-
-// ─── Hour-of-day heatmap ─────────────────────────────────────────────────
-
+// ─── Hour-of-day heatmap ───────────────────────────────────────────────────
 function HourOfDayHeatmap({ daily }: { daily: DailyStats[] }) {
-  // Sum each hour bucket across the displayed window. Detections are
-  // captured by the camera in UTC (we run the Reolink in GMT+0 for
-  // audio-correlation alignment), so the buckets are UTC hours.
   const counts = useMemo(() => {
     const out = new Array(24).fill(0);
     for (const d of daily) {
@@ -594,12 +446,11 @@ function HourOfDayHeatmap({ daily }: { daily: DailyStats[] }) {
     }
     return out;
   }, [daily]);
-
   const max = Math.max(1, ...counts);
 
   return (
-    <section className="bg-white rounded-lg shadow-sm p-3">
-      <h3 className="text-sm font-semibold mb-2">Hour-of-day activity (UTC, 30d)</h3>
+    <Card>
+      <CardTitle>Hour-of-day activity (UTC, 30d)</CardTitle>
       <div className="grid grid-cols-12 gap-1">
         {counts.map((c, hour) => {
           const intensity = c / max;
@@ -607,10 +458,10 @@ function HourOfDayHeatmap({ daily }: { daily: DailyStats[] }) {
             <div
               key={hour}
               title={`${hour.toString().padStart(2, "0")}:00 — ${c} detections`}
-              className="aspect-square rounded-sm flex items-center justify-center text-[10px]"
+              className="aspect-square rounded-sm flex items-center justify-center text-[10px] tnum"
               style={{
-                backgroundColor: `rgba(47, 93, 61, ${0.08 + intensity * 0.85})`,
-                color: intensity > 0.5 ? "white" : "#475569",
+                backgroundColor: `color-mix(in oklab, var(--accent) ${Math.round(10 + intensity * 80)}%, var(--panel))`,
+                color: intensity > 0.5 ? "var(--card)" : "var(--muted)",
               }}
             >
               {hour}
@@ -618,16 +469,14 @@ function HourOfDayHeatmap({ daily }: { daily: DailyStats[] }) {
           );
         })}
       </div>
-      <p className="text-xs text-slate-500 mt-1">
-        Darker = more detections at that UTC hour, summed over the window.
-      </p>
-    </section>
+      <p className="text-xs text-muted mt-2">Darker = more detections at that UTC hour, summed over the window.</p>
+    </Card>
   );
 }
 
-// ─── YOLO-confidence histogram (NAB vs species) ──────────────────────────
-
+// ─── YOLO-confidence histogram ─────────────────────────────────────────────
 function YoloConfidenceHist({ daily }: { daily: DailyStats[] }) {
+  const t = readTokens();
   const buckets = useMemo(() => {
     const nab = new Array(10).fill(0);
     const species = new Array(10).fill(0);
@@ -649,87 +498,66 @@ function YoloConfidenceHist({ daily }: { daily: DailyStats[] }) {
   const total = buckets.reduce((s, b) => s + b["Not a bird"] + b["Real species"], 0);
   if (total === 0) {
     return (
-      <section className="bg-white rounded-lg shadow-sm p-3">
-        <h3 className="text-sm font-semibold mb-2">YOLO confidence: NAB vs species (30d)</h3>
-        <p className="text-xs text-slate-500">No labeled detections with YOLO confidence in the window.</p>
-      </section>
+      <Card>
+        <CardTitle>YOLO confidence: NAB vs species (30d)</CardTitle>
+        <p className="text-xs text-muted">No labeled detections with YOLO confidence in the window.</p>
+      </Card>
     );
   }
 
   return (
-    <section className="bg-white rounded-lg shadow-sm p-3">
-      <h3 className="text-sm font-semibold mb-2">YOLO confidence: NAB vs species (30d)</h3>
+    <Card>
+      <CardTitle>YOLO confidence: NAB vs species (30d)</CardTitle>
       <ResponsiveContainer width="100%" height={220}>
         <BarChart data={buckets} margin={{ left: -10, right: 10, top: 4, bottom: 4 }}>
-          <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" />
-          <XAxis dataKey="bucket" tick={{ fontSize: 10 }} />
-          <YAxis tick={{ fontSize: 11 }} />
-          <Tooltip />
-          <Legend wrapperStyle={{ fontSize: 12 }} />
-          <Bar dataKey="Not a bird" fill={COLOR_RED} />
-          <Bar dataKey="Real species" fill={COLOR_FOREST} />
+          <CartesianGrid stroke={t.grid} strokeDasharray="3 3" />
+          <XAxis dataKey="bucket" tick={{ fontSize: 10, fill: t.axis }} />
+          <YAxis tick={{ fontSize: 11, fill: t.axis }} />
+          <Tooltip {...tip(t)} />
+          <Legend wrapperStyle={{ fontSize: 12, color: t.ink }} />
+          <Bar dataKey="Not a bird" fill={t.rust} radius={[3, 3, 0, 0]} />
+          <Bar dataKey="Real species" fill={t.leaf} radius={[3, 3, 0, 0]} />
         </BarChart>
       </ResponsiveContainer>
-      <p className="text-xs text-slate-500 mt-1">
-        If high-confidence buckets are still NAB-heavy, raising
-        BIRD_CONFIDENCE_THRESHOLD wouldn't help.
+      <p className="text-xs text-muted mt-2">
+        If high-confidence buckets are still NAB-heavy, raising BIRD_CONFIDENCE_THRESHOLD
+        wouldn't help.
       </p>
-    </section>
+    </Card>
   );
 }
 
-// ─── Location heatmaps ──────────────────────────────────────────────────
-
-/**
- * Three PNGs rendered server-side by `scripts/analyze_bird_locations.py`,
- * refreshed nightly at 02:20 UTC by the worker cron (plus once on every
- * container start). Files live under `data/heatmaps/` which is exposed
- * via the existing `/media/` static mount — no API call needed.
- *
- * The `key` busts the PWA service worker's cache once a day so we don't
- * end up showing yesterday's image after the nightly re-render.
- */
+// ─── Location heatmaps ──────────────────────────────────────────────────────
 function LocationHeatmaps() {
   const dayBust = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const tabs: { id: "density" | "small" | "size"; label: string; src: string; caption: string }[] = [
-    {
-      id: "density",
-      label: "Density",
-      src: `/media/heatmaps/location_heatmap.png?d=${dayBust}`,
-      caption: "Where real-bird detections cluster. White contours mark the 25 / 50 / 75% density isolines. Red hatched cells are the current scene-mask hot zones — YOLO hits there get suppressed unless confidence beats the override. A density cluster sitting under hatching is a real bird at a NAB hotspot worth checking.",
-    },
-    {
-      id: "small",
-      label: "Small birds",
-      src: `/media/heatmaps/small_birds_heatmap.png?d=${dayBust}`,
-      caption: "Detections with bbox-diagonal below the median — the resolution-bottleneck zones. If these clusters sit far from the camera, a closer second camera (or zoom) there is the highest-leverage move.",
-    },
-    {
-      id: "size",
-      label: "Size grid",
-      src: `/media/heatmaps/size_by_region.png?d=${dayBust}`,
-      caption: "Median bbox diagonal per grid cell, color-coded. Cool = small birds; warm = big birds. The number in each cell is the sample count.",
-    },
+    { id: "density", label: "Density", src: `/media/heatmaps/location_heatmap.png?d=${dayBust}`,
+      caption: "Where real-bird detections cluster. White contours mark the 25 / 50 / 75% density isolines. Red hatched cells are the current scene-mask hot zones — YOLO hits there get suppressed unless confidence beats the override." },
+    { id: "small", label: "Small birds", src: `/media/heatmaps/small_birds_heatmap.png?d=${dayBust}`,
+      caption: "Detections with bbox-diagonal below the median — the resolution-bottleneck zones. If these clusters sit far from the camera, a closer second camera (or zoom) there is the highest-leverage move." },
+    { id: "size", label: "Size grid", src: `/media/heatmaps/size_by_region.png?d=${dayBust}`,
+      caption: "Median bbox diagonal per grid cell, color-coded. Cool = small birds; warm = big birds. The number in each cell is the sample count." },
   ];
   const [active, setActive] = useState<typeof tabs[number]["id"]>("density");
   const tab = tabs.find((t) => t.id === active)!;
 
   return (
-    <section className="bg-white rounded-lg shadow-sm p-3">
+    <Card>
       <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
-        <h3 className="text-sm font-semibold">Where the birds are</h3>
-        <div className="flex gap-1 text-xs">
-          {tabs.map((t) => (
+        <CardTitle>Where the birds are</CardTitle>
+        <div className="flex gap-1.5 text-xs">
+          {tabs.map((tb) => (
             <button
-              key={t.id}
-              className={`px-2 py-1 rounded border ${
-                t.id === active
-                  ? "border-forest text-forest bg-cream font-medium"
-                  : "border-slate-200 text-slate-600 hover:border-forest hover:text-forest"
+              key={tb.id}
+              className={`rounded-full px-2.5 py-1 border transition-colors ${
+                tb.id === active
+                  ? "border-leaf text-surface"
+                  : "border-line text-muted hover:border-leaf hover:text-leaf"
               }`}
-              onClick={() => setActive(t.id)}
+              style={tb.id === active ? { background: "var(--accent)" } : undefined}
+              onClick={() => setActive(tb.id)}
             >
-              {t.label}
+              {tb.label}
             </button>
           ))}
         </div>
@@ -737,33 +565,29 @@ function LocationHeatmaps() {
       <img
         src={tab.src}
         alt={tab.label}
-        className="w-full rounded border border-slate-100"
+        className="w-full rounded-card border border-line"
         loading="lazy"
         onError={(e) => {
-          // Show a small placeholder if the cron hasn't rendered yet
-          // (fresh container, missing background frame, etc.).
           (e.currentTarget as HTMLImageElement).style.display = "none";
         }}
       />
-      <p className="text-xs text-slate-500 mt-1">{tab.caption}</p>
-    </section>
+      <p className="text-xs text-muted mt-2">{tab.caption}</p>
+    </Card>
   );
 }
 
-
 // ─── Page ────────────────────────────────────────────────────────────────
-
 export default function Stats() {
   const { data, isLoading, error } = useQuery({
     queryKey: ["stats", 30],
     queryFn: () => fetchStats(30),
-    refetchInterval: 5 * 60 * 1000,  // 5 min — today's row is recomputed on read
+    refetchInterval: 5 * 60 * 1000,
   });
 
-  if (isLoading) return <p className="text-slate-500">Loading stats…</p>;
+  if (isLoading) return <p className="text-muted mt-4">Loading stats…</p>;
   if (error || !data) {
     return (
-      <p className="text-red-600 text-sm">
+      <p className="text-rust text-sm mt-4">
         Couldn't load stats: {(error as Error)?.message ?? "unknown error"}
       </p>
     );
@@ -771,6 +595,12 @@ export default function Stats() {
 
   return (
     <div className="space-y-4">
+      <div className="mb-1">
+        <div className="fg-overline">Station diagnostics</div>
+        <h2 className="font-serif font-medium text-2xl text-ink leading-tight mt-0.5">
+          Pipeline & training stats
+        </h2>
+      </div>
       <HeadlineCards data={data} />
       <FunnelChart daily={data.daily} />
       <RatesChart daily={data.daily} />
@@ -783,7 +613,7 @@ export default function Stats() {
         <HourOfDayHeatmap daily={data.daily} />
         <YoloConfidenceHist daily={data.daily} />
       </div>
-      <p className="text-xs text-slate-400 text-right">
+      <p className="text-xs text-faint text-right tnum">
         Updated {new Date(data.as_of).toLocaleString()}
       </p>
     </div>

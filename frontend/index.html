@@ -4,8 +4,29 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/icons/icon-192.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#2f5d50" />
+    <!-- Sage paper / leaf accent for the mobile browser chrome. -->
+    <meta name="theme-color" content="#d8e1cf" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#141a13" media="(prefers-color-scheme: dark)" />
     <title>BirdWatcher</title>
+
+    <!-- Field-guide type: Newsreader (serif, for bird names & headings) +
+         Hanken Grotesk (sans, UI text). Loaded here so the @font-face is ready
+         before first paint and FOUT is minimal. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500&family=Hanken+Grotesk:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- Restore the saved theme before React mounts to avoid a light→dark flash. -->
+    <script>
+      try {
+        if (localStorage.getItem("bw-theme") === "dark") {
+          document.documentElement.classList.add("dark");
+        }
+      } catch (_) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

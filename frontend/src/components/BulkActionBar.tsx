@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { bulkCorrection } from "../lib/api";
 import SpeciesPicker, { NOT_A_BIRD } from "./SpeciesPicker";
+import { BanIcon } from "./FieldIcons";
 
 type Props = {
   selectedIds: number[];
@@ -12,13 +13,13 @@ type Props = {
 /**
  * Floating action bar that appears whenever the user has ≥ 1 detection
  * selected via the per-card checkboxes. Provides:
- *   - 🚫 one-tap bulk-mark-as-NAB (the dominant labeling workflow)
+ *   - one-tap bulk-mark-as-NAB (the dominant labeling workflow)
  *   - "Label as…" → opens the SpeciesPicker, applies the chosen species
  *     to every selected detection
  *   - Cancel
  *
- * Sits above the bottom nav (which is sticky at `bottom-0`); we anchor
- * at `bottom-14` to clear it.
+ * Styled as the field-guide "command pill": a floating ink slab centred
+ * above the sticky bottom nav, echoing the toast and zoom-modal language.
  */
 export default function BulkActionBar({ selectedIds, onClear }: Props) {
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -27,9 +28,6 @@ export default function BulkActionBar({ selectedIds, onClear }: Props) {
   const bulk = useMutation({
     mutationFn: (species: string) => bulkCorrection(selectedIds, species),
     onSuccess: () => {
-      // Optimistic refresh — all the updated detections move state
-      // (out of the current view if they were in /feed and got marked NAB;
-      // out of /labels if they got re-corrected to a real species).
       queryClient.invalidateQueries({ queryKey: ["detections"] });
       setPickerOpen(false);
       onClear();
@@ -40,38 +38,39 @@ export default function BulkActionBar({ selectedIds, onClear }: Props) {
 
   return (
     <>
-      <div className="fixed bottom-14 left-0 right-0 z-40 bg-forest text-cream shadow-lg px-3 py-2 flex items-center justify-between gap-2">
-        <span className="text-sm font-semibold">
-          {selectedIds.length} selected
+      <div className="fixed left-1/2 -translate-x-1/2 bottom-[5.5rem] z-40 w-[min(520px,calc(100%-28px))] flex items-center gap-3 rounded-2xl px-4 py-3 bg-ink text-paper shadow-[0_18px_40px_-18px_rgba(0,0,0,.5)]">
+        <span className="text-sm">
+          <strong className="font-bold tnum">{selectedIds.length}</strong> selected
         </span>
-        <div className="flex items-center gap-2">
-          <button
-            className="px-3 py-1 rounded bg-cream/10 hover:bg-cream/20 text-sm disabled:opacity-50"
-            onClick={() => bulk.mutate(NOT_A_BIRD)}
-            disabled={bulk.isPending}
-            title="Mark all selected as 'Not a bird'"
-          >
-            {bulk.isPending && bulk.variables === NOT_A_BIRD ? "Saving…" : "🚫 Not a bird"}
-          </button>
-          <button
-            className="px-3 py-1 rounded bg-cream text-forest font-semibold text-sm disabled:opacity-50"
-            onClick={() => setPickerOpen(true)}
-            disabled={bulk.isPending}
-          >
-            Label as…
-          </button>
-          <button
-            className="px-2 py-1 text-sm opacity-80 hover:opacity-100"
-            onClick={onClear}
-            disabled={bulk.isPending}
-          >
-            Cancel
-          </button>
-        </div>
+        <div className="flex-1" />
+        <button
+          className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold border border-paper/25 text-paper hover:text-rust hover:border-rust transition-colors disabled:opacity-50"
+          onClick={() => bulk.mutate(NOT_A_BIRD)}
+          disabled={bulk.isPending}
+          title="Mark all selected as 'Not a bird'"
+        >
+          <BanIcon size={15} />
+          {bulk.isPending && bulk.variables === NOT_A_BIRD ? "Saving…" : "Not a bird"}
+        </button>
+        <button
+          className="rounded-lg px-3.5 py-1.5 text-sm font-semibold text-surface disabled:opacity-50"
+          style={{ background: "var(--accent)" }}
+          onClick={() => setPickerOpen(true)}
+          disabled={bulk.isPending}
+        >
+          Label as…
+        </button>
+        <button
+          className="px-1.5 py-1 text-sm text-paper/70 hover:text-paper transition-colors"
+          onClick={onClear}
+          disabled={bulk.isPending}
+        >
+          Cancel
+        </button>
       </div>
       {bulk.isError && (
-        <div className="fixed bottom-28 left-0 right-0 z-40 px-3 text-center">
-          <span className="inline-block bg-red-100 border border-red-300 text-red-800 text-xs px-2 py-1 rounded">
+        <div className="fixed left-1/2 -translate-x-1/2 bottom-[9rem] z-40 px-3 text-center">
+          <span className="inline-block rounded-lg border border-rust/40 bg-[color-mix(in_oklab,var(--rust)_14%,var(--card))] text-rust text-xs px-2.5 py-1">
             Bulk correction failed: {(bulk.error as Error).message}
           </span>
         </div>
