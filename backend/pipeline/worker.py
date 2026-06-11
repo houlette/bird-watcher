@@ -25,7 +25,10 @@ from db.models import Correction, Detection, Visit
 from db.session import SessionLocal
 from db.utils import utcnow
 from ingest.haikubox import POLL_INTERVAL_SECONDS as HAIKUBOX_POLL_SECONDS
-from ingest.haikubox import poll_once as poll_haikubox
+from ingest.haikubox import (
+    backfill_and_recorrelate as backfill_haikubox,
+    poll_once as poll_haikubox,
+)
 from db.models import PipelineStatsDaily
 from pipeline.daylight import is_daylight
 from pipeline.stats import dates_with_visits, upsert_daily_stats
@@ -414,6 +417,19 @@ def start_worker() -> BackgroundScheduler:
         coalesce=True,
         id="render_heatmaps",
         next_run_time=datetime.now(timezone.utc),  # render once on container start
+    )
+    # Daily Haikubox widening pull at 03:00 UTC. Live poller fetches 1h
+    # every 30 s; this catches anything the live path missed (transient
+    # API failures, container restarts, scheduler skips) and re-evaluates
+    # `audio_confirmed` on Detection rows captured in the last 48h that
+    # the live correlation never saw matching audio for. Stats picks up
+    # the newly-confirmed rows on the next nightly compute.
+    scheduler.add_job(
+        backfill_haikubox,
+        CronTrigger(hour=3, minute=0),
+        max_instances=1,
+        coalesce=True,
+        id="haikubox_backfill",
     )
     scheduler.start()
     log.info(
