@@ -54,6 +54,7 @@ export default function SpeciesPicker({
 
   useEffect(() => {
     if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset-on-open runs once per open toggle, not on every render
       setQuery("");
       setHovered(null);
       requestAnimationFrame(() => inputRef.current?.focus());
@@ -106,7 +107,9 @@ export default function SpeciesPicker({
   // photo to a sentinel (no photo) and back tears down the imgs and
   // reinserts them — the visible "flash + jitter" the user reports.
   const lastUrlRef = useRef<string | null>(null);
+  // eslint-disable-next-line react-hooks/refs -- intentional last-value-during-render cache, see above
   if (comparePane?.url) lastUrlRef.current = comparePane.url;
+  // eslint-disable-next-line react-hooks/refs -- intentional last-value-during-render cache, see above
   const stableUrl = comparePane?.url ?? lastUrlRef.current;
 
   if (!open) return null;

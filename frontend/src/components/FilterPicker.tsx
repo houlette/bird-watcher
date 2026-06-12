@@ -73,6 +73,7 @@ export default function FilterPicker({ value, onChange }: Props) {
 
   useEffect(() => {
     if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset-on-open runs once per open toggle, not on every render
       setQuery("");
       requestAnimationFrame(() => inputRef.current?.focus());
     }
