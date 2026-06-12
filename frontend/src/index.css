@@ -30,6 +30,21 @@
   --rust: #b0552f;
   --radius: 10px;
 
+  /* Bare RGB triplets of the same palette. Tailwind's `/<alpha>` opacity
+     modifiers need `rgb(var(--x-rgb) / <alpha-value>)` color definitions;
+     a plain `var(--card)` hex makes `bg-surface/85` emit invalid CSS that
+     browsers silently drop (transparent chips, default-blue rings).
+     Keep each triplet in lockstep with its hex twin above. */
+  --bg-rgb: 216 225 207;
+  --panel-rgb: 230 235 218;
+  --card-rgb: 243 245 236;
+  --ink-rgb: 33 42 30;
+  --muted-rgb: 94 106 85;
+  --faint-rgb: 134 146 123;
+  --line-rgb: 210 220 196;
+  --accent-rgb: 53 101 68;
+  --rust-rgb: 176 85 47;
+
   color-scheme: light;
 }
 
@@ -44,6 +59,16 @@
   --line: #2f3829;
   --accent: #84ba90;
   --rust: #d68a4f;
+
+  --bg-rgb: 20 26 19;
+  --panel-rgb: 28 35 25;
+  --card-rgb: 35 43 31;
+  --ink-rgb: 233 237 223;
+  --muted-rgb: 154 166 143;
+  --faint-rgb: 116 128 107;
+  --line-rgb: 47 56 41;
+  --accent-rgb: 132 186 144;
+  --rust-rgb: 214 138 79;
 
   color-scheme: dark;
 }

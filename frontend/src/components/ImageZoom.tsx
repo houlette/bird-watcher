@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { CloseIcon } from "./FieldIcons";
@@ -19,6 +19,11 @@ type Props = {
  * as part of the field-guide palette rather than a system dialog.
  */
 export default function ImageZoom({ src, alt, onClose }: Props) {
+  // Scale-to-fit, computed from the natural size once the image loads.
+  // Feeder crops are often tiny (sub-150 px); max-w/max-h alone never
+  // upscales, so the "zoom" used to show the crop at thumbnail size.
+  const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -42,7 +47,20 @@ export default function ImageZoom({ src, alt, onClose }: Props) {
       <img
         src={src}
         alt={alt}
-        className="max-w-full max-h-full object-contain rounded-card"
+        className="object-contain rounded-card"
+        style={dims ? { width: dims.w, height: dims.h } : { maxWidth: "100%", maxHeight: "100%" }}
+        onLoad={(e) => {
+          const img = e.currentTarget;
+          if (!img.naturalWidth || !img.naturalHeight) return;
+          const scale = Math.min(
+            (window.innerWidth * 0.92) / img.naturalWidth,
+            (window.innerHeight * 0.85) / img.naturalHeight,
+          );
+          setDims({
+            w: Math.round(img.naturalWidth * scale),
+            h: Math.round(img.naturalHeight * scale),
+          });
+        }}
         onClick={(e) => e.stopPropagation()}
         draggable={false}
       />

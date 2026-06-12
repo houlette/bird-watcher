@@ -192,6 +192,26 @@ MODEL_TYPO_FIXES: dict[str, str] = {
 }
 
 
+# Canonical NA common names keyed by their hyphen/apostrophe/case-stripped
+# form. Lets _normalize_for_display recover the exact eBird/Haikubox
+# spelling — including possessives the model strips ("CLARKS NUTCRACKER"
+# → "Clark's Nutcracker") — without a per-species regex list. Built
+# lazily so importing this module stays cheap for scripts that never
+# classify.
+_canonical_by_stripped: dict[str, str] | None = None
+
+
+def _canonical_lookup(label: str) -> str | None:
+    global _canonical_by_stripped
+    if _canonical_by_stripped is None:
+        from na_birds import NA_BIRD_SPECIES
+
+        _canonical_by_stripped = {
+            _hyphen_insensitive(name): name for name in NA_BIRD_SPECIES
+        }
+    return _canonical_by_stripped.get(_hyphen_insensitive(label))
+
+
 def _normalize_for_display(uppercase_label: str) -> str:
     """Convert 'DARK EYED JUNCO' → 'Dark-eyed Junco' for storage / UI / fusion.
 
@@ -204,6 +224,12 @@ def _normalize_for_display(uppercase_label: str) -> str:
     # user never sees the typo in the feed or in fusion logs.
     if uppercase_label in MODEL_TYPO_FIXES:
         return MODEL_TYPO_FIXES[uppercase_label]
+    # Exact canonical NA name wins outright — handles hyphenation,
+    # casing, AND dropped possessive apostrophes in one shot. The
+    # heuristics below only run for labels outside the NA list.
+    canonical = _canonical_lookup(uppercase_label)
+    if canonical is not None:
+        return canonical
     label = uppercase_label.title()
     # Compound-adjective hyphenations in NA bird names. The leading \s+
     # consumes the space so we get "Dark-eyed" rather than "Dark -eyed".
@@ -226,10 +252,17 @@ def _normalize_for_display(uppercase_label: str) -> str:
     )
     for pat, rep in fixups:
         label = re.sub(pat, rep, label, flags=re.IGNORECASE)
-    # Restore possessive apostrophes the model strips.
-    label = re.sub(r"\bCoopers\b", "Cooper's", label)
-    label = re.sub(r"\bCassins\b", "Cassin's", label)
-    label = re.sub(r"\bSwainsons\b", "Swainson's", label)
+    # Possessive apostrophes for names the canonical lookup didn't cover
+    # (model vocabulary is broader than NA_BIRD_SPECIES — e.g. "HARRISS
+    # HAWK", "CLARKS NUTCRACKER"). One pattern over the eponym surnames
+    # that appear possessive in NA bird names.
+    label = re.sub(
+        r"\b(Allen|Anna|Bell|Bewick|Brewer|Bullock|Cassin|Clark|Cooper|Costa"
+        r"|Harris|Lawrence|Lewis|Lincoln|Say|Steller|Swainson|Townsend"
+        r"|Wilson|Woodhouse)s\b",
+        r"\1's",
+        label,
+    )
     label = re.sub(r"\s{2,}", " ", label).strip()
     return label
 

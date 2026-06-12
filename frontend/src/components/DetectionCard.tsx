@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import {
@@ -163,35 +164,57 @@ export default function DetectionCard({
 
       <div className={`p-3 ${compact ? "text-xs" : "text-sm"}`}>
         <div className="flex items-start justify-between gap-2">
-          <span
-            className={`font-serif leading-tight ${
-              identified ? "text-ink font-medium" : "text-muted italic"
-            } ${compact ? "text-sm" : "text-[16px]"}`}
-          >
-            {detection.species ?? "Unidentified"}
-          </span>
+          {/* Identified species link to their plate page (all sightings of
+              that species); sentinels and Unidentified stay plain text. */}
+          {identified && detection.species_id != null ? (
+            <Link
+              to={`/species/${detection.species_id}`}
+              className={`font-serif leading-tight text-ink font-medium hover:text-leaf hover:underline underline-offset-2 transition-colors ${
+                compact ? "text-sm" : "text-[16px]"
+              }`}
+            >
+              {detection.species}
+            </Link>
+          ) : (
+            <span
+              className={`font-serif leading-tight ${
+                identified ? "text-ink font-medium" : "text-muted italic"
+              } ${compact ? "text-sm" : "text-[16px]"}`}
+            >
+              {detection.species ?? "Unidentified"}
+            </span>
+          )}
           {detection.audio_confirmed && <AudioBadge />}
         </div>
 
         <div className="mt-1.5 flex items-center gap-2 text-xs text-muted">
-          <span
-            className={`inline-flex items-center gap-1 font-semibold tnum ${
-              tier === "low" ? "text-rust" : tier === "mid" ? "text-muted" : "text-ink"
-            }`}
-          >
-            <i
-              className="w-1.5 h-1.5 rounded-full"
-              style={{
-                background:
-                  tier === "low"
-                    ? "var(--rust)"
-                    : tier === "mid"
-                      ? "color-mix(in oklab, var(--accent) 55%, var(--faint))"
-                      : "var(--accent)",
-              }}
-            />
-            {pct}%
-          </span>
+          {/* A 0% chip is noise: it means the classifier rejected every
+              crop and the label came from elsewhere (LLM, user). Show the
+              provenance instead. */}
+          {pct > 0 ? (
+            <span
+              className={`inline-flex items-center gap-1 font-semibold tnum ${
+                tier === "low" ? "text-rust" : tier === "mid" ? "text-muted" : "text-ink"
+              }`}
+            >
+              <i
+                className="w-1.5 h-1.5 rounded-full"
+                style={{
+                  background:
+                    tier === "low"
+                      ? "var(--rust)"
+                      : tier === "mid"
+                        ? "color-mix(in oklab, var(--accent) 55%, var(--faint))"
+                        : "var(--accent)",
+                }}
+              />
+              {pct}%
+            </span>
+          ) : detection.correction_source?.startsWith("llm-claude") ? (
+            <span className="fg-overline text-leaf" title="Labeled by Claude, not the on-device classifier">
+              AI label
+            </span>
+          ) : null}
           <span className="text-faint tnum">{time}</span>
         </div>
 
@@ -208,9 +231,12 @@ export default function DetectionCard({
             const anyBad = isSmall || isDark || isBlurry;
             const cls = (bad: boolean) =>
               bad ? "text-rust font-semibold" : "text-faint";
+            // flex-wrap + nowrap spans: at narrow card widths a whole
+            // "label value" unit wraps to the next line, instead of the
+            // label and its value tearing apart mid-metric.
             return (
               <div
-                className="mt-1.5 flex items-center gap-2.5 text-[10px] tnum"
+                className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[10px] tnum"
                 title="Per-crop quality: pixel size · mean brightness 0-255 · Laplacian-variance sharpness. Rust = below the 'bad' threshold (80 / 30 / 30)."
               >
                 {anyBad && (
@@ -220,11 +246,11 @@ export default function DetectionCard({
                     aria-hidden
                   />
                 )}
-                <span className={cls(isSmall)}>{maxDim}px</span>
+                <span className={`whitespace-nowrap ${cls(isSmall)}`}>{maxDim}px</span>
                 <span className="text-line">·</span>
-                <span className={cls(isDark)}>lum {Math.round(detection.brightness!)}</span>
+                <span className={`whitespace-nowrap ${cls(isDark)}`}>lum {Math.round(detection.brightness!)}</span>
                 <span className="text-line">·</span>
-                <span className={cls(isBlurry)}>shp {Math.round(detection.sharpness!)}</span>
+                <span className={`whitespace-nowrap ${cls(isBlurry)}`}>shp {Math.round(detection.sharpness!)}</span>
               </div>
             );
           })()}

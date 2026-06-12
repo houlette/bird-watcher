@@ -1,6 +1,9 @@
 export type Detection = {
   id: number;
   visit_id: number;
+  // Null when the classifier rejected every crop ("Unidentified").
+  // Used to link the card title to the /species/:id plate page.
+  species_id: number | null;
   species: string | null;
   scientific_name: string | null;
   confidence: number;

@@ -38,8 +38,10 @@ export default function SpeciesPicker({
   onSelect,
   onCancel,
 }: Props) {
+  // ≥ 0.5% so a suggestion never rounds down to a "0%" row — those are
+  // pure noise on classifier-rejected (confidence 0) detections.
   const suggestionList = (suggestions ?? [])
-    .filter((s) => s.species && s.species !== current)
+    .filter((s) => s.species && s.species !== current && s.p >= 0.005)
     .slice(0, 3);
   const [query, setQuery] = useState("");
   const [hovered, setHovered] = useState<{ name: string; url: string | null } | null>(null);
@@ -156,7 +158,9 @@ export default function SpeciesPicker({
                 alt="your crop"
                 className="absolute inset-0 w-full h-full object-contain"
               />
-              <span className="fg-overline absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded bg-surface/85">
+              {/* z-[2] keeps the chip above the crop img; max-w + truncate
+                  so it never paints past the pane at narrow widths. */}
+              <span className="fg-overline absolute z-[2] top-1.5 left-1.5 max-w-[calc(100%-12px)] truncate px-1.5 py-0.5 rounded bg-surface/85">
                 your crop
               </span>
             </div>

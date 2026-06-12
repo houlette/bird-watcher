@@ -44,21 +44,28 @@ export default function App() {
     <div className="min-h-full flex flex-col bg-paper text-ink">
       {/* ── Masthead ───────────────────────────────────────────────────── */}
       <header className="max-w-3xl w-full mx-auto px-4 pt-5">
-        <div className="flex items-end justify-between gap-4 flex-wrap">
-          <div className="flex items-center gap-3.5">
-            <span className="grid place-items-center w-11 h-11 rounded-full text-leaf border border-line bg-[color-mix(in_oklab,var(--accent)_12%,var(--card))]">
+        {/* No flex-wrap: on a 375px phone the status block used to wrap
+            under the title, doubling the masthead height. The "Watching"
+            word hides on xs (dot + tooltip carry the meaning) so one row
+            always fits. */}
+        <div className="flex items-end justify-between gap-4">
+          <div className="flex items-center gap-3.5 min-w-0">
+            <span className="grid place-items-center w-11 h-11 shrink-0 rounded-full text-leaf border border-line bg-[color-mix(in_oklab,var(--accent)_12%,var(--card))]">
               <BirdMark size={24} />
             </span>
-            <div>
-              <div className="fg-overline">Backyard Feeder Station</div>
+            <div className="min-w-0">
+              <div className="fg-overline truncate">Backyard Feeder Station</div>
               <h1 className="font-serif font-medium text-ink leading-none tracking-tight text-3xl mt-0.5">
                 BirdWatcher
               </h1>
             </div>
           </div>
-          <div className="flex items-center gap-3 pb-1">
-            <span className="inline-flex items-center gap-2 text-leaf text-[11px] font-semibold uppercase tracking-[0.14em]">
-              <i className="fg-livedot" /> Watching
+          <div className="flex items-center gap-3 pb-1 shrink-0">
+            <span
+              className="inline-flex items-center gap-2 text-leaf text-[11px] font-semibold uppercase tracking-[0.14em]"
+              title="Pipeline live — watching for new clips"
+            >
+              <i className="fg-livedot" /> <span className="hidden sm:inline">Watching</span>
             </span>
             <button
               onClick={toggleTheme}

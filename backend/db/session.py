@@ -2,7 +2,7 @@
 import logging
 from pathlib import Path
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 log = logging.getLogger(__name__)
@@ -12,8 +12,25 @@ DB_PATH.parent.mkdir(exist_ok=True)
 
 engine = create_engine(
     f"sqlite:///{DB_PATH}",
-    connect_args={"check_same_thread": False},
+    # `timeout` is the sqlite3 driver's lock-wait budget. The pipeline
+    # worker writes every 5 s; without a timeout an API read that lands
+    # mid-write gets an immediate "database is locked" → 500.
+    connect_args={"check_same_thread": False, "timeout": 15},
 )
+
+
+@event.listens_for(engine, "connect")
+def _set_sqlite_pragmas(dbapi_conn, _connection_record) -> None:
+    # WAL lets readers proceed concurrently with the single writer
+    # (default rollback journal blocks them), which is what produced the
+    # intermittent 500s on /api/detections while the worker was
+    # committing. synchronous=NORMAL is the recommended pairing — safe
+    # against app crashes, only vulnerable to power loss mid-checkpoint.
+    cursor = dbapi_conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.execute("PRAGMA busy_timeout=15000")
+    cursor.close()
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

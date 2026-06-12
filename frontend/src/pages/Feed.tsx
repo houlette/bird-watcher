@@ -32,7 +32,25 @@ export default function Feed({ mode = "default" }: Props = {}) {
     setBatchMode(false);
   }, []);
 
-  const [filter, setFilter] = useState<Filter>({ mode: "all" });
+  // Persisted per browser tab: Feed unmounts on every tab switch
+  // (Labels/Stats/Settings), and losing a species or review-queue filter
+  // on each round-trip made multi-page review workflows painful.
+  const [filter, setFilter] = useState<Filter>(() => {
+    try {
+      const raw = sessionStorage.getItem("bw-feed-filter");
+      const parsed = raw ? (JSON.parse(raw) as Filter) : null;
+      return parsed && typeof parsed.mode === "string" ? parsed : { mode: "all" };
+    } catch {
+      return { mode: "all" };
+    }
+  });
+  useEffect(() => {
+    try {
+      sessionStorage.setItem("bw-feed-filter", JSON.stringify(filter));
+    } catch {
+      /* private mode — ignore */
+    }
+  }, [filter]);
   const effectiveFilter: Filter = isNabReview ? { mode: "all" } : filter;
 
   const {

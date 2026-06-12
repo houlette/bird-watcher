@@ -93,6 +93,12 @@ const MODEL_MARKERS: ModelMarker[] = [
   { date: "Jun 8", label: "birdclass-na" },
 ];
 
+// Markers on adjacent days collide when both labels sit at the same
+// height — stagger alternate labels down a line so each stays readable.
+function markerLabel(m: ModelMarker, i: number, t: Tokens) {
+  return { value: m.label, position: "top" as const, fontSize: 10, fill: t.slate, dy: (i % 2) * 12 };
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 function fmtPct(x: number | null | undefined): string {
   if (x === null || x === undefined || Number.isNaN(x)) return "—";
@@ -176,9 +182,9 @@ function FunnelChart({ daily }: { daily: DailyStats[] }) {
           <YAxis tick={{ fontSize: 11, fill: t.axis }} />
           <Tooltip {...tip(t)} />
           <Legend wrapperStyle={{ fontSize: 12, color: t.ink }} />
-          {MODEL_MARKERS.map((m) => (
+          {MODEL_MARKERS.map((m, i) => (
             <ReferenceLine key={m.date} x={m.date} stroke={t.slate} strokeDasharray="2 3"
-              label={{ value: m.label, position: "top", fontSize: 10, fill: t.slate }} />
+              label={markerLabel(m, i, t)} />
           ))}
           <Line type="monotone" dataKey="Clips" stroke={t.slate} strokeWidth={2} dot={false} />
           <Line type="monotone" dataKey="Detections" stroke={t.leaf} strokeWidth={2} dot={false} />
@@ -216,9 +222,9 @@ function RatesChart({ daily }: { daily: DailyStats[] }) {
           <YAxis tick={{ fontSize: 11, fill: t.axis }} domain={[0, 1]} tickFormatter={(v) => `${Math.round(v * 100)}%`} />
           <Tooltip {...tip(t)} formatter={(v) => (v == null ? "—" : fmtPct(Number(v)))} />
           <Legend wrapperStyle={{ fontSize: 12, color: t.ink }} />
-          {MODEL_MARKERS.map((m) => (
+          {MODEL_MARKERS.map((m, i) => (
             <ReferenceLine key={m.date} x={m.date} stroke={t.slate} strokeDasharray="2 3"
-              label={{ value: m.label, position: "top", fontSize: 10, fill: t.slate }} />
+              label={markerLabel(m, i, t)} />
           ))}
           <Line type="monotone" dataKey="YOLO bird rate" stroke={t.leaf} strokeWidth={2} dot={false} connectNulls />
           <Line type="monotone" dataKey="Classifier label rate" stroke={t.blue} strokeWidth={2} dot={false} connectNulls />
@@ -260,7 +266,10 @@ function SpeciesAccuracy({ totals }: { totals: StatsResponse["totals"] }) {
         <BarChart data={rows} layout="vertical" margin={{ left: 10, right: 30, top: 4, bottom: 4 }}>
           <CartesianGrid stroke={t.grid} strokeDasharray="3 3" />
           <XAxis type="number" domain={[0, 1]} tick={{ fontSize: 11, fill: t.axis }} tickFormatter={(v) => `${Math.round(v * 100)}%`} />
-          <YAxis type="category" dataKey="species" tick={{ fontSize: 11, fill: t.axis }} width={140} />
+          {/* interval={0}: render EVERY species label. Recharts' auto
+              interval skips alternate category ticks when they're tight,
+              which left bars floating with no species name next to them. */}
+          <YAxis type="category" dataKey="species" tick={{ fontSize: 11, fill: t.axis }} width={140} interval={0} />
           <Tooltip {...tip(t)} formatter={(v, _n, p) => [`${fmtPct(Number(v))} of ${p.payload.n}`, "Top-1 accuracy"]} />
           <Bar dataKey="accuracy" fill={t.leaf} radius={[0, 4, 4, 0]} />
         </BarChart>
@@ -285,7 +294,10 @@ function TrainingDataCard({ totals }: { totals: StatsResponse["totals"] }) {
   const xMax = Math.ceil((maxTotal * 1.05) / 100) * 100;
   const GOLD = t.leaf;
   const HIGH = t.sand;
-  const MED = t.grid;
+  // slate, not grid: the gridline color is intentionally near-invisible
+  // against the card background, which made the Medium segments (and the
+  // legend swatch) unreadable, especially in dark mode.
+  const MED = t.slate;
 
   return (
     <Card>
@@ -294,7 +306,7 @@ function TrainingDataCard({ totals }: { totals: StatsResponse["totals"] }) {
         Per-species labeled detections, stacked by trust tier.{" "}
         <span className="font-semibold" style={{ color: GOLD }}>Gold</span> = you verified;{" "}
         <span className="font-semibold" style={{ color: HIGH }}>High</span> = Claude HIGH (auto-committed, unreviewed);{" "}
-        <span className="font-semibold text-muted">Med</span> = Claude MEDIUM (awaiting your ✓ in the review filter).
+        <span className="font-semibold" style={{ color: MED }}>Med</span> = Claude MEDIUM (awaiting your ✓ in the review filter).
       </p>
       <div className="flex gap-4 text-xs text-muted mb-2">
         <span><span className="font-semibold text-ink tnum">{totals.training_ready_species}</span> training-ready <span className="text-faint">(≥ 100 gold)</span></span>
@@ -304,7 +316,7 @@ function TrainingDataCard({ totals }: { totals: StatsResponse["totals"] }) {
         <BarChart data={rows} layout="vertical" margin={{ left: 10, right: 30, top: 4, bottom: 4 }}>
           <CartesianGrid stroke={t.grid} strokeDasharray="3 3" />
           <XAxis type="number" domain={[0, xMax]} tick={{ fontSize: 11, fill: t.axis }} />
-          <YAxis type="category" dataKey="species" tick={{ fontSize: 11, fill: t.axis }} width={140} />
+          <YAxis type="category" dataKey="species" tick={{ fontSize: 11, fill: t.axis }} width={140} interval={0} />
           <Tooltip {...tip(t)}
             formatter={(v, _n, p) => [`${v}`, `${_n}  (gold=${p.payload.gold}, high=${p.payload.high}, med=${p.payload.medium}, total=${p.payload.total})`]} />
           <Legend wrapperStyle={{ fontSize: 11, color: t.ink }} />
@@ -438,19 +450,26 @@ function ImageQuality({ daily }: { daily: DailyStats[] }) {
 // ─── Hour-of-day heatmap ───────────────────────────────────────────────────
 function HourOfDayHeatmap({ daily }: { daily: DailyStats[] }) {
   const counts = useMemo(() => {
-    const out = new Array(24).fill(0);
+    // Payload buckets are UTC hours; rotate into the viewer's local zone
+    // so "birds at 7am" means 7am at the feeder, not 7am in Greenwich.
+    // Current offset only (DST shifts the window by an hour at the
+    // edges) — fine for a glanceable activity grid.
+    const utc = new Array(24).fill(0);
     for (const d of daily) {
       const h = d.payload.hour_of_day;
       if (!h) continue;
-      for (let i = 0; i < 24; i++) out[i] += h[i] ?? 0;
+      for (let i = 0; i < 24; i++) utc[i] += h[i] ?? 0;
     }
-    return out;
+    const offsetH = Math.round(-new Date().getTimezoneOffset() / 60);
+    const local = new Array(24).fill(0);
+    for (let u = 0; u < 24; u++) local[(u + offsetH + 24) % 24] = utc[u];
+    return local;
   }, [daily]);
   const max = Math.max(1, ...counts);
 
   return (
     <Card>
-      <CardTitle>Hour-of-day activity (UTC, 30d)</CardTitle>
+      <CardTitle>Hour-of-day activity (local time, 30d)</CardTitle>
       <div className="grid grid-cols-12 gap-1">
         {counts.map((c, hour) => {
           const intensity = c / max;
@@ -469,7 +488,7 @@ function HourOfDayHeatmap({ daily }: { daily: DailyStats[] }) {
           );
         })}
       </div>
-      <p className="text-xs text-muted mt-2">Darker = more detections at that UTC hour, summed over the window.</p>
+      <p className="text-xs text-muted mt-2">Darker = more detections at that local hour, summed over the window.</p>
     </Card>
   );
 }
