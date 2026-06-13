@@ -38,7 +38,7 @@ app = FastAPI(title="BirdWatcher", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://birdwatcher.ryanhoulette.com", "http://localhost:5173"],
+    allow_origins=["https://birdwatcher.ryanhoulette.com", "http://localhost:5270"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

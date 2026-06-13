@@ -34,6 +34,10 @@ export default defineConfig({
     }),
   ],
   server: {
+    // Port assigned in ~/Documents/Projects/PORTS.md; strictPort fails loudly
+    // on collision instead of drifting. Backend stays on :8000 (Docker).
+    port: Number(process.env.PORT) || 5270,
+    strictPort: true,
     proxy: {
       "/api": "http://localhost:8000",
       "/media": "http://localhost:8000",
