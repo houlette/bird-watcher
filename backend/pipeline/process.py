@@ -26,7 +26,7 @@ from pipeline.classify import SpeciesPrediction, classify_bird
 from pipeline.detect import detect_birds
 from pipeline.exceptions import SkipFile
 from pipeline.frames import extract_frames
-from pipeline.fuse import fuse
+from pipeline.fuse import FusedPrediction, fuse
 from pipeline.notify import dispatch_for_detection
 from pipeline.scene_mask import filter_detections as _scene_mask_filter
 from pipeline.track import Track, Tracker
@@ -64,13 +64,26 @@ def process_visit(visit: Visit, db: Session) -> int:
     # another identical crop into the feed (the 6–8× duplicate bug). Safe
     # because processed_at NULL means the user hasn't reviewed it yet, so no
     # Correction can reference these rows.
-    stale = (
-        db.query(Detection)
-        .filter(Detection.visit_id == visit.id)
-        .delete(synchronize_session=False)
+    #
+    # CRITICAL: probe with a READ first and only DELETE (+ commit immediately)
+    # when rows actually exist. A bulk DELETE opens a write transaction and
+    # SQLite holds the write lock until commit; issuing it unconditionally here
+    # — with the only commit at the end of the function — pinned the write lock
+    # through the entire 1–2 min frame-extraction + YOLO phase, so every other
+    # writer (user corrections, the Haikubox poller) failed with "database is
+    # locked". The common never-reprocessed case takes the read path and
+    # acquires no write lock until persistence.
+    has_prior = (
+        db.query(Detection.id).filter(Detection.visit_id == visit.id).first() is not None
     )
-    if stale:
-        log.warning("visit %d: cleared %d detection(s) from a prior incomplete attempt", visit.id, stale)
+    if has_prior:
+        cleared = (
+            db.query(Detection)
+            .filter(Detection.visit_id == visit.id)
+            .delete(synchronize_session=False)
+        )
+        db.commit()  # release the write lock now; don't hold it through processing
+        log.warning("visit %d: cleared %d detection(s) from a prior incomplete attempt", visit.id, cleared)
 
     tracker = Tracker()
     any_frame_decoded = False
@@ -248,11 +261,17 @@ def process_visit(visit: Visit, db: Session) -> int:
                 # Replace the top entry's species with NAB but keep the
                 # original raw_predictions intact for transparency —
                 # users can see what was overridden via the feed card.
-                top = SpeciesPrediction(
+                # Must be a FusedPrediction (not SpeciesPrediction): `top`
+                # is consumed below as a fused result — top.audio_confirmed
+                # is read when building the Detection row, and
+                # SpeciesPrediction has neither that field nor accepts it as
+                # a kwarg (it raised TypeError here every time the binary
+                # filter fired, crashing the visit).
+                top = FusedPrediction(
                     species=NOT_A_BIRD_LABEL,
-                    raw_label=NOT_A_BIRD_LABEL,
                     probability=nab_p,
                     audio_confirmed=False,
+                    seasonal_boost=1.0,
                 )
 
         species_id = _resolve_species(db, top.species)
