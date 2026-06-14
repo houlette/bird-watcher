@@ -208,11 +208,26 @@ export async function confirmLlmCorrection(detection_id: number) {
 }
 
 export async function bulkCorrection(detection_ids: number[], correct_species_name: string) {
-  const r = await fetch("/api/corrections/bulk", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ detection_ids, correct_species_name }),
-  });
+  // Abort after 20s (> the backend's 15s SQLite busy_timeout) so a request
+  // that stalls on write-lock contention or a dropped connection rejects
+  // cleanly instead of leaving the mutation pending forever — which froze
+  // the bulk action bar with no way to recover.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 20_000);
+  let r: Response;
+  try {
+    r = await fetch("/api/corrections/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ detection_ids, correct_species_name }),
+      signal: ctrl.signal,
+    });
+  } catch (e) {
+    if (ctrl.signal.aborted) throw new Error("bulkCorrection: timed out");
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
   if (!r.ok) throw new Error(`bulkCorrection: ${r.status}`);
   return (await r.json()) as {
     ok: boolean;

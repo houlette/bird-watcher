@@ -58,12 +58,19 @@ export default function BulkActionBar({ selectedIds, onClear }: Props) {
           onClick={() => setPickerOpen(true)}
           disabled={bulk.isPending}
         >
-          Label as…
+          {bulk.isPending && bulk.variables !== NOT_A_BIRD ? "Saving…" : "Label as…"}
         </button>
+        {/* Cancel is intentionally NEVER disabled — it's the escape hatch.
+            A slow or failed bulk request used to leave every button
+            (including this one) disabled, stranding the user with no way
+            out. reset() clears a stuck/errored mutation so re-entering
+            batch mode starts clean. */}
         <button
           className="px-1.5 py-1 text-sm text-paper/70 hover:text-paper transition-colors"
-          onClick={onClear}
-          disabled={bulk.isPending}
+          onClick={() => {
+            bulk.reset();
+            onClear();
+          }}
         >
           Cancel
         </button>
@@ -77,7 +84,15 @@ export default function BulkActionBar({ selectedIds, onClear }: Props) {
       )}
       <SpeciesPicker
         open={pickerOpen}
-        onSelect={(name) => bulk.mutate(name)}
+        onSelect={(name) => {
+          // Close the picker immediately so the user gets feedback that
+          // their pick registered, and so the bar's pending state / any
+          // error toast (both at z-40) aren't hidden behind the picker's
+          // z-50 backdrop. The mutation's onSuccess also closes it, but
+          // doing it here covers the slow / error paths too.
+          setPickerOpen(false);
+          bulk.mutate(name);
+        }}
         onCancel={() => setPickerOpen(false)}
       />
     </>
