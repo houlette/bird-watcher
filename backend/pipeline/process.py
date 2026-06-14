@@ -57,6 +57,21 @@ def process_visit(visit: Visit, db: Session) -> int:
         # worker doesn't loop on this row forever.
         raise SkipFile(f"clip file missing on disk: {clip_path}")
 
+    # Idempotency guard. A visit only reaches here with processed_at NULL, but
+    # that can mean "never run" OR "a prior attempt failed partway and left
+    # detections behind." Clear any pre-existing detections for this visit so a
+    # reprocess REPLACES rather than APPENDS — without this, every retry stacks
+    # another identical crop into the feed (the 6–8× duplicate bug). Safe
+    # because processed_at NULL means the user hasn't reviewed it yet, so no
+    # Correction can reference these rows.
+    stale = (
+        db.query(Detection)
+        .filter(Detection.visit_id == visit.id)
+        .delete(synchronize_session=False)
+    )
+    if stale:
+        log.warning("visit %d: cleared %d detection(s) from a prior incomplete attempt", visit.id, stale)
+
     tracker = Tracker()
     any_frame_decoded = False
     # Aggregate count of YOLO detections the scene mask suppressed

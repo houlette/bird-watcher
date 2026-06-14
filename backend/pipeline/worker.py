@@ -178,13 +178,23 @@ def _process_pending() -> None:
                 # Permanent skip — file is too big / corrupt / unsupported.
                 # Mark processed so we never re-queue it. The error message
                 # is preserved for inspection via the DB or the feed UI.
+                # Roll back first so any half-built rows from this attempt
+                # don't ride along on the commit below.
+                db.rollback()
                 log.warning("Visit %d skipped: %s", visit.id, skip)
                 visit.processed_at = utcnow()
                 visit.processing_error = f"skipped: {skip}"[:500]
                 db.commit()
             except Exception as exc:  # noqa: BLE001
                 # Transient error — leave processed_at NULL so the next tick
-                # retries. Record the latest error for visibility.
+                # retries. CRITICAL: roll back first. process_visit adds and
+                # flushes Detection rows into THIS session mid-loop; without a
+                # rollback, the commit below would persist those partial rows
+                # while processed_at stays NULL, so every retry tick appends a
+                # fresh duplicate set. That's what produced 6–8× duplicate
+                # crops in the review feed. Rolling back discards the partial
+                # detections so only the processing_error is recorded.
+                db.rollback()
                 log.exception("Visit %d failed", visit.id)
                 visit.processing_error = str(exc)[:500]
                 db.commit()
