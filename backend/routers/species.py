@@ -11,10 +11,11 @@ groups — the picker surfaces them separately pinned at the top.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from db.families import FAMILY_MEMBERS, FAMILY_NAMES
-from db.models import SENTINEL_LABELS, Species
+from db.models import SENTINEL_LABELS, Detection, Species
 from db.session import get_db
 from na_birds import NA_BIRD_SPECIES
 from pipeline import calibration
@@ -70,17 +71,37 @@ async def list_species(db: Session = Depends(get_db)) -> dict:
     families.sort(key=lambda r: r["name"])
 
     # Annotate every yard/extra entry with its Wikipedia thumbnail URL
-    # so the picker can show a reference photo next to the name.
-    # One DB hit pulls all species rows; ~hundreds of rows is negligible.
+    # so the picker can show a reference photo next to the name, plus the
+    # number of classified crops we have for it (the Filter picker sorts on
+    # this — see frontend FilterPicker). One DB hit pulls all species rows;
+    # ~hundreds of rows is negligible.
+    species_rows = db.query(
+        Species.id, Species.common_name, Species.reference_image_url
+    ).all()
     ref_urls: dict[str, str] = {
         sp.common_name: sp.reference_image_url
-        for sp in db.query(Species.common_name, Species.reference_image_url).all()
+        for sp in species_rows
         if sp.reference_image_url
     }
+    # species_id -> classified-crop count, remapped to display name.
+    crop_counts_by_id: dict[int, int] = dict(
+        db.query(Detection.species_id, func.count(Detection.id))
+        .filter(Detection.species_id.isnot(None))
+        .group_by(Detection.species_id)
+        .all()
+    )
+    id_to_name = {sp.id: sp.common_name for sp in species_rows}
+    crops_by_name: dict[str, int] = {}
+    for sid, count in crop_counts_by_id.items():
+        name = id_to_name.get(sid)
+        if name is not None:
+            crops_by_name[name] = count
     for item in yard_items:
         item["reference_image_url"] = ref_urls.get(item["name"])
+        item["crops"] = crops_by_name.get(item["name"], 0)
     for item in extra_items:
         item["reference_image_url"] = ref_urls.get(item["name"])
+        item["crops"] = crops_by_name.get(item["name"], 0)
     # For families, use the first member-species' thumbnail as a
     # representative reference (e.g., House Sparrow for Sparrow). Not
     # perfect — a juvenile House Sparrow doesn't look like a junco — but

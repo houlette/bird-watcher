@@ -66,7 +66,11 @@ export async function fetchDetections(params: {
 
 export type SpeciesEntry = {
   name: string;
+  // Audio-detection count from the Haikubox calibration (familiarity hint).
   total: number;
+  // Number of classified crops we have for this species in the DB. The
+  // Filter picker sorts its yard list on this.
+  crops?: number;
   reference_image_url?: string | null;
 };
 export type FamilyEntry = {

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 
 import { fetchSpecies, type SpeciesEntry } from "../lib/api";
@@ -83,8 +84,12 @@ export default function FilterPicker({ value, onChange }: Props) {
     if (!data) return { yardFiltered: [] as SpeciesEntry[], extraFiltered: [] as SpeciesEntry[] };
     const q = query.trim().toLowerCase();
     const match = (s: SpeciesEntry) => !q || s.name.toLowerCase().includes(q);
+    // Sort the yard list by how many classified crops we have (desc) rather
+    // than the backend's audio-frequency order — the species you've actually
+    // captured most belong at the top of the feed filter.
+    const yardByCrops = [...data.yard].sort((a, b) => (b.crops ?? 0) - (a.crops ?? 0));
     return {
-      yardFiltered: data.yard.filter(match).slice(0, 50),
+      yardFiltered: yardByCrops.filter(match).slice(0, 50),
       extraFiltered: data.extra.filter(match).slice(0, q ? 50 : 100),
     };
   }, [data, query]);
@@ -114,7 +119,8 @@ export default function FilterPicker({ value, onChange }: Props) {
         <ChevronIcon size={14} className="text-faint" />
       </button>
 
-      {open && (
+      {open &&
+        createPortal(
         <div
           className="fixed inset-0 z-50 flex items-start justify-center pt-16 backdrop-blur-sm bg-[color-mix(in_oklab,var(--ink)_52%,transparent)]"
           onClick={() => setOpen(false)}
@@ -173,9 +179,11 @@ export default function FilterPicker({ value, onChange }: Props) {
                           onClick={() => pick({ mode: "species", name: s.name })}
                         >
                           <span>{s.name}</span>
-                          {s.total > 0 && (
-                            <span className="text-xs text-faint tnum">
-                              {s.total >= 1000 ? `${Math.round(s.total / 1000)}k` : s.total}
+                          {(s.crops ?? 0) > 0 && (
+                            <span className="text-xs text-faint tnum" title="classified crops">
+                              {(s.crops ?? 0) >= 1000
+                                ? `${Math.round((s.crops ?? 0) / 1000)}k`
+                                : s.crops}
                             </span>
                           )}
                         </button>
@@ -208,8 +216,9 @@ export default function FilterPicker({ value, onChange }: Props) {
               )}
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+          document.body,
+        )}
     </>
   );
 }
