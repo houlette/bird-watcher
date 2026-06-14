@@ -132,13 +132,30 @@ def process_visit(visit: Visit, db: Session) -> int:
     tracks = tracker.finalize()
     log.info("visit %d: %d tracks", visit.id, len(tracks))
 
-    # Collected as we go through the track loop; flushed to disk via a single
-    # clip re-decode at the end so we don't have to keep all sampled frames
-    # in RAM during the track-finalize phase (that was the OOM trigger before).
-    # Maps track_id -> the sampled frame index of the chosen best detection.
-    frames_to_save: dict[int, int] = {}
+    # ----------------------------------------------------------------------
+    # The work is split into three phases so the SQLite *write* lock is held
+    # for only the few milliseconds it takes to INSERT the rows — not the
+    # seconds of model inference + video decode that dominate a visit. Holding
+    # the write lock across that compute is what starved user corrections and
+    # the Haikubox poller with "database is locked".
+    #
+    #   Phase 1 — compute (reads only): rank, save crops to disk, classify,
+    #             fuse, binary-filter; accumulate plain per-track records.
+    #   Phase 2 — persist (the ONLY write transaction): resolve species,
+    #             INSERT all detections + the visit update, commit once.
+    #   Phase 3 — side effects after commit (no lock held): save source
+    #             frames (disk) and dispatch push notifications.
+    # ----------------------------------------------------------------------
 
-    persisted = 0
+    # Maps track_id -> the sampled frame index of the chosen best detection;
+    # consumed by the single clip re-decode in Phase 3.
+    frames_to_save: dict[int, int] = {}
+    # Per-track records built in Phase 1. Each is a dict of Detection kwargs
+    # plus a transient "species_name" (resolved to an id in Phase 2; the
+    # get-or-create is a write, so it's deferred out of the compute phase).
+    pending: list[dict] = []
+
+    # ---- Phase 1: compute everything; NO writes (reads via fuse() only). ----
     for track in tracks:
         if not track.detections:
             continue
@@ -199,36 +216,36 @@ def process_visit(visit: Visit, db: Session) -> int:
             per_crop_predictions = [classify_bird(c) for c in candidate_crops]
             per_crop_predictions = [p for p in per_crop_predictions if p]
 
+        area_px, brightness, sharpness = _crop_quality(best.crop, list(best.bbox))
+
         if not per_crop_predictions:
             # Classifier rejected every crop. Persist with species_id=NULL;
             # the user can correct via the "Wrong species?" picker.
             log.info("track %d: classifier rejected; persisting as Unidentified", track.track_id)
-            area_px, brightness, sharpness = _crop_quality(best.crop, list(best.bbox))
-            db.add(Detection(
-                visit_id=visit.id,
-                species_id=None,
-                confidence=0.0,
-                yolo_confidence=float(best.confidence),
-                raw_predictions=[],
-                audio_confirmed=False,
-                crop_path=str(crop_rel_path),
-                bbox=list(best.bbox),
-                track_bboxes=track_bboxes_for_db,
-                track_id=track.track_id,
-                crop_area_px=area_px,
-                brightness=brightness,
-                sharpness=sharpness,
-            ))
+            pending.append({
+                "species_name": None,
+                "confidence": 0.0,
+                "yolo_confidence": float(best.confidence),
+                "raw_predictions": [],
+                "audio_confirmed": False,
+                "crop_path": str(crop_rel_path),
+                "bbox": list(best.bbox),
+                "track_bboxes": track_bboxes_for_db,
+                "track_id": track.track_id,
+                "crop_area_px": area_px,
+                "brightness": brightness,
+                "sharpness": sharpness,
+            })
             frames_to_save[track.track_id] = best.frame_index
-            persisted += 1
             continue
 
         averaged = _average_predictions(per_crop_predictions)
 
-        # Phase 4: fuse averaged visual predictions with audio + seasonal + size priors.
+        # Fuse averaged visual predictions with audio + seasonal + size priors.
         # `best.bbox` is the saved crop's bbox in full-frame 4K coords; the size
         # prior reads max(w, h) from it. When no size_priors.json is present
-        # (fresh DB / haven't calibrated yet), the prior is a no-op.
+        # (fresh DB / haven't calibrated yet), the prior is a no-op. fuse()
+        # issues DB *reads* only — no write lock.
         fused = fuse(
             [(p.species, p.probability) for p in averaged],
             db=db,
@@ -274,15 +291,11 @@ def process_visit(visit: Visit, db: Session) -> int:
                     seasonal_boost=1.0,
                 )
 
-        species_id = _resolve_species(db, top.species)
-
-        area_px, brightness, sharpness = _crop_quality(best.crop, list(best.bbox))
-        detection = Detection(
-            visit_id=visit.id,
-            species_id=species_id,
-            confidence=top.probability,
-            yolo_confidence=float(best.confidence),
-            raw_predictions=[
+        pending.append({
+            "species_name": top.species,
+            "confidence": top.probability,
+            "yolo_confidence": float(best.confidence),
+            "raw_predictions": [
                 {
                     "species": f.species,
                     "raw": raw_labels.get(f.species, ""),
@@ -291,34 +304,52 @@ def process_visit(visit: Visit, db: Session) -> int:
                 }
                 for f in fused
             ],
-            audio_confirmed=bool(top.audio_confirmed),
-            crop_path=str(crop_rel_path),
-            bbox=list(best.bbox),
-            track_bboxes=track_bboxes_for_db,
-            crop_area_px=area_px,
-            brightness=brightness,
-            sharpness=sharpness,
-            track_id=track.track_id,
-        )
-        db.add(detection)
-        db.flush()  # populate detection.id + created_at before push dispatch
+            "audio_confirmed": bool(top.audio_confirmed),
+            "crop_path": str(crop_rel_path),
+            "bbox": list(best.bbox),
+            "track_bboxes": track_bboxes_for_db,
+            "crop_area_px": area_px,
+            "brightness": brightness,
+            "sharpness": sharpness,
+            "track_id": track.track_id,
+        })
         frames_to_save[track.track_id] = best.frame_index
-        persisted += 1
 
-        # Phase 5: notify subscribers if this species hasn't been seen recently.
-        # Failures here are non-fatal — push is a nice-to-have, not a blocker.
-        try:
-            dispatch_for_detection(db, detection)
-        except Exception:  # noqa: BLE001
-            log.exception("Push dispatch failed for detection %d", detection.id)
-    log.info("visit %d: %d tracks persisted (some may be Unidentified)", visit.id, persisted)
+    # ---- Phase 2: persist in one short write transaction. ----
+    # Drop any read snapshot fuse() left open during the (seconds-long) Phase 1
+    # compute. Otherwise the INSERTs below would try to upgrade a stale
+    # snapshot and could fail with SQLITE_BUSY_SNAPSHOT — which busy_timeout
+    # does NOT retry — if the API committed a write meanwhile. Phase 1 wrote
+    # nothing, so rollback discards only the read transaction.
+    db.rollback()
+    species_id_cache: dict[str, int] = {}
+    detections: list[Detection] = []
+    for rec in pending:
+        name = rec.pop("species_name")
+        if name is None:
+            species_id = None
+        else:
+            species_id = species_id_cache.get(name)
+            if species_id is None:
+                species_id = _resolve_species(db, name)
+                species_id_cache[name] = species_id
+        detection = Detection(visit_id=visit.id, species_id=species_id, **rec)
+        db.add(detection)
+        detections.append(detection)
 
-    # Save the source frame for each persisted track. Done after the loop
-    # via a single clip re-decode so we don't have to keep full-resolution
-    # frames in RAM through track finalize. These frames are the ingredient
-    # for a future YOLO false-positive fine-tune; combined with Detection.bbox
-    # and the user-applied Correction.correct_species_id, they form the
-    # (image, bbox, label) triples the fine-tune will need.
+    visit.processed_at = utcnow()
+    visit.ended_at = utcnow()
+    visit.processing_error = None
+    visit.scene_mask_suppressed = scene_mask_suppressed
+    db.commit()
+    log.info("visit %d: %d tracks persisted (some may be Unidentified)", visit.id, len(detections))
+
+    # ---- Phase 3: side effects AFTER commit — no write lock held. ----
+    # Save the source frame for each persisted track via a single clip
+    # re-decode. These frames are the ingredient for a future YOLO
+    # false-positive fine-tune; combined with Detection.bbox and the
+    # user-applied Correction.correct_species_id, they form the (image, bbox,
+    # label) triples the fine-tune will need.
     try:
         _save_source_frames(clip_path, frames_to_save, visit_id=visit.id)
     except Exception:  # noqa: BLE001
@@ -326,11 +357,16 @@ def process_visit(visit: Visit, db: Session) -> int:
         # won't be available for YOLO fine-tune. Detection rows still land.
         log.exception("Failed to save source frames for visit %d", visit.id)
 
-    visit.processed_at = utcnow()
-    visit.ended_at = utcnow()
-    visit.processing_error = None
-    visit.scene_mask_suppressed = scene_mask_suppressed
-    db.commit()
+    # Notify subscribers of species not seen recently. Best-effort: failures
+    # are non-fatal, and each dispatch runs its own tiny transaction (it may
+    # prune dead subscriptions). Done after the main commit so the detections
+    # are durable first and the write lock isn't held across push network I/O.
+    for detection in detections:
+        try:
+            dispatch_for_detection(db, detection)
+        except Exception:  # noqa: BLE001
+            log.exception("Push dispatch failed for detection %d", detection.id)
+
     return len(tracks)
 
 
