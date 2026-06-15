@@ -261,6 +261,10 @@ def process_visit(visit: Visit, db: Session) -> int:
 
         top = fused[0]
 
+        # Records P(NAB) iff the binary filter overrides below; stored on the
+        # Detection so the kill cohort can be audited for precision.
+        nab_override_p = None
+
         # Binary post-filter. The species classifier is fooled by leaves /
         # ivy / debris with bird-shaped silhouettes; the binary head was
         # trained specifically on this yard's false positives. When it
@@ -275,6 +279,7 @@ def process_visit(visit: Visit, db: Session) -> int:
                     "track %d: binary filter override → NAB (was %s @ %.2f; NAB P=%.2f)",
                     track.track_id, top.species, top.probability, nab_p,
                 )
+                nab_override_p = nab_p
                 # Replace the top entry's species with NAB but keep the
                 # original raw_predictions intact for transparency —
                 # users can see what was overridden via the feed card.
@@ -312,6 +317,7 @@ def process_visit(visit: Visit, db: Session) -> int:
             "brightness": brightness,
             "sharpness": sharpness,
             "track_id": track.track_id,
+            "nab_override_p": nab_override_p,
         })
         frames_to_save[track.track_id] = best.frame_index
 

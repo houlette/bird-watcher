@@ -194,6 +194,14 @@ def compute_daily_stats(db: Session, d: date) -> PipelineStatsDaily:
     # --- Payload: variable-shape extras -------------------------------------
     payload: dict = {}
 
+    # Count of crops the binary post-filter overrode to NAB this day. Lets the
+    # Stats view (or a curl of /api/stats) track override volume over time
+    # without log-scraping; the binary_nab feed filter is where you audit
+    # whether those kills were correct.
+    payload["binary_nab_overrides"] = base_dets.filter(
+        Detection.nab_override_p.isnot(None)
+    ).count()
+
     # Hour-of-day histogram (24 buckets) — all detections in window.
     hour_counts = [0] * 24
     for ts, n in (

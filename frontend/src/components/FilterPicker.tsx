@@ -17,6 +17,7 @@ export type Filter =
   | { mode: "llm_review" } // HIGH-confidence committed labels
   | { mode: "llm_medium_review" } // MEDIUM-confidence — quick-review queue
   | { mode: "bad_quality" } // too dark / small / blurry
+  | { mode: "binary_nab" } // crops the binary filter overrode to NAB (audit)
   | { mode: "species"; name: string };
 
 type Props = {
@@ -38,6 +39,8 @@ export function filterLabel(f: Filter): string {
       return "LLM-labeled MEDIUM (review)";
     case "bad_quality":
       return "Bad crops";
+    case "binary_nab":
+      return "Binary-filter NABs";
     case "species":
       return f.name;
   }
@@ -59,6 +62,11 @@ const PINNED: { filter: Filter; label: string; hint?: string }[] = [
     hint: "quick-review queue",
   },
   { filter: { mode: "bad_quality" }, label: "Bad crops", hint: "too small / dark / blurry" },
+  {
+    filter: { mode: "binary_nab" },
+    label: "Binary-filter NABs",
+    hint: "crops it killed — audit",
+  },
 ];
 
 export default function FilterPicker({ value, onChange }: Props) {

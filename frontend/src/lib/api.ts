@@ -36,6 +36,9 @@ export type Detection = {
   crop_area_px: number | null;
   brightness: number | null;     // 0-255 (mean grayscale)
   sharpness: number | null;      // Laplacian variance
+  // P(NAB) the binary post-filter scored; non-null only when it overrode
+  // this crop to "Not a bird". Drives the binary-filter audit feed.
+  nab_override_p: number | null;
 };
 
 export async function fetchDetections(params: {
@@ -48,6 +51,7 @@ export async function fetchDetections(params: {
   awaiting_review?: boolean;
   source?: string;
   bad_quality?: boolean;
+  binary_nab?: boolean;
 } = {}) {
   const url = new URL("/api/detections", window.location.origin);
   if (params.limit) url.searchParams.set("limit", String(params.limit));
@@ -59,6 +63,7 @@ export async function fetchDetections(params: {
   if (params.awaiting_review) url.searchParams.set("awaiting_review", "true");
   if (params.source) url.searchParams.set("source", params.source);
   if (params.bad_quality) url.searchParams.set("bad_quality", "true");
+  if (params.binary_nab) url.searchParams.set("binary_nab", "true");
   const r = await fetch(url);
   if (!r.ok) throw new Error(`fetchDetections: ${r.status}`);
   return (await r.json()) as Detection[];

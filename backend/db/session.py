@@ -74,6 +74,10 @@ _ADDITIVE_COLUMNS = [
     ("detections", "crop_area_px", "INTEGER"),
     ("detections", "brightness", "REAL"),
     ("detections", "sharpness", "REAL"),
+    # P(NAB) recorded when the binary post-filter overrides a detection to
+    # "Not a bird". Non-NULL marks the binary-filter-killed cohort so its
+    # precision can be audited; see Detection.nab_override_p.
+    ("detections", "nab_override_p", "REAL"),
 ]
 
 

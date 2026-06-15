@@ -78,6 +78,7 @@ export default function Feed({ mode = "default" }: Props = {}) {
               ? "llm-claude-medium"
               : undefined,
         bad_quality: effectiveFilter.mode === "bad_quality",
+        binary_nab: effectiveFilter.mode === "binary_nab",
       }),
     initialPageParam: "" as string,
     getNextPageParam: (lastPage: Detection[]) => {

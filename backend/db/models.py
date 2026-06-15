@@ -138,6 +138,15 @@ class Detection(Base):
     # roughly; calibration depends on crop size.
     sharpness: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # Non-NULL iff the binary post-filter overrode this detection to
+    # "Not a bird", storing the P(NAB) it scored. Lets us audit the
+    # filter's precision: this is the cohort of crops it killed, and
+    # raw_predictions still holds the species (+ confidence) the classifier
+    # wanted — so a high-confidence original on a genuinely-non-bird crop is
+    # a "save" (a species false-positive averted), while a real bird here is
+    # a false kill. NULL for every other detection.
+    nab_override_p: Mapped[float | None] = mapped_column(Float, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     visit: Mapped[Visit] = relationship(back_populates="detections")
