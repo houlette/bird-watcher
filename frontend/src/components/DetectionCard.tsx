@@ -162,7 +162,7 @@ export default function DetectionCard({
           </div>
         )}
 
-      <div className={`p-3 ${compact ? "text-xs" : "text-sm"}`}>
+      <div className={`p-3 flex flex-col flex-1 ${compact ? "text-xs" : "text-sm"}`}>
         <div className="flex items-start justify-between gap-2">
           {/* Identified species link to their plate page (all sightings of
               that species); sentinels and Unidentified stay plain text. */}
@@ -287,7 +287,7 @@ export default function DetectionCard({
             showing it to me." Uses the FogIcon (dashed rules) and a
             sand-tinted hover to distinguish from NAB's rust. */}
         {!compact && (isLlmMediumReview || isAwaitingClassifierReview) && (
-          <div className="mt-2.5 grid grid-cols-4 gap-1.5 text-xs">
+          <div className="mt-auto pt-2.5 grid grid-cols-4 gap-1.5 text-xs">
             <button
               className="inline-flex items-center justify-center gap-1 px-1 py-1.5 rounded-md border text-leaf disabled:opacity-50 transition-colors hover:bg-[color-mix(in_oklab,var(--accent)_12%,transparent)]"
               style={{ borderColor: "color-mix(in oklab, var(--accent) 40%, var(--line))" }}
