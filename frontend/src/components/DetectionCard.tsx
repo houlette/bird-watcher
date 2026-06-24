@@ -4,13 +4,14 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import {
   confirmClassifierLabel,
-  confirmLlmCorrection,
   submitCorrection,
+  undoCorrection,
   type Detection,
 } from "../lib/api";
 import AudioBadge from "./AudioBadge";
 import ImageZoom from "./ImageZoom";
 import SpeciesPicker, { NOT_A_BIRD, POOR_QUALITY } from "./SpeciesPicker";
+import { useToast } from "./Toast";
 import { BanIcon, CheckIcon, EditIcon, FogIcon, ZoomIcon } from "./FieldIcons";
 
 type DetectionCardProps = {
@@ -24,6 +25,9 @@ type DetectionCardProps = {
   // When true, classifier-labeled-but-unreviewed cards swap the default
   // "Wrong species?" row for a Confirm / NAB / Change row.
   reviewMode?: boolean;
+  // When >1, this card stands in for a collapsed burst of crops from the
+  // same visit (the "Best only" view). Drives a small "1 of N" badge.
+  seriesCount?: number;
 };
 
 // Confidence → tier. Drives the ribbon under the crop and the dot in the
@@ -40,8 +44,10 @@ export default function DetectionCard({
   selected,
   onToggleSelect,
   reviewMode = false,
+  seriesCount = 1,
 }: DetectionCardProps) {
   const selectable = selected !== undefined && onToggleSelect !== undefined;
+  const showToast = useToast();
   // Show CAPTURE time (when the camera saw the bird). The API tags
   // captured_at as naive UTC; append 'Z' so JS parses it as UTC and
   // toLocaleString converts to the viewer's zone.
@@ -54,37 +60,66 @@ export default function DetectionCard({
   const pct = Math.round(detection.confidence * 100);
   const tier = confTier(detection.confidence);
 
+  // Undo backs the toast shown after any correction/confirmation: delete
+  // the Correction row that action created and restore the prior species.
+  // The action card usually unmounts on the post-action refetch (it no
+  // longer matches the feed/review filter), so undo can't run through a
+  // card-scoped mutation — it calls the API directly and leans on the
+  // context-level queryClient + toast, which both outlive the card.
+  const offerUndo = (
+    message: string,
+    correction_id: number,
+    restore_species_id: number | null,
+  ) => {
+    showToast(message, {
+      label: "Undo",
+      onAction: () => {
+        undoCorrection(correction_id, restore_species_id)
+          .then(() => {
+            queryClient.invalidateQueries({ queryKey: ["detections"] });
+            showToast("Undone");
+          })
+          .catch(() => showToast("Couldn't undo — try refreshing"));
+      },
+    });
+  };
+
   const correctionMutation = useMutation({
     mutationFn: (species: string) => submitCorrection(detection.id, species),
-    onSuccess: () => {
+    onSuccess: (data, species) => {
       queryClient.invalidateQueries({ queryKey: ["detections"] });
       setPickerOpen(false);
+      const verb =
+        species === NOT_A_BIRD
+          ? "Marked “Not a bird”"
+          : species === POOR_QUALITY
+            ? "Marked poor quality"
+            : `Changed to ${data.species}`;
+      offerUndo(verb, data.correction_id, data.prev_species_id);
     },
   });
 
-  // The Confirm button routes to one of two endpoints (see original notes).
-  const isLlmMediumReview = detection.correction_source === "llm-claude-medium";
   const isAwaitingClassifierReview =
     reviewMode && detection.species !== null && detection.correction_source === null;
   const confirmMutation = useMutation({
-    mutationFn: () =>
-      isLlmMediumReview
-        ? confirmLlmCorrection(detection.id)
-        : confirmClassifierLabel(detection.id),
-    onSuccess: () => {
+    mutationFn: () => confirmClassifierLabel(detection.id),
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["detections"] });
+      offerUndo(
+        data.species ? `Confirmed ${data.species}` : "Confirmed",
+        data.correction_id,
+        data.prev_species_id,
+      );
     },
   });
 
-  // Outline state: selection (leaf), MEDIUM-review cohort (rust/warning),
-  // production-classifier review (soft leaf), or none.
+  // Outline state: selection (leaf), production-classifier review (soft
+  // leaf), or none.
   const ringClass = selected
     ? "ring-2 ring-leaf"
-    : isLlmMediumReview
-      ? "ring-1 ring-rust/50"
-      : isAwaitingClassifierReview
-        ? "ring-1 ring-leaf/40"
-        : "ring-1 ring-transparent";
+    : isAwaitingClassifierReview
+      ? "ring-1 ring-leaf/40"
+      : "ring-1 ring-transparent";
 
   return (
     <div
@@ -131,6 +166,14 @@ export default function DetectionCard({
             <ZoomIcon size={14} />
           </span>
         )}
+        {seriesCount > 1 && (
+          <span
+            className="absolute left-2 bottom-2 z-[3] rounded-full bg-surface/85 px-2 py-0.5 text-[10px] font-semibold text-muted backdrop-blur-sm"
+            title={`Best of ${seriesCount} crops from this visit`}
+          >
+            1 of {seriesCount}
+          </span>
+        )}
         <div className={`fg-confbar tier-${tier}`} aria-hidden>
           <span style={{ width: `${Math.max(6, pct)}%` }} />
         </div>
@@ -138,7 +181,7 @@ export default function DetectionCard({
 
       {/* Review mode: stack the proposed species' reference photo below the
           crop at the same size for a direct A/B compare. */}
-      {(isLlmMediumReview || isAwaitingClassifierReview) &&
+      {isAwaitingClassifierReview &&
         detection.reference_image_url && (
           <div className="relative w-full aspect-[4/3] overflow-hidden border-t border-line">
             <img
@@ -286,7 +329,7 @@ export default function DetectionCard({
             semantically "this image will never be identifiable, stop
             showing it to me." Uses the FogIcon (dashed rules) and a
             sand-tinted hover to distinguish from NAB's rust. */}
-        {!compact && (isLlmMediumReview || isAwaitingClassifierReview) && (
+        {!compact && isAwaitingClassifierReview && (
           <div className="mt-auto pt-2.5 grid grid-cols-4 gap-1.5 text-xs">
             <button
               className="inline-flex items-center justify-center gap-1 px-1 py-1.5 rounded-md border text-leaf disabled:opacity-50 transition-colors hover:bg-[color-mix(in_oklab,var(--accent)_12%,transparent)]"
@@ -329,7 +372,7 @@ export default function DetectionCard({
         )}
 
         {/* Default row: Wrong species? + one-tap NAB. */}
-        {!compact && !isLlmMediumReview && !isAwaitingClassifierReview && (
+        {!compact && !isAwaitingClassifierReview && (
           <div className="mt-2.5 flex items-center justify-between gap-2 text-xs">
             <button
               className="text-muted hover:text-leaf underline underline-offset-2 disabled:opacity-50 transition-colors"

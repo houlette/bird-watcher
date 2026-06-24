@@ -4,6 +4,7 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 
 import App from "./App";
+import { ToastProvider } from "./components/Toast";
 import "./index.css";
 
 const queryClient = new QueryClient({
@@ -18,7 +19,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
       {/* Opt into the v7 behaviors now — same semantics for this app,
           and it silences the per-navigation future-flag console warnings. */}
       <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-        <App />
+        <ToastProvider>
+          <App />
+        </ToastProvider>
       </BrowserRouter>
     </QueryClientProvider>
   </React.StrictMode>,

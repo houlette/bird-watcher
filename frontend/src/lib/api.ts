@@ -49,7 +49,6 @@ export async function fetchDetections(params: {
   only_not_a_bird?: boolean;
   only_unidentified?: boolean;
   awaiting_review?: boolean;
-  source?: string;
   bad_quality?: boolean;
   binary_nab?: boolean;
 } = {}) {
@@ -61,7 +60,6 @@ export async function fetchDetections(params: {
   if (params.only_not_a_bird) url.searchParams.set("only_not_a_bird", "true");
   if (params.only_unidentified) url.searchParams.set("only_unidentified", "true");
   if (params.awaiting_review) url.searchParams.set("awaiting_review", "true");
-  if (params.source) url.searchParams.set("source", params.source);
   if (params.bad_quality) url.searchParams.set("bad_quality", "true");
   if (params.binary_nab) url.searchParams.set("binary_nab", "true");
   const r = await fetch(url);
@@ -110,7 +108,34 @@ export async function submitCorrection(detection_id: number, correct_species_nam
     body: JSON.stringify({ detection_id, correct_species_name }),
   });
   if (!r.ok) throw new Error(`submitCorrection: ${r.status}`);
-  return (await r.json()) as { ok: boolean; species_id: number; species: string };
+  return (await r.json()) as {
+    ok: boolean;
+    species_id: number;
+    species: string;
+    // Identifies the row to delete (and value to restore) on undo.
+    correction_id: number;
+    prev_species_id: number | null;
+  };
+}
+
+// Reverse a single just-made correction or confirmation. Backs the "Undo"
+// toast: deletes the Correction row the action created and restores the
+// detection's pre-action species_id.
+export async function undoCorrection(
+  correction_id: number,
+  restore_species_id: number | null,
+) {
+  const r = await fetch("/api/corrections/undo", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ correction_id, restore_species_id }),
+  });
+  if (!r.ok) throw new Error(`undoCorrection: ${r.status}`);
+  return (await r.json()) as {
+    ok: boolean;
+    detection_id: number;
+    restored_species_id: number | null;
+  };
 }
 
 // ---- Stats ---------------------------------------------------------------
@@ -196,19 +221,10 @@ export async function confirmClassifierLabel(detection_id: number) {
     detection_id: number;
     source: string;
     species: string | null;
-  };
-}
-
-export async function confirmLlmCorrection(detection_id: number) {
-  const r = await fetch(`/api/corrections/llm-confirm/${detection_id}`, {
-    method: "POST",
-  });
-  if (!r.ok) throw new Error(`confirmLlmCorrection: ${r.status}`);
-  return (await r.json()) as {
-    ok: boolean;
-    detection_id: number;
-    source: string;
-    species: string | null;
+    // For the undo toast: confirming leaves species_id unchanged, so
+    // prev_species_id echoes the current value.
+    correction_id: number;
+    prev_species_id: number | null;
   };
 }
 

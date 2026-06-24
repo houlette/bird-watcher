@@ -69,11 +69,24 @@ async def submit_correction(req: CorrectionRequest, db: Session = Depends(get_db
 
     species = _resolve_species(db, name)
     _retire_stale_review_queue_rows(db, detection.id)
-    db.add(Correction(detection_id=detection.id, correct_species_id=species.id))
+    # Snapshot the species_id the user is overwriting so the response can
+    # tell the client what to restore on undo (the PWA's toast also keeps
+    # its own snapshot, but echoing it keeps the two in lockstep).
+    prev_species_id = detection.species_id
+    correction = Correction(detection_id=detection.id, correct_species_id=species.id)
+    db.add(correction)
     # Update the detection in-place so the feed reflects the correction immediately.
     detection.species_id = species.id
     db.commit()
-    return {"ok": True, "species_id": species.id, "species": species.common_name}
+    return {
+        "ok": True,
+        "species_id": species.id,
+        "species": species.common_name,
+        # Identifies the row to delete (and the value to restore) if the
+        # user taps Undo on the confirmation toast.
+        "correction_id": correction.id,
+        "prev_species_id": prev_species_id,
+    }
 
 
 @router.post("/confirm/{detection_id}")
@@ -114,19 +127,63 @@ async def confirm_classifier_label(detection_id: int, db: Session = Depends(get_
         )
 
     species = db.get(Species, detection.species_id)
-    db.add(
-        Correction(
-            detection_id=detection_id,
-            correct_species_id=detection.species_id,
-            source="user-confirmed",
-        )
+    correction = Correction(
+        detection_id=detection_id,
+        correct_species_id=detection.species_id,
+        source="user-confirmed",
     )
+    db.add(correction)
     db.commit()
     return {
         "ok": True,
         "detection_id": detection_id,
         "source": "user-confirmed",
         "species": species.common_name if species else None,
+        # Confirming doesn't change species_id, so undo just removes this
+        # Correction row; prev_species_id echoes the unchanged value.
+        "correction_id": correction.id,
+        "prev_species_id": detection.species_id,
+    }
+
+
+class UndoRequest(BaseModel):
+    # The Correction row to remove — returned by /corrections,
+    # /corrections/confirm, and bulk so the client can target exactly the
+    # row its last action created.
+    correction_id: int
+    # The species_id the detection had *before* that action, restored
+    # in-place. None is valid (it reverts to the Unidentified queue).
+    restore_species_id: int | None = None
+
+
+@router.post("/undo")
+async def undo_correction(req: UndoRequest, db: Session = Depends(get_db)) -> dict:
+    """Reverse a single just-made correction/confirmation.
+
+    Backs the PWA's "Undo" toast: review labelling is fast and tapping the
+    wrong button on a burst of near-identical crops is easy. We delete the
+    Correction row the action created and restore Detection.species_id to
+    the pre-action value the client snapshotted.
+
+    Idempotent-ish: a missing correction_id 404s (already undone, or never
+    existed), so a double-tap on Undo can't corrupt anything.
+    """
+    correction = (
+        db.query(Correction).filter(Correction.id == req.correction_id).one_or_none()
+    )
+    if correction is None:
+        raise HTTPException(404, f"correction {req.correction_id} not found")
+
+    detection_id = correction.detection_id
+    detection = db.query(Detection).filter(Detection.id == detection_id).one_or_none()
+    if detection is not None:
+        detection.species_id = req.restore_species_id
+    db.delete(correction)
+    db.commit()
+    return {
+        "ok": True,
+        "detection_id": detection_id,
+        "restored_species_id": req.restore_species_id,
     }
 
 

@@ -14,8 +14,7 @@ export type Filter =
   | { mode: "all" }
   | { mode: "unidentified" }
   | { mode: "awaiting_review" } // classifier-labeled, user hasn't acted yet
-  | { mode: "llm_review" } // HIGH-confidence committed labels
-  | { mode: "llm_medium_review" } // MEDIUM-confidence — quick-review queue
+  | { mode: "nab" } // past 'Not a bird' labels — re-correct mistakes
   | { mode: "bad_quality" } // too dark / small / blurry
   | { mode: "binary_nab" } // crops the binary filter overrode to NAB (audit)
   | { mode: "species"; name: string };
@@ -23,6 +22,10 @@ export type Filter =
 type Props = {
   value: Filter;
   onChange: (next: Filter) => void;
+  // "feed": everyday browsing filters + species typeahead.
+  // "review": the niche audit cohorts (NAB / Bad crops / Binary NABs),
+  // surfaced on the Review tab and kept OUT of the main feed filter.
+  surface?: "feed" | "review";
 };
 
 export function filterLabel(f: Filter): string {
@@ -33,10 +36,8 @@ export function filterLabel(f: Filter): string {
       return "Unidentified only";
     case "awaiting_review":
       return "Awaiting review";
-    case "llm_review":
-      return "LLM-labeled HIGH";
-    case "llm_medium_review":
-      return "LLM-labeled MEDIUM (review)";
+    case "nab":
+      return "Not a bird";
     case "bad_quality":
       return "Bad crops";
     case "binary_nab":
@@ -46,8 +47,10 @@ export function filterLabel(f: Filter): string {
   }
 }
 
-// Pinned non-species modes, with a short hint for the row subtitle.
-const PINNED: { filter: Filter; label: string; hint?: string }[] = [
+type PinnedEntry = { filter: Filter; label: string; hint?: string };
+
+// Everyday feed filters.
+const FEED_PINNED: PinnedEntry[] = [
   { filter: { mode: "all" }, label: "All birds" },
   { filter: { mode: "unidentified" }, label: "Unidentified only", hint: "species_id IS NULL" },
   {
@@ -55,12 +58,12 @@ const PINNED: { filter: Filter; label: string; hint?: string }[] = [
     label: "Awaiting review",
     hint: "classifier labeled, not yet reviewed",
   },
-  { filter: { mode: "llm_review" }, label: "LLM-labeled HIGH", hint: "auto-committed" },
-  {
-    filter: { mode: "llm_medium_review" },
-    label: "LLM-labeled MEDIUM",
-    hint: "quick-review queue",
-  },
+];
+
+// Review-tab audit cohorts. Pulled out of the main feed filter so day-to-day
+// browsing isn't cluttered with corner-case maintenance views.
+const REVIEW_PINNED: PinnedEntry[] = [
+  { filter: { mode: "nab" }, label: "Not a bird", hint: "past NAB labels — re-correct" },
   { filter: { mode: "bad_quality" }, label: "Bad crops", hint: "too small / dark / blurry" },
   {
     filter: { mode: "binary_nab" },
@@ -69,7 +72,9 @@ const PINNED: { filter: Filter; label: string; hint?: string }[] = [
   },
 ];
 
-export default function FilterPicker({ value, onChange }: Props) {
+export default function FilterPicker({ value, onChange, surface = "feed" }: Props) {
+  const isReview = surface === "review";
+  const pinned = isReview ? REVIEW_PINNED : FEED_PINNED;
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -139,22 +144,24 @@ export default function FilterPicker({ value, onChange }: Props) {
             className="fg-card shadow-pop w-full max-w-md mx-4 max-h-[75vh] flex flex-col overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="p-3 border-b border-line">
-              <input
-                ref={inputRef}
-                type="text"
-                placeholder="Search species…"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                className="fg-input"
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") setOpen(false);
-                }}
-              />
-            </div>
+            {!isReview && (
+              <div className="p-3 border-b border-line">
+                <input
+                  ref={inputRef}
+                  type="text"
+                  placeholder="Search species…"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  className="fg-input"
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") setOpen(false);
+                  }}
+                />
+              </div>
+            )}
 
             <div className="overflow-y-auto flex-1">
-              {PINNED.map((p) => (
+              {pinned.map((p) => (
                 <button
                   key={p.label}
                   className={`${rowBase} flex items-center justify-between gap-2 ${
@@ -167,6 +174,8 @@ export default function FilterPicker({ value, onChange }: Props) {
                 </button>
               ))}
 
+              {!isReview && (
+                <>
               {isLoading && <p className="p-3 text-sm text-muted">Loading species…</p>}
               {!isLoading && yardFiltered.length === 0 && extraFiltered.length === 0 && query && (
                 <p className="p-3 text-sm text-muted">No species match "{query}".</p>
@@ -220,6 +229,8 @@ export default function FilterPicker({ value, onChange }: Props) {
                       </li>
                     ))}
                   </ul>
+                </>
+              )}
                 </>
               )}
             </div>
