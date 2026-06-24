@@ -78,8 +78,8 @@ export default function Feed({ surface = "feed" }: Props = {}) {
   const storageKey = isReview ? "bw-review-filter" : "bw-feed-filter";
   const defaultFilter: Filter = isReview ? { mode: "nab" } : { mode: "all" };
   const allowedModes = isReview
-    ? new Set(["nab", "bad_quality", "binary_nab"])
-    : new Set(["all", "unidentified", "awaiting_review", "species"]);
+    ? new Set(["awaiting_review", "nab", "bad_quality", "binary_nab"])
+    : new Set(["all", "unidentified", "species"]);
   const [filter, setFilter] = useState<Filter>(() => {
     try {
       const raw = sessionStorage.getItem(storageKey);

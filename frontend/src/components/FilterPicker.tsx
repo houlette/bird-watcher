@@ -53,16 +53,17 @@ type PinnedEntry = { filter: Filter; label: string; hint?: string };
 const FEED_PINNED: PinnedEntry[] = [
   { filter: { mode: "all" }, label: "All birds" },
   { filter: { mode: "unidentified" }, label: "Unidentified only", hint: "species_id IS NULL" },
+];
+
+// Review-tab cohorts. The active triage queues + audit views live here,
+// pulled out of the main feed filter so day-to-day browsing isn't
+// cluttered with maintenance views.
+const REVIEW_PINNED: PinnedEntry[] = [
   {
     filter: { mode: "awaiting_review" },
     label: "Awaiting review",
     hint: "classifier labeled, not yet reviewed",
   },
-];
-
-// Review-tab audit cohorts. Pulled out of the main feed filter so day-to-day
-// browsing isn't cluttered with corner-case maintenance views.
-const REVIEW_PINNED: PinnedEntry[] = [
   { filter: { mode: "nab" }, label: "Not a bird", hint: "past NAB labels — re-correct" },
   { filter: { mode: "bad_quality" }, label: "Bad crops", hint: "too small / dark / blurry" },
   {
