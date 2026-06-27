@@ -2,12 +2,14 @@ import { useEffect, useState } from "react";
 import { NavLink, Route, Routes } from "react-router-dom";
 
 import Feed from "./pages/Feed";
+import Insights from "./pages/Insights";
 import Settings from "./pages/Settings";
 import Species from "./pages/Species";
 import Stats from "./pages/Stats";
 import {
   BirdMark,
   ChartIcon,
+  ClockIcon,
   FeedIcon,
   GearIcon,
   MoonIcon,
@@ -88,6 +90,7 @@ export default function App() {
           <Route path="/" element={<Feed key="feed" />} />
           <Route path="/review" element={<Feed key="review" surface="review" />} />
           <Route path="/species/:id" element={<Species />} />
+          <Route path="/insights" element={<Insights />} />
           <Route path="/stats" element={<Stats />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
@@ -97,6 +100,7 @@ export default function App() {
       <nav className="sticky bottom-0 z-30 max-w-[560px] w-full mx-auto flex justify-around gap-1 px-2 pt-2 pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))] bg-[color-mix(in_oklab,var(--panel)_92%,transparent)] backdrop-blur-md border border-line border-b-0 rounded-t-2xl">
         <Tab to="/" label="Feed" icon={<FeedIcon size={20} />} />
         <Tab to="/review" label="Review" icon={<TagIcon size={20} />} />
+        <Tab to="/insights" label="Insights" icon={<ClockIcon size={20} />} />
         <Tab to="/stats" label="Stats" icon={<ChartIcon size={20} />} />
         <Tab to="/settings" label="Settings" icon={<GearIcon size={20} />} />
       </nav>

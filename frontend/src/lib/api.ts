@@ -211,6 +211,36 @@ export async function fetchStats(days = 30): Promise<StatsResponse> {
   return (await r.json()) as StatsResponse;
 }
 
+// ---- Species activity (Insights tab) ------------------------------------
+
+export type SpeciesActivity = {
+  species_id: number;
+  species: string;
+  scientific_name: string | null;
+  total: number;
+  // ISO timestamps in the feeder's local timezone.
+  first_seen: string;
+  last_seen: string;
+  // 24 buckets, index = local hour 0–23.
+  by_hour: number[];
+  // 53 buckets, index = (local day-of-year − 1) // 7 — i.e. fixed 7-day
+  // weeks tiling Jan 1 forward. Bucket 0 ≈ first week of January.
+  by_week: number[];
+};
+
+export type ActivityResponse = {
+  // IANA timezone the buckets were computed in (the feeder's location).
+  tz: string;
+  species: SpeciesActivity[];
+  as_of: string;
+};
+
+export async function fetchSpeciesActivity(): Promise<ActivityResponse> {
+  const r = await fetch("/api/stats/activity");
+  if (!r.ok) throw new Error(`fetchSpeciesActivity: ${r.status}`);
+  return (await r.json()) as ActivityResponse;
+}
+
 export async function confirmClassifierLabel(detection_id: number) {
   const r = await fetch(`/api/corrections/confirm/${detection_id}`, {
     method: "POST",

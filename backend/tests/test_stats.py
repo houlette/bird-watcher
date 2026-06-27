@@ -22,6 +22,7 @@ from main import app
 from pipeline.stats import (
     compute_daily_stats,
     compute_global_stats,
+    compute_species_activity,
     upsert_daily_stats,
 )
 
@@ -270,6 +271,80 @@ def test_endpoint_returns_daily_with_today_recomputed(client, db):
     # Derived rates surfaced.
     assert "yolo_bird_rate" in last
     assert "classifier_accuracy" in last
+
+
+def test_species_activity_buckets_in_local_time(db):
+    """compute_species_activity buckets detections per species by LOCAL
+    hour and week, excludes sentinels, and sorts by total desc."""
+    from zoneinfo import ZoneInfo
+
+    from settings import settings
+
+    tz = ZoneInfo(settings.camera_timezone)
+
+    def expect(dt_utc: datetime) -> tuple[int, int]:
+        local = dt_utc.replace(tzinfo=timezone.utc).astimezone(tz)
+        return local.hour, min((local.timetuple().tm_yday - 1) // 7, 52)
+
+    cardinal = _species(db, "Northern Cardinal")
+    jay = _species(db, "Blue Jay")
+
+    # Two Cardinal detections at the same instant (one visit, two birds)
+    # plus a third on a different week — Cardinal should out-total the Jay.
+    t1 = datetime(2026, 5, 30, 14, 0, 0)   # mid-spring
+    t2 = datetime(2026, 7, 4, 23, 30, 0)   # ~5 weeks later, near local midnight
+    v1 = _visit(db, t1)
+    _detection(db, v1, species=cardinal, track_id=1)
+    _detection(db, v1, species=cardinal, track_id=2)
+    v2 = _visit(db, t2)
+    _detection(db, v2, species=cardinal, track_id=1)
+
+    # One Blue Jay, and one sentinel detection that must be ignored.
+    v3 = _visit(db, t1)
+    _detection(db, v3, species=jay, track_id=1)
+    nab = _species(db, NOT_A_BIRD_LABEL)
+    _detection(db, v3, species=nab, track_id=2)
+    db.commit()
+
+    out = compute_species_activity(db)
+    by_name = {s["species"]: s for s in out["species"]}
+
+    # Sentinel excluded entirely.
+    assert NOT_A_BIRD_LABEL not in by_name
+    # Sorted by total desc → Cardinal (3) before Jay (1).
+    assert [s["species"] for s in out["species"]] == ["Northern Cardinal", "Blue Jay"]
+
+    card = by_name["Northern Cardinal"]
+    assert card["total"] == 3
+    assert sum(card["by_hour"]) == 3
+    assert sum(card["by_week"]) == 3
+    h1, w1 = expect(t1)
+    h2, w2 = expect(t2)
+    assert card["by_hour"][h1] == 2   # the two simultaneous Cardinals
+    assert card["by_hour"][h2] == 1
+    assert card["by_week"][w1] == 2
+    assert card["by_week"][w2] == 1
+
+    jay_row = by_name["Blue Jay"]
+    assert jay_row["total"] == 1
+    assert jay_row["by_hour"][h1] == 1
+    assert out["tz"] == settings.camera_timezone
+
+
+def test_species_activity_endpoint(client, db):
+    day = datetime(2026, 5, 30, 12, 0, 0)
+    v = _visit(db, day)
+    cardinal = _species(db, "Northern Cardinal")
+    _detection(db, v, species=cardinal, track_id=1)
+    db.commit()
+
+    r = client.get("/api/stats/activity")
+    assert r.status_code == 200
+    body = r.json()
+    assert "species" in body and "tz" in body and "as_of" in body
+    assert body["species"][0]["species"] == "Northern Cardinal"
+    assert len(body["species"][0]["by_hour"]) == 24
+    assert len(body["species"][0]["by_week"]) == 53
 
 
 def test_endpoint_fills_gap_days_with_zeros(client, db):

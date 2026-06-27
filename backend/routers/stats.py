@@ -11,6 +11,7 @@ from db.session import get_db
 from pipeline.stats import (
     compute_daily_stats,
     compute_global_stats,
+    compute_species_activity,
     serialize_daily,
 )
 
@@ -68,3 +69,18 @@ async def get_stats(
         "totals": totals,
         "as_of": datetime.now(timezone.utc).isoformat(),
     }
+
+
+@router.get("/activity")
+async def get_species_activity(db: Session = Depends(get_db)) -> dict:
+    """Per-species time-of-day + time-of-year activity for the Insights tab.
+
+    Returns every real species that has at least one detection, sorted by
+    total count, each with a 24-bucket hour-of-day and 53-bucket
+    week-of-year histogram binned in the feeder's local timezone. Cheap
+    enough to recompute on every request (one indexed join + Python
+    bucketing); no daily snapshot needed.
+    """
+    data = compute_species_activity(db)
+    data["as_of"] = datetime.now(timezone.utc).isoformat()
+    return data

@@ -33,8 +33,9 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Iterable
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, distinct, func, or_, select
 from sqlalchemy.orm import Session
@@ -51,6 +52,7 @@ from db.models import (
     Species,
     Visit,
 )
+from settings import settings
 
 log = logging.getLogger(__name__)
 
@@ -457,6 +459,93 @@ def compute_global_stats(db: Session) -> dict:
         "training_ready_species": training_ready_species,
         "review_queue_size": review_queue_size,
     }
+
+
+def compute_species_activity(db: Session) -> dict:
+    """Per-species visit timing: hour-of-day (24 buckets) and week-of-year
+    (53 buckets), binned in the camera's LOCAL timezone.
+
+    Answers "when does this species visit?" along two axes — the daily
+    rhythm (dawn-feeder vs midday) and the seasonal one (an oriole that
+    only shows up in May). We bin server-side in the feeder's fixed local
+    zone (settings.camera_timezone), NOT the viewer's: the meaningful clock
+    is the one at the feeder, and a phone in another timezone shouldn't
+    smear the histogram. (The aggregate Stats heatmap rotates UTC→viewer
+    on the client; here, where we're reasoning about one feeder's behavior,
+    camera-local is the correct frame.)
+
+    The "species" of a detection is Detection.species_id, which user
+    corrections overwrite in place (see corrections.py) — so this reflects
+    the best-known label, not the raw classifier guess. Sentinels (Not a
+    bird / Unknown / Poor quality) are excluded; they aren't species you'd
+    ask phenology about.
+
+    Counts are per-DETECTION (a visit with three cardinals counts three) —
+    a reasonable proxy for activity/abundance.
+
+    Week buckets use day-of-year // 7 (0..52) rather than ISO week, so the
+    53 buckets tile Jan 1 forward in fixed 7-day steps the frontend can
+    label by month without ISO-week edge cases.
+    """
+    tz = ZoneInfo(settings.camera_timezone)
+
+    rows = (
+        db.query(
+            Detection.species_id,
+            Species.common_name,
+            Species.scientific_name,
+            Visit.started_at,
+        )
+        .join(Visit, Detection.visit_id == Visit.id)
+        .join(Species, Detection.species_id == Species.id)
+        .filter(~Species.common_name.in_(SENTINEL_LABELS))
+        .all()
+    )
+
+    acc: dict[int, dict] = {}
+    for species_id, common_name, scientific_name, started_at in rows:
+        if started_at is None:
+            continue
+        # Visit.started_at is stored naive-UTC; localize then convert so the
+        # hour/week reflect the feeder's wall clock.
+        local = started_at.replace(tzinfo=timezone.utc).astimezone(tz)
+        entry = acc.get(species_id)
+        if entry is None:
+            entry = acc[species_id] = {
+                "species_id": species_id,
+                "species": common_name,
+                "scientific_name": scientific_name,
+                "by_hour": [0] * 24,
+                "by_week": [0] * 53,
+                "total": 0,
+                "first_seen": local,
+                "last_seen": local,
+            }
+        entry["by_hour"][local.hour] += 1
+        week = min((local.timetuple().tm_yday - 1) // 7, 52)
+        entry["by_week"][week] += 1
+        entry["total"] += 1
+        if local < entry["first_seen"]:
+            entry["first_seen"] = local
+        if local > entry["last_seen"]:
+            entry["last_seen"] = local
+
+    species = [
+        {
+            "species_id": e["species_id"],
+            "species": e["species"],
+            "scientific_name": e["scientific_name"],
+            "total": e["total"],
+            "first_seen": e["first_seen"].isoformat(),
+            "last_seen": e["last_seen"].isoformat(),
+            "by_hour": e["by_hour"],
+            "by_week": e["by_week"],
+        }
+        for e in acc.values()
+    ]
+    species.sort(key=lambda s: -s["total"])
+
+    return {"tz": settings.camera_timezone, "species": species}
 
 
 def serialize_daily(row: PipelineStatsDaily) -> dict:
