@@ -48,6 +48,7 @@ export async function fetchDetections(params: {
   before?: string;
   only_not_a_bird?: boolean;
   only_unidentified?: boolean;
+  interesting?: boolean;
   awaiting_review?: boolean;
   bad_quality?: boolean;
   binary_nab?: boolean;
@@ -59,6 +60,7 @@ export async function fetchDetections(params: {
   if (params.before) url.searchParams.set("before", params.before);
   if (params.only_not_a_bird) url.searchParams.set("only_not_a_bird", "true");
   if (params.only_unidentified) url.searchParams.set("only_unidentified", "true");
+  if (params.interesting) url.searchParams.set("interesting", "true");
   if (params.awaiting_review) url.searchParams.set("awaiting_review", "true");
   if (params.bad_quality) url.searchParams.set("bad_quality", "true");
   if (params.binary_nab) url.searchParams.set("binary_nab", "true");

@@ -79,7 +79,7 @@ export default function Feed({ surface = "feed" }: Props = {}) {
   const defaultFilter: Filter = isReview ? { mode: "nab" } : { mode: "all" };
   const allowedModes = isReview
     ? new Set(["awaiting_review", "nab", "bad_quality", "binary_nab"])
-    : new Set(["all", "unidentified", "species"]);
+    : new Set(["all", "interesting", "unidentified", "species"]);
   const [filter, setFilter] = useState<Filter>(() => {
     try {
       const raw = sessionStorage.getItem(storageKey);
@@ -133,6 +133,7 @@ export default function Feed({ surface = "feed" }: Props = {}) {
         before: pageParam || undefined,
         only_not_a_bird: filter.mode === "nab",
         only_unidentified: filter.mode === "unidentified",
+        interesting: filter.mode === "interesting",
         awaiting_review: filter.mode === "awaiting_review",
         species_name: filter.mode === "species" ? filter.name : undefined,
         bad_quality: filter.mode === "bad_quality",

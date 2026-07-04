@@ -12,6 +12,7 @@ import { ChevronIcon } from "./FieldIcons";
  */
 export type Filter =
   | { mode: "all" }
+  | { mode: "interesting" } // hides junk feeder regulars (pigeons/doves/sparrows)
   | { mode: "unidentified" }
   | { mode: "awaiting_review" } // classifier-labeled, user hasn't acted yet
   | { mode: "nab" } // past 'Not a bird' labels — re-correct mistakes
@@ -32,6 +33,8 @@ export function filterLabel(f: Filter): string {
   switch (f.mode) {
     case "all":
       return "All birds";
+    case "interesting":
+      return "Interesting birds";
     case "unidentified":
       return "Unidentified only";
     case "awaiting_review":
@@ -52,6 +55,11 @@ type PinnedEntry = { filter: Filter; label: string; hint?: string };
 // Everyday feed filters.
 const FEED_PINNED: PinnedEntry[] = [
   { filter: { mode: "all" }, label: "All birds" },
+  {
+    filter: { mode: "interesting" },
+    label: "Interesting birds",
+    hint: "hides pigeons, doves & sparrows",
+  },
   { filter: { mode: "unidentified" }, label: "Unidentified only", hint: "species_id IS NULL" },
 ];
 

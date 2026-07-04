@@ -44,6 +44,14 @@ async def list_detections(
     include_not_a_bird: bool = Query(False, description="Include detections corrected to 'Not a bird'"),
     only_not_a_bird: bool = Query(False, description="Show ONLY detections corrected to 'Not a bird' — for reviewing/correcting prior NAB labels"),
     only_unidentified: bool = Query(False, description="Show ONLY detections with no species assigned (the classifier rejected; awaiting user label)"),
+    interesting: bool = Query(
+        False,
+        description="Hide common 'junk' feeder birds — pigeons, Mourning Doves, "
+        "and sparrows (all sparrow species + the 'Sparrow' family label). "
+        "Matched by common name so any sparrow/pigeon species is covered. "
+        "Unidentified crops (no species yet) are kept — they might be anything. "
+        "Composes with the default NAB/Poor-Quality hiding.",
+    ),
     awaiting_review: bool = Query(
         False,
         description="Show ONLY detections the classifier labeled but the user hasn't "
@@ -128,6 +136,21 @@ async def list_detections(
             (Species.common_name.is_(None))
             | (~Species.common_name.in_(HIDDEN_FROM_FEED))
         )
+    if interesting:
+        # "Interesting birds" feed: screen out the high-volume feeder regulars
+        # the user considers junk. Substring matches on the common name so we
+        # catch every sparrow species (and the 'Sparrow' family label) and any
+        # pigeon without enumerating them. Rows with no species yet
+        # (Unidentified) have a NULL common_name and are kept — an unlabeled
+        # crop could be anything. Relies on the Species outerjoin the default
+        # NAB-hide branch above already added (this filter only runs on the
+        # everyday feed, where that branch always executes).
+        junk = or_(
+            Species.common_name.ilike("%sparrow%"),
+            Species.common_name.ilike("%pigeon%"),
+            Species.common_name == "Mourning Dove",
+        )
+        q = q.filter(or_(Species.common_name.is_(None), ~junk))
     if binary_nab:
         # The binary-filter audit cohort: only crops it overrode to NAB.
         q = q.filter(Detection.nab_override_p.isnot(None))
