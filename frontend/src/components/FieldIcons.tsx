@@ -41,3 +41,20 @@ export function ClockIcon(p: IconProps) { return <Base {...p}><circle cx="12" cy
 // Distinct from Unknown Bird's "?" (which means "I'm not sure"); this
 // means "this can't be known."
 export function FogIcon(p: IconProps) { return <Base strokeWidth={1.8} {...p}><path d="M3 7h11M6 12h13M4 17h12" strokeDasharray="2 3" /></Base>; }
+export function PaletteIcon(p: IconProps) {
+  return (
+    <Base {...p}>
+      <circle cx="13.5" cy="6.5" r=".5" fill="currentColor" />
+      <circle cx="17.5" cy="10.5" r=".5" fill="currentColor" />
+      <circle cx="8.5" cy="7.5" r=".5" fill="currentColor" />
+      <circle cx="6.5" cy="12.5" r=".5" fill="currentColor" />
+      <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.9 0 1.6-.7 1.6-1.6 0-.4-.2-.8-.4-1.1-.3-.4-.4-.8-.4-1.3 0-.9.7-1.6 1.6-1.6H16c3.3 0 6-2.7 6-6 0-5.5-4.5-10-10-10Z" />
+    </Base>
+  );
+}
+export function PlayIcon(p: IconProps) { return <Base {...p}><polygon points="5 3 19 12 5 21 5 3" fill="currentColor" /></Base>; }
+export function PauseIcon(p: IconProps) { return <Base {...p}><rect x="6" y="4" width="4" height="16" fill="currentColor" /><rect x="14" y="4" width="4" height="16" fill="currentColor" /></Base>; }
+export function DownloadIcon(p: IconProps) { return <Base {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" /></Base>; }
+export function VolumeIcon(p: IconProps) { return <Base {...p}><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" /><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a9 9 0 0 1 0 14" /></Base>; }
+export function VolumeMuteIcon(p: IconProps) { return <Base {...p}><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" /><line x1="23" y1="9" x2="17" y2="15" /><line x1="17" y1="9" x2="23" y2="15" /></Base>; }
+

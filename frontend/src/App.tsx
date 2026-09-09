@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { NavLink, Route, Routes } from "react-router-dom";
 
 import Feed from "./pages/Feed";
+import Flightlines from "./pages/Flightlines";
 import Insights from "./pages/Insights";
 import Settings from "./pages/Settings";
 import Species from "./pages/Species";
@@ -13,6 +14,7 @@ import {
   FeedIcon,
   GearIcon,
   MoonIcon,
+  PaletteIcon,
   SunIcon,
   TagIcon,
 } from "./components/FieldIcons";
@@ -92,6 +94,7 @@ export default function App() {
           <Route path="/species/:id" element={<Species />} />
           <Route path="/insights" element={<Insights />} />
           <Route path="/stats" element={<Stats />} />
+          <Route path="/art" element={<Flightlines />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
       </main>
@@ -102,6 +105,7 @@ export default function App() {
         <Tab to="/review" label="Review" icon={<TagIcon size={20} />} />
         <Tab to="/insights" label="Insights" icon={<ClockIcon size={20} />} />
         <Tab to="/stats" label="Stats" icon={<ChartIcon size={20} />} />
+        <Tab to="/art" label="Art" icon={<PaletteIcon size={20} />} />
         <Tab to="/settings" label="Settings" icon={<GearIcon size={20} />} />
       </nav>
     </div>

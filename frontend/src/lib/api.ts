@@ -289,3 +289,111 @@ export async function bulkCorrection(detection_ids: number[], correct_species_na
     results: Array<{ id: number; species_id: number; species: string }>;
   };
 }
+
+// ── Art page ────────────────────────────────────────────────────────────
+// The /api/art endpoints speak in flights. A flight is one DETECTION —
+// one track — not one visit: a visit with forty detections is forty
+// separate birds, and drawing them as a single path would connect birds
+// that never met. Times come back offset-aware (unlike the detections
+// feed's naive UTC), already converted to the feeder's local zone, so
+// render them as-is without appending a "Z".
+
+export type ArtPoint = {
+  /** Centre position and box size as fractions of the 4K frame. */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** Position along the path, 0 at the start and 1 at the end. */
+  t: number;
+};
+
+export type ArtStyle = {
+  primary: string;
+  accent: string;
+  /** Rough centre of the species' vocal range, in hertz. */
+  call_hz: number;
+  /** Typical adult body mass in grams; drives stroke weight and node size. */
+  mass_g: number;
+  /** call_hz snapped to a pentatonic scale, so overlapping chimes agree. */
+  chime_hz: number;
+};
+
+export type ArtFlight = {
+  detection_id: number;
+  visit_id: number;
+  /** ISO with a UTC offset, in the camera's timezone. */
+  started_at: string;
+  /** Fraction of the local day, 0 at midnight. Drives the timeline. */
+  time_of_day: number;
+  duration_seconds: number;
+  /** "Unidentified" when the classifier rejected every crop. */
+  species: string;
+  species_id: number | null;
+  scientific_name: string | null;
+  confidence: number;
+  audio_confirmed: boolean;
+  crop_url: string | null;
+  style: ArtStyle;
+  /**
+   * "tracked" means the path is the frames the bird was really seen in.
+   * "synthesized" means only the perch is real and the approach and
+   * departure are invented. Most rows predate per-frame tracking, so the
+   * UI has to say which it's showing.
+   */
+  path_kind: "tracked" | "synthesized";
+  points: ArtPoint[];
+};
+
+export type ArtSun = {
+  /** Sunrise and sunset as fractions of the local day. */
+  sunrise: number;
+  sunset: number;
+};
+
+export type ArtDay = {
+  date: string;
+  tz: string;
+  sun: ArtSun;
+  flights: ArtFlight[];
+  summary: {
+    returned: number;
+    total_available: number;
+    truncated: boolean;
+    tracked: number;
+    species_counts: Record<string, number>;
+    species_colors: Record<string, string>;
+  };
+};
+
+export type ArtDateSummary = {
+  date: string;
+  flight_count: number;
+  top_species: { species: string; count: number }[];
+};
+
+export async function fetchArtDay(params: {
+  date?: string;
+  limit?: number;
+  species_id?: number;
+  include_unidentified?: boolean;
+} = {}): Promise<ArtDay> {
+  const url = new URL("/api/art/trajectories", window.location.origin);
+  if (params.date) url.searchParams.set("date", params.date);
+  if (params.limit) url.searchParams.set("limit", String(params.limit));
+  if (params.species_id) url.searchParams.set("species_id", String(params.species_id));
+  if (params.include_unidentified === false) {
+    url.searchParams.set("include_unidentified", "false");
+  }
+  const r = await fetch(url.toString());
+  if (!r.ok) throw new Error(`fetchArtDay: ${r.status}`);
+  return (await r.json()) as ArtDay;
+}
+
+export async function fetchArtDates(limit = 60): Promise<{ tz: string; dates: ArtDateSummary[] }> {
+  const url = new URL("/api/art/dates", window.location.origin);
+  url.searchParams.set("limit", String(limit));
+  const r = await fetch(url.toString());
+  if (!r.ok) throw new Error(`fetchArtDates: ${r.status}`);
+  return (await r.json()) as { tz: string; dates: ArtDateSummary[] };
+}

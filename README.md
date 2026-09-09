@@ -12,6 +12,7 @@ AI-powered bird-feeder camera that complements a Haikubox (audio bird-ID) with v
 - **How the code fits together**: [`DEVELOPING.md`](./DEVELOPING.md)
 - **Cloud-VM provisioning runbook**: [`DEPLOY.md`](./DEPLOY.md)
 - **Lessons learned the hard way**: [`LESSONS.md`](./LESSONS.md)
+- **Creative projects & games**: [`CREATIVE_PROJECTS.md`](./CREATIVE_PROJECTS.md)
 - **Common dev tasks**: `make help`
 
 ## Development
