@@ -397,3 +397,205 @@ export async function fetchArtDates(limit = 60): Promise<{ tz: string; dates: Ar
   if (!r.ok) throw new Error(`fetchArtDates: ${r.status}`);
   return (await r.json()) as { tz: string; dates: ArtDateSummary[] };
 }
+
+// ── The Perch & Flagon ──────────────────────────────────────────────────
+// The tavern reads the same detections the feed does and seats each one as
+// a guest. A patron is one DETECTION, not one visit, for the same reason a
+// flight is: a visit with forty detections is forty separate birds.
+//
+// Times come back offset-aware in the feeder's zone, like the Art page's
+// and unlike the feed's naive UTC. Render them as-is.
+
+export type TavernArchetype = {
+  /** One of messenger, adventurer, local, minstrel, wanderer, hunter, stranger. */
+  id: string;
+  title: string;
+  role: string;
+  /** Region of the room: bar, booth, bench, hearth, rafters, shadow. */
+  seat: string;
+  blurb: string;
+};
+
+export type TavernStyle = {
+  primary: string;
+  accent: string;
+  call_hz: number;
+  mass_g: number;
+  chime_hz: number;
+};
+
+export type TavernPatron = {
+  detection_id: number;
+  visit_id: number;
+  /** Null when the classifier would not name the bird: a cloaked stranger. */
+  species: string | null;
+  species_id: number | null;
+  scientific_name: string | null;
+  arrived_at: string;
+  duration_seconds: number;
+  audio_confirmed: boolean;
+  confidence: number;
+  crop_url: string | null;
+  archetype: TavernArchetype;
+  style: TavernStyle;
+  rarity: "common" | "regular" | "uncommon" | "rare";
+  /** Shillings this guest left on the table. */
+  payment: number;
+  order: { drink: string; dish: string };
+  line: string;
+  /** How long they linger in the room, relative to the other guests. */
+  dwell: number;
+  /**
+   * True when the guest is shown only because the room would otherwise be
+   * empty. They are not here now; they were the last company the camera saw.
+   */
+  stale: boolean;
+};
+
+export type TavernEvent = {
+  detection_id: number;
+  visit_id: number;
+  at: string;
+  id: string;
+  title: string;
+  line: string;
+  crop_url: string | null;
+};
+
+export type TavernLedger = {
+  /** Spendable: the founding purse plus everything taken since opening. */
+  earned: number;
+  /** What the house inherited, capped at purse_cap. */
+  founding_purse: number;
+  purse_cap: number;
+  /** Everything the birds ever paid, including the uncapped inheritance. */
+  earned_all_time: number;
+  since_opening: number;
+  spent: number;
+  balance: number;
+  patrons_served: number;
+  named_patrons: number;
+};
+
+export type TavernUpgrade = {
+  id: string;
+  name: string;
+  category: string;
+  cost: number;
+  /** The flag TavernCanvas reads to draw this. */
+  effect: string;
+  blurb: string;
+  owned: boolean;
+  affordable: boolean;
+};
+
+export type TavernState = {
+  tz: string;
+  now: string;
+  hearth: {
+    phase: "dawn" | "day" | "dusk" | "night";
+    sunrise_hour: number;
+    sunset_hour: number;
+    local_hour: number;
+  };
+  /** No arrivals inside the window; the patrons below are the last company. */
+  quiet: boolean;
+  window_minutes: number;
+  patrons: TavernPatron[];
+  events: TavernEvent[];
+  ledger: TavernLedger;
+  upgrades: TavernUpgrade[];
+  unlocked: string[];
+  today: { arrivals: number; species: number; top: { species: string; count: number }[] };
+  /** Highest detection id in the database; poll /arrivals with it. */
+  cursor: number;
+  last_seen_detection_id: number | null;
+  /** Guests who arrived since the marker /seen keeps: new to this reader. */
+  since_last_seen: number;
+  opened_at: string | null;
+};
+
+export type TavernArrivals = {
+  cursor: number;
+  patrons: TavernPatron[];
+  events: TavernEvent[];
+  /** What this batch alone put in the till. */
+  earned: number;
+};
+
+export type TavernGuestbookEntry = {
+  species: string;
+  species_id: number;
+  scientific_name: string;
+  visits: number;
+  first_seen: string | null;
+  last_seen: string | null;
+  times_heard: number;
+  rarity: TavernPatron["rarity"];
+  style: TavernStyle;
+  archetype: TavernArchetype;
+  /** Null until the guest ledger upgrade is bought. */
+  lore: { title: string; role: string; backstory: string } | null;
+};
+
+export async function fetchTavernState(params: {
+  window_minutes?: number;
+  limit?: number;
+  strangers?: boolean;
+} = {}): Promise<TavernState> {
+  const url = new URL("/api/tavern/state", window.location.origin);
+  if (params.window_minutes) url.searchParams.set("window_minutes", String(params.window_minutes));
+  if (params.limit) url.searchParams.set("limit", String(params.limit));
+  if (params.strangers === false) url.searchParams.set("strangers", "false");
+  const r = await fetch(url.toString());
+  if (!r.ok) throw new Error(`fetchTavernState: ${r.status}`);
+  return (await r.json()) as TavernState;
+}
+
+export async function fetchTavernArrivals(
+  after: number,
+  strangers = true
+): Promise<TavernArrivals> {
+  const url = new URL("/api/tavern/arrivals", window.location.origin);
+  url.searchParams.set("after", String(after));
+  if (!strangers) url.searchParams.set("strangers", "false");
+  const r = await fetch(url.toString());
+  if (!r.ok) throw new Error(`fetchTavernArrivals: ${r.status}`);
+  return (await r.json()) as TavernArrivals;
+}
+
+export async function fetchTavernGuestbook(): Promise<{
+  has_ledger: boolean;
+  entries: TavernGuestbookEntry[];
+}> {
+  const r = await fetch("/api/tavern/guestbook");
+  if (!r.ok) throw new Error(`fetchTavernGuestbook: ${r.status}`);
+  return await r.json();
+}
+
+export async function buyTavernUpgrade(upgrade_id: string): Promise<{
+  unlocked: string[];
+  ledger: TavernLedger;
+  upgrades: TavernUpgrade[];
+  bought: TavernUpgrade;
+}> {
+  const r = await fetch("/api/tavern/unlock", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ upgrade_id }),
+  });
+  if (!r.ok) {
+    // 402 carries "N more shillings needed", which is worth showing.
+    const detail = await r.json().catch(() => null);
+    throw new Error(detail?.detail ?? `buyTavernUpgrade: ${r.status}`);
+  }
+  return await r.json();
+}
+
+export async function markTavernSeen(detection_id: number): Promise<void> {
+  await fetch("/api/tavern/seen", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ detection_id }),
+  });
+}

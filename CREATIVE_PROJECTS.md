@@ -214,10 +214,13 @@ An ambient digital terrarium running in the background. Unlike traditional visua
 
 ### Suggested Phasing
 
-1. **Phase 1 (Quick Win & Visual Impact): Project 4 (*Avian Flightlines*)**
+1. **Phase 1 (Quick Win & Visual Impact): Project 4 (*Avian Flightlines*)** — built, on the Art tab.
    * *Why first:* Complete tracking bboxes (`track_bboxes`) are already stored in the SQLite database for hundreds of visits. A standalone Canvas/WebGL view can be added to the frontend immediately without external auth or complex game engines.
-2. **Phase 2 (Cozy Companion): Project 1 (*The Perch & Flagon*)**
+   * *As built:* `/api/art` plus `ArtCanvas.tsx`, in three modes (flightlines, celestial mandala, topography). A flight is one detection, not one visit. Most rows predate per-frame tracking, so the page says which paths are observed and which are synthesised around a real perch.
+2. **Phase 2 (Cozy Companion): Project 1 (*The Perch & Flagon*)** — built, on the Tavern tab.
    * *Why second:* Reuses existing frontend React components and `/api/detections` feed to create an immediate, daily-playable idle tavern.
+   * *As built:* `/api/tavern` plus `TavernCanvas.tsx`. Each detection is a guest whose seat comes from a species archetype, whose colour and size come from the plumage palette Phase 1 introduced, and who pays Seed Shillings toward thirteen upgrades to the house. Detections the classifier would not name are cloaked strangers who pay one shilling; "Not a bird" corrections come back as tavern mishaps.
+   * *Open question:* the founding purse is capped at 1,200 shillings, so a long archive is a good start rather than an instant win. Whether that is the right figure is a guess, and a week of use is what would settle it.
 3. **Phase 3 (Acoustic Living Art): Project 5 (*Chrono-Chirps*)**
    * *Why third:* Implement the reverse-engineered Haikubox GraphQL client to fetch raw audio and render the procedural botanical garden.
 4. **Phase 4 (Deep Gameplay): Project 3 (*Feeder Wars*) & Project 2 (*Feederbound*)**

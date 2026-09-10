@@ -58,3 +58,15 @@ export function DownloadIcon(p: IconProps) { return <Base {...p}><path d="M21 15
 export function VolumeIcon(p: IconProps) { return <Base {...p}><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" /><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a9 9 0 0 1 0 14" /></Base>; }
 export function VolumeMuteIcon(p: IconProps) { return <Base {...p}><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" /><line x1="23" y1="9" x2="17" y2="15" /><line x1="17" y1="9" x2="23" y2="15" /></Base>; }
 
+// A flagon with a handle — the Tavern tab. Deliberately not a bird: the
+// tab sits next to five bird-shaped ideas and needs to be findable.
+export function FlagonIcon(p: IconProps) {
+  return (
+    <Base {...p}>
+      <path d="M6 7h9v12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2Z" />
+      <path d="M15 10h2.5a2.5 2.5 0 0 1 0 5H15" />
+      <path d="M6 11h9" />
+      <path d="M8.5 4.2c.9.6.9 1.6 0 2.2M12 3.4c.9.7.9 1.7 0 2.4" />
+    </Base>
+  );
+}

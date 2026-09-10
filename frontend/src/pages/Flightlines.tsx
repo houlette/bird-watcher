@@ -12,6 +12,7 @@ import {
   VolumeMuteIcon,
 } from "../components/FieldIcons";
 import { fetchArtDates, fetchArtDay, type ArtDay, type ArtFlight, type ArtSun } from "../lib/api";
+import { useThemeKey } from "../lib/useThemeKey";
 
 const DEFAULT_SUN: ArtSun = { sunrise: 0.25, sunset: 0.79 };
 
@@ -568,19 +569,6 @@ function useChimes(enabled: boolean) {
 }
 
 // ── Small helpers ───────────────────────────────────────────────────────
-
-/** Re-read the palette whenever the Sage/Twilight class flips on <html>. */
-function useThemeKey() {
-  const [key, setKey] = useState(() =>
-    typeof document === "undefined" ? "" : document.documentElement.className
-  );
-  useEffect(() => {
-    const ob = new MutationObserver(() => setKey(document.documentElement.className));
-    ob.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
-    return () => ob.disconnect();
-  }, []);
-  return key;
-}
 
 /** A day fraction as a wall-clock time at the feeder. */
 function formatClock(fraction: number): string {

@@ -7,11 +7,13 @@ import Insights from "./pages/Insights";
 import Settings from "./pages/Settings";
 import Species from "./pages/Species";
 import Stats from "./pages/Stats";
+import Tavern from "./pages/Tavern";
 import {
   BirdMark,
   ChartIcon,
   ClockIcon,
   FeedIcon,
+  FlagonIcon,
   GearIcon,
   MoonIcon,
   PaletteIcon,
@@ -95,17 +97,19 @@ export default function App() {
           <Route path="/insights" element={<Insights />} />
           <Route path="/stats" element={<Stats />} />
           <Route path="/art" element={<Flightlines />} />
+          <Route path="/tavern" element={<Tavern />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
       </main>
 
       {/* ── Bottom nav ─────────────────────────────────────────────────── */}
-      <nav className="sticky bottom-0 z-30 max-w-[560px] w-full mx-auto flex justify-around gap-1 px-2 pt-2 pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))] bg-[color-mix(in_oklab,var(--panel)_92%,transparent)] backdrop-blur-md border border-line border-b-0 rounded-t-2xl">
+      <nav className="sticky bottom-0 z-30 max-w-[560px] w-full mx-auto flex justify-around gap-0.5 sm:gap-1 px-1.5 sm:px-2 pt-2 pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))] bg-[color-mix(in_oklab,var(--panel)_92%,transparent)] backdrop-blur-md border border-line border-b-0 rounded-t-2xl">
         <Tab to="/" label="Feed" icon={<FeedIcon size={20} />} />
         <Tab to="/review" label="Review" icon={<TagIcon size={20} />} />
         <Tab to="/insights" label="Insights" icon={<ClockIcon size={20} />} />
         <Tab to="/stats" label="Stats" icon={<ChartIcon size={20} />} />
         <Tab to="/art" label="Art" icon={<PaletteIcon size={20} />} />
+        <Tab to="/tavern" label="Tavern" icon={<FlagonIcon size={20} />} />
         <Tab to="/settings" label="Settings" icon={<GearIcon size={20} />} />
       </nav>
     </div>
@@ -126,7 +130,7 @@ function Tab({
       to={to}
       end
       className={({ isActive }) =>
-        `flex flex-col items-center gap-0.5 px-3.5 py-1 rounded-lg text-[10.5px] font-semibold tracking-wide transition-colors ${
+        `flex flex-col items-center gap-0.5 px-1.5 sm:px-3 py-1 rounded-lg text-[10.5px] font-semibold tracking-wide transition-colors ${
           isActive ? "text-leaf" : "text-faint hover:text-muted"
         }`
       }

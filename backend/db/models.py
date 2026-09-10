@@ -250,3 +250,31 @@ class Correction(Base):
     # plumage with crest") so the user can spot-check the label without
     # having to second-guess every crop. NULL for user-via-UI corrections.
     rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class TavernState(Base):
+    """The Perch & Flagon's saved house state. One row, id 1.
+
+    Only what the user chose is stored. Earnings are recomputed from the
+    detections table on every read, so the ledger cannot drift away from
+    the birds that produced it, and a restored database backup brings the
+    right balance with it. `spent` is likewise derived from `unlocked`
+    (see pipeline.tavern.spent_on) rather than kept as a running total.
+    """
+
+    __tablename__ = "tavern_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    # Ids from pipeline.tavern.UPGRADES, in purchase order.
+    unlocked: Mapped[list] = mapped_column(JSON, default=list)
+    # When the user first opened the tavern page. Everything the feeder
+    # recorded before this pays into a capped founding purse rather than
+    # at face value; everything after pays in full. See
+    # pipeline.tavern.FOUNDING_PURSE_CAP for why.
+    opened_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Highest detection id the user has actually seen walk in. Lets the
+    # page open on "here is what happened while you were away" instead of
+    # replaying the whole day, and stops the arrival chime firing for
+    # birds that landed last Tuesday.
+    last_seen_detection_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
