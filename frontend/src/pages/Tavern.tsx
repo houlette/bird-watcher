@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   TavernCanvas,
@@ -40,6 +40,28 @@ const ARRIVAL_POLL_MS = 20_000;
 const STATE_POLL_MS = 60_000;
 const LOG_LENGTH = 40;
 
+/**
+ * Wall-clock seconds per beat of a patron's dwell.
+ *
+ * The server sends a `dwell` in beats, from the archetype and nudged by
+ * how long the bird really stayed: about 0.75 for a messenger who barely
+ * stopped, about 5 for a dove that settled. At ninety seconds a beat that
+ * is roughly a minute for the chickadee and seven for the dove, which is
+ * the spread the design asks for. The figure is a guess and this constant
+ * is the one place to change it.
+ */
+const SECONDS_PER_BEAT = 90;
+
+/**
+ * Guests who never time out, counted from the newest backwards.
+ *
+ * Dwell alone empties the room on a yard that logs a few dozen birds a
+ * day, and an empty tavern is the thing this page exists not to be. The
+ * newest few keep their seats however long they have been there, so the
+ * fire always has company and the churn happens behind them.
+ */
+const MIN_COMPANY = 3;
+
 type LogItem =
   | { kind: "patron"; id: number; at: string; patron: TavernPatron }
   | { kind: "event"; id: number; at: string; event: TavernEvent };
@@ -69,18 +91,71 @@ export default function Tavern() {
   const chime = useTavernSound(sound);
 
   /**
+   * When the page sat each guest down, by detection id.
+   *
+   * Dwell is counted from this rather than from the bird's real arrival
+   * time, because the room is a re-enactment and not a rewind: a dove the
+   * camera saw an hour ago should walk in, sit, and leave, not appear
+   * already overdue. An id that has been seated once stays in this map
+   * after the guest has gone, which is what stops a /state refetch from
+   * walking the same bird back through the door every minute.
+   */
+  const seatedAtRef = useRef<Map<number, number>>(new Map());
+
+  /**
    * Seat guests without disturbing the ones already in the room. The canvas
    * keys its actors on detection id, so merging by id leaves everybody
    * where they are sitting and only the newcomers walk in.
    */
   const seat = useCallback((patrons: TavernPatron[]) => {
+    const seatedAt = seatedAtRef.current;
+    const now = Date.now();
+
+    // Only guests nobody has seated yet. Anyone already in the map either
+    // is in the room or has had their turn and left.
+    const arriving = patrons.filter((p) => !seatedAt.has(p.detection_id));
+    if (!arriving.length) return;
+    for (const p of arriving) seatedAt.set(p.detection_id, now);
+
+    // The map is the record of everyone ever seated, so trim the oldest
+    // half when it gets long. A day of arrivals will not reach this.
+    if (seatedAt.size > 600) {
+      const oldest = [...seatedAt.entries()].sort((a, b) => a[1] - b[1]);
+      for (const [id] of oldest.slice(0, 300)) seatedAt.delete(id);
+    }
+
     setRoster((prev) => {
-      const merged = new Map(prev.map((p) => [p.detection_id, p]));
-      for (const p of patrons) merged.set(p.detection_id, p);
+      // A live arrival ends the vigil: the last company the camera saw
+      // gives up its seats to a bird that is actually here.
+      const live = arriving.some((p) => !p.stale);
+      const base = live ? prev.filter((p) => !p.stale) : prev;
+
+      const merged = new Map(base.map((p) => [p.detection_id, p]));
+      for (const p of arriving) merged.set(p.detection_id, p);
       return [...merged.values()]
         .sort((a, b) => a.arrived_at.localeCompare(b.arrived_at))
         .slice(-ROOM_CAPACITY);
     });
+  }, []);
+
+  // Show the door to anyone whose dwell has run out. The canvas watches
+  // the roster, so dropping a guest here is what makes them stand up and
+  // walk out. Returning the previous array unchanged when nobody is due
+  // keeps this from re-rendering the page every few seconds.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setRoster((prev) => {
+        const next = prev.filter((p, i) => {
+          if (p.stale) return true; // the quiet company keeps its seats
+          if (i >= prev.length - MIN_COMPANY) return true;
+          const seated = seatedAtRef.current.get(p.detection_id);
+          if (seated === undefined) return true;
+          return Date.now() - seated < p.dwell * SECONDS_PER_BEAT * 1000;
+        });
+        return next.length === prev.length ? prev : next;
+      });
+    }, 3000);
+    return () => clearInterval(timer);
   }, []);
 
   // The room is updated where the data lands, in the fetch itself, rather
@@ -104,6 +179,10 @@ export default function Tavern() {
       return data;
     },
     refetchInterval: STATE_POLL_MS,
+    // The strangers toggle is part of the key, so without this the purse
+    // and the shop empty out for as long as the refetch takes and the
+    // house reads as broke.
+    placeholderData: keepPreviousData,
   });
 
   // Run for its effects: the poll is what seats new guests.
@@ -136,6 +215,14 @@ export default function Tavern() {
     enabled: tab === "guestbook",
   });
 
+  // The toggle filters the room as well as the fetch. Without this it only
+  // governed who arrived next, so pressing "Hide strangers" left every
+  // stranger already at the bar exactly where they were.
+  const company = useMemo(
+    () => (strangers ? roster : roster.filter((p) => p.species !== null)),
+    [roster, strangers]
+  );
+
   const ledger = stateQ.data?.ledger;
   const balance = (ledger?.balance ?? 0) + takings;
   const phase: Phase = stateQ.data?.hearth.phase ?? "day";
@@ -165,7 +252,7 @@ export default function Tavern() {
     [queryClient]
   );
 
-  const inRoom = roster.filter((p) => !p.stale).length;
+  const inRoom = company.filter((p) => !p.stale).length;
 
   return (
     <div className="space-y-4 pb-8">
@@ -184,7 +271,7 @@ export default function Tavern() {
       <div className="relative">
         <TavernCanvas
           ref={canvasRef}
-          patrons={roster}
+          patrons={company}
           unlocked={unlocked}
           phase={phase}
           themeKey={themeKey}
@@ -200,7 +287,9 @@ export default function Tavern() {
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <Purse balance={balance} />
+        {/* Null until the first ledger lands: a real zero and an unknown
+            balance should not look the same. */}
+        <Purse balance={ledger ? balance : null} />
 
         <span className="text-xs text-muted">
           {stateQ.data?.quiet
@@ -304,14 +393,16 @@ export default function Tavern() {
 
 // ── Pieces ──────────────────────────────────────────────────────────────
 
-function Purse({ balance }: { balance: number }) {
+function Purse({ balance }: { balance: number | null }) {
   return (
     <span
       className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-line bg-surface text-sm"
       title="Seed Shillings: what the birds have paid, less what the house has spent"
     >
       <span className="w-3 h-3 rounded-full bg-[#c9a227] border border-[#8a6f18]" aria-hidden />
-      <span className="tnum font-semibold text-ink">{balance.toLocaleString()}</span>
+      <span className="tnum font-semibold text-ink">
+        {balance === null ? "—" : balance.toLocaleString()}
+      </span>
       <span className="text-xs text-muted">shillings</span>
     </span>
   );
