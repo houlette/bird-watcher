@@ -244,10 +244,10 @@ BirdWatcher/
 │       ├── pages/
 │       │   ├── Feed.tsx, Species.tsx, Settings.tsx, Stats.tsx
 │       │   ├── Insights.tsx     per-species activity clocks
-│       │   ├── Flightlines.tsx  the Art tab
-│       │   ├── Tavern.tsx       the Tavern tab
-│       │   ├── Biome.tsx        the Biome tab
-│       │   └── Territory.tsx    the Wars tab
+│       │   ├── Flightlines.tsx  \
+│       │   ├── Tavern.tsx        | the four surfaces behind
+│       │   ├── Biome.tsx         | the Play tab
+│       │   └── Territory.tsx    /
 │       └── components/
 │           ├── DetectionCard.tsx
 │           ├── SpeciesPicker.tsx
@@ -256,6 +256,7 @@ BirdWatcher/
 │           ├── ImageZoom.tsx
 │           ├── AudioBadge.tsx
 │           ├── FieldIcons.tsx
+│           ├── PlayNav.tsx       Play sub-nav + layout route
 │           ├── Toast.tsx
 │           ├── ArtCanvas.tsx     flightlines / mandala / topography
 │           ├── TavernCanvas.tsx  the common room
@@ -534,7 +535,20 @@ serves anything under `data/`).
 ## The Art, Tavern, Biome and Territory pages
 
 Four surfaces that read the archive a second way. All are read-only
-apart from the tavern's two POSTs, and they share these invariants:
+apart from the tavern's two POSTs.
+
+They share one bottom-nav tab, **Play**, which is a layout route in
+`components/PlayNav.tsx` rendering a sub-nav above an `<Outlet />`. The
+paths did not move: `/art`, `/tavern`, `/biome` and `/territory` are
+still what they always were, so anything bookmarked or pinned to a home
+screen resolves. Two things to know if you add a fifth surface. Add it
+to `PLAY_SURFACES` and it appears in the sub-nav and lights the tab, but
+it also has to be nested inside the `<Route element={<PlayLayout />}>`
+block in `App.tsx` or it renders without the sub-nav. And `Tab` takes
+`alsoActiveOn` because a NavLink only knows its own `to`; without that
+list the bottom nav goes dark on three of the four surfaces.
+
+All four share these invariants:
 
 - **A flight, and a patron, is a DETECTION, not a visit.** A visit with
   forty detections is forty tracks and usually forty birds. Treating the

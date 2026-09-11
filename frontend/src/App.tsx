@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { NavLink, Route, Routes } from "react-router-dom";
+import { NavLink, Route, Routes, useLocation } from "react-router-dom";
 
 import Biome from "./pages/Biome";
 import Feed from "./pages/Feed";
@@ -15,15 +15,13 @@ import {
   ChartIcon,
   ClockIcon,
   FeedIcon,
-  FlagonIcon,
   GearIcon,
   MoonIcon,
   PaletteIcon,
-  ShieldIcon,
-  SproutIcon,
   SunIcon,
   TagIcon,
 } from "./components/FieldIcons";
+import { PLAY_HOME, PLAY_PATHS, PlayLayout } from "./components/PlayNav";
 
 /**
  * Light/dark ("Sage"/"Twilight") theme toggle. The class is applied to
@@ -90,8 +88,7 @@ export default function App() {
         <div className="fg-rule mt-4" aria-hidden />
       </header>
 
-      {/* Bottom padding clears the nav, which folds to two rows below sm. */}
-      <main className="flex-1 max-w-3xl w-full mx-auto px-4 pt-4 pb-32 sm:pb-28">
+      <main className="flex-1 max-w-3xl w-full mx-auto px-4 pt-4 pb-28">
         <Routes>
           {/* Distinct keys force a remount when switching surfaces — Routes
               would otherwise reconcile the two <Feed> elements in place and
@@ -101,27 +98,35 @@ export default function App() {
           <Route path="/species/:id" element={<Species />} />
           <Route path="/insights" element={<Insights />} />
           <Route path="/stats" element={<Stats />} />
-          <Route path="/art" element={<Flightlines />} />
-          <Route path="/tavern" element={<Tavern />} />
-          <Route path="/biome" element={<Biome />} />
-          <Route path="/territory" element={<Territory />} />
+          {/* The four creative surfaces share a sub-nav. Nested as a
+              layout route rather than moved, so every existing URL
+              still resolves. */}
+          <Route element={<PlayLayout />}>
+            <Route path="/art" element={<Flightlines />} />
+            <Route path="/tavern" element={<Tavern />} />
+            <Route path="/biome" element={<Biome />} />
+            <Route path="/territory" element={<Territory />} />
+          </Route>
           <Route path="/settings" element={<Settings />} />
         </Routes>
       </main>
 
       {/* ── Bottom nav ─────────────────────────────────────────────────── */}
-      {/* Wraps rather than clipping: nine tabs need about 530px of
-          labels, so on a phone narrower than that the row folds in two
-          instead of pushing Settings off the edge. */}
-      <nav className="sticky bottom-0 z-30 max-w-[560px] w-full mx-auto flex flex-wrap justify-around gap-0 sm:gap-1 px-1 sm:px-2 pt-2 pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))] bg-[color-mix(in_oklab,var(--panel)_92%,transparent)] backdrop-blur-md border border-line border-b-0 rounded-t-2xl">
+      {/* Six tabs fit one row down to a 320px phone. The four creative
+          surfaces live behind Play; see components/PlayNav. flex-wrap is
+          kept as a floor rather than a layout: it costs nothing here and
+          means a seventh tab degrades instead of clipping. */}
+      <nav className="sticky bottom-0 z-30 max-w-[560px] w-full mx-auto flex flex-wrap justify-around gap-0.5 sm:gap-1 px-1.5 sm:px-2 pt-2 pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))] bg-[color-mix(in_oklab,var(--panel)_92%,transparent)] backdrop-blur-md border border-line border-b-0 rounded-t-2xl">
         <Tab to="/" label="Feed" icon={<FeedIcon size={20} />} />
         <Tab to="/review" label="Review" icon={<TagIcon size={20} />} />
         <Tab to="/insights" label="Insights" icon={<ClockIcon size={20} />} />
         <Tab to="/stats" label="Stats" icon={<ChartIcon size={20} />} />
-        <Tab to="/art" label="Art" icon={<PaletteIcon size={20} />} />
-        <Tab to="/tavern" label="Tavern" icon={<FlagonIcon size={20} />} />
-        <Tab to="/biome" label="Biome" icon={<SproutIcon size={20} />} />
-        <Tab to="/territory" label="Wars" icon={<ShieldIcon size={20} />} />
+        <Tab
+          to={PLAY_HOME}
+          label="Play"
+          icon={<PaletteIcon size={20} />}
+          alsoActiveOn={PLAY_PATHS}
+        />
         <Tab to="/settings" label="Settings" icon={<GearIcon size={20} />} />
       </nav>
     </div>
@@ -132,18 +137,27 @@ function Tab({
   to,
   label,
   icon,
+  alsoActiveOn,
 }: {
   to: string;
   label: string;
   icon: React.ReactNode;
+  /** Extra paths this tab represents, for a tab that fronts several. */
+  alsoActiveOn?: string[];
 }) {
+  // NavLink only knows about its own `to`, so a tab standing for four
+  // routes has to decide for itself. Without this, opening the Tavern
+  // would leave no tab lit and the nav would look broken.
+  const { pathname } = useLocation();
+  const grouped = alsoActiveOn?.includes(pathname) ?? false;
+
   return (
     <NavLink
       to={to}
       end
       className={({ isActive }) =>
-        `flex flex-col items-center gap-0.5 px-1 sm:px-3 py-1 rounded-lg text-[10.5px] font-semibold tracking-wide transition-colors ${
-          isActive ? "text-leaf" : "text-faint hover:text-muted"
+        `flex flex-col items-center gap-0.5 px-1.5 sm:px-3 py-1 rounded-lg text-[10.5px] font-semibold tracking-wide transition-colors ${
+          isActive || grouped ? "text-leaf" : "text-faint hover:text-muted"
         }`
       }
     >
