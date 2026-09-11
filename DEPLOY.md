@@ -122,6 +122,23 @@ VAPID_SUBJECT=mailto:you@example.com
 # VAPID_PUBLIC_KEY filled in by step 6
 ```
 
+### Settings that belong to the machine, not the checkout
+
+`backend/.env` is copied up from your working tree on every deploy, so
+anything you edit into it on the server is gone at the next one. Settings
+that describe the particular VM go in `backend/secrets/host.env` instead,
+which the deploy rsync skips and which `bootstrap_server.sh` appends to the
+compose `.env`. Today that is one line, the mount point of the attached
+volume holding the preserved frames:
+
+```
+FRAMES_HOST_PATH=/mnt/HC_Volume_106850884/frames
+```
+
+Unset, `docker-compose.yml` falls back to `./backend/data/frames` and the
+frames stay on the root disk, which is what you want on a fresh VM with no
+volume attached.
+
 ## 6. Generate VAPID keys
 
 Web Push needs a P-256 key pair. The private key stays on the VM; the public key goes in `.env` for the frontend to fetch.

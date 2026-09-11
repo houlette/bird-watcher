@@ -11,6 +11,16 @@ services:
       - PYTHONUNBUFFERED=1
     volumes:
       - ./backend/data:/app/data
+      # Preserved source frames are cold: written once per labeled
+      # detection, never served over HTTP, read only by the retention pass
+      # and by a future fine-tune. That makes them the right thing to push
+      # onto network storage, leaving the fast root disk entirely to the
+      # clip buffer, which is the only thing standing between an arriving
+      # clip and deletion before anything looks at it. FRAMES_HOST_PATH
+      # lives in backend/.env on the server because the mount point is
+      # specific to that machine's attached volume; unset, this keeps the
+      # frames where they have always been.
+      - ${FRAMES_HOST_PATH:-./backend/data/frames}:/app/data/frames
       - ./backend/models:/app/models
       - ./backend/secrets:/app/secrets
     env_file:

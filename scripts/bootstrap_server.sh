@@ -193,6 +193,17 @@ fix_clips_ownership() {
 # ────────────────────────────────────────────────────────────────────────────
 sync_env_for_compose() {
   cp -f backend/.env .env
+  # Machine-specific settings live in backend/secrets/host.env, which is the
+  # one directory the deploy rsync already leaves alone. backend/.env itself
+  # is overwritten from the developer's working tree on every deploy, so
+  # anything written there by hand on the server survives exactly until the
+  # next one — which is how a mount path set on the server would silently
+  # revert and drop the frames bind mount back onto the root disk.
+  if [ -f backend/secrets/host.env ]; then
+    printf '\n# --- from backend/secrets/host.env (server-local) ---\n' >> .env
+    cat backend/secrets/host.env >> .env
+    log "Appended backend/secrets/host.env to ./.env ($(grep -c '=' backend/secrets/host.env) setting(s))."
+  fi
   chmod 600 .env
   log "Mirrored backend/.env → ./.env so compose interpolation resolves \${SFTP_PASSWORD} etc."
 }

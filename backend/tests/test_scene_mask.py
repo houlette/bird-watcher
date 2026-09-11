@@ -170,3 +170,102 @@ def test_get_hot_zones_force_refresh_bypasses_cache(session_maker, monkeypatch):
     scene_mask.get_hot_zones()
     scene_mask.get_hot_zones(force_refresh=True)
     assert calls["n"] == 2
+
+
+def _seed_labeled(db, bbox, common_name):
+    """Insert one Detection labeled `common_name` with NO Correction row.
+
+    This is what the binary filter produces: it overwrites species_id in
+    place and never writes a Correction, which is precisely why the old
+    hot-zone query could not see any of its work.
+    """
+    species = db.query(Species).filter_by(common_name=common_name).one_or_none()
+    if species is None:
+        species = Species(common_name=common_name, scientific_name="", is_rare=False)
+        db.add(species); db.flush()
+    visit = Visit(clip_path="clips/x.mp4")
+    db.add(visit); db.flush()
+    det = Detection(
+        visit_id=visit.id, species_id=species.id, confidence=0.5,
+        raw_predictions=[], audio_confirmed=False,
+        crop_path="crops/x.jpg", bbox=list(bbox), track_id=1,
+    )
+    db.add(det); db.commit()
+    return det
+
+
+def test_pipeline_nab_verdicts_alone_can_make_a_cell_hot(session_maker):
+    """The regression this fixes: the user stops labeling, and the mask used
+    to empty out even while the binary filter kept calling the same spot NAB
+    hundreds of times."""
+    db = session_maker()
+    try:
+        for _ in range(scene_mask.MIN_MACHINE_NABS_PER_CELL):
+            _seed_labeled(db, (1710, 510, 80, 80), NOT_A_BIRD_LABEL)
+    finally:
+        db.close()
+
+    assert (17, 5) in scene_mask._compute_hot_zones()
+
+
+def test_pipeline_nab_below_machine_threshold_is_not_hot(session_maker):
+    """A machine verdict is weaker evidence than a user label, so the count
+    that qualifies a cell by hand is deliberately not enough on its own."""
+    db = session_maker()
+    try:
+        for _ in range(scene_mask.MIN_NABS_PER_CELL):
+            _seed_labeled(db, (1710, 510, 80, 80), NOT_A_BIRD_LABEL)
+    finally:
+        db.close()
+
+    assert scene_mask._compute_hot_zones() == set()
+
+
+def test_real_perch_is_not_masked_despite_many_nab_verdicts(session_maker):
+    """A busy perch collects NAB verdicts from blurred birds. It must survive.
+
+    Modeled on the real feeder cell, which ran 30 NAB against 23 sparrows in
+    the fortnight to 2026-09-11 and must never go dark."""
+    db = session_maker()
+    try:
+        for _ in range(30):
+            _seed_labeled(db, (1410, 1810, 80, 80), NOT_A_BIRD_LABEL)
+        for _ in range(23):
+            _seed_labeled(db, (1410, 1810, 80, 80), "House Sparrow")
+    finally:
+        db.close()
+
+    assert scene_mask._compute_hot_zones() == set()
+
+
+def test_bird_label_cap_outranks_purity(session_maker):
+    """A cell can pass the purity ratio on volume alone; the absolute cap on
+    bird labels is what stops a heavily-trafficked spot qualifying."""
+    db = session_maker()
+    try:
+        for _ in range(200):
+            _seed_labeled(db, (1410, 1810, 80, 80), NOT_A_BIRD_LABEL)
+        for _ in range(scene_mask.MAX_BIRD_LABELS_IN_HOT_CELL + 1):
+            _seed_labeled(db, (1410, 1810, 80, 80), "House Sparrow")
+    finally:
+        db.close()
+
+    # 200 vs 6 is 97% pure, comfortably past MACHINE_NAB_PURITY.
+    assert scene_mask._compute_hot_zones() == set()
+
+
+def test_user_labels_still_qualify_at_the_lower_threshold(session_maker):
+    """The hand-label path is unchanged and does not have to clear the
+    machine threshold or the purity test."""
+    db = session_maker()
+    try:
+        for _ in range(scene_mask.MIN_NABS_PER_CELL):
+            _seed_nab(db, (1710, 510, 80, 80))
+        # Plenty of real birds in the same cell: a user label is authoritative
+        # and is not diluted by them.
+        for _ in range(50):
+            _seed_labeled(db, (1710, 510, 80, 80), "House Sparrow")
+    finally:
+        db.close()
+
+    assert (17, 5) in scene_mask._compute_hot_zones()
