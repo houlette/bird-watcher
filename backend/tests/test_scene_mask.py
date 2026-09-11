@@ -269,3 +269,47 @@ def test_user_labels_still_qualify_at_the_lower_threshold(session_maker):
         db.close()
 
     assert (17, 5) in scene_mask._compute_hot_zones()
+
+
+def test_backfill_corrections_do_not_hold_a_cell_hot(session_maker):
+    """The backfill writes NAB corrections of its own. If those counted as
+    user labels, a cell could keep itself hot for a fortnight after the
+    artifact justifying it had gone."""
+    db = session_maker()
+    try:
+        species = db.query(Species).filter_by(common_name=NOT_A_BIRD_LABEL).one_or_none()
+        if species is None:
+            species = Species(common_name=NOT_A_BIRD_LABEL, scientific_name="", is_rare=False)
+            db.add(species); db.flush()
+        for _ in range(scene_mask.MIN_NABS_PER_CELL * 2):
+            visit = Visit(clip_path="clips/x.mp4")
+            db.add(visit); db.flush()
+            det = Detection(
+                visit_id=visit.id, species_id=species.id, confidence=0.0,
+                raw_predictions=[], audio_confirmed=False,
+                crop_path="crops/x.jpg", bbox=[1710, 510, 80, 80], track_id=1,
+            )
+            db.add(det); db.flush()
+            db.add(Correction(detection_id=det.id, correct_species_id=species.id,
+                              source=scene_mask.BACKFILL_SOURCE))
+        db.commit()
+    finally:
+        db.close()
+
+    # The detections themselves are NAB-labeled, so the machine path sees 20
+    # of them and that alone is enough. What must not happen is the human
+    # path counting the backfill's corrections at its lower threshold.
+    zones = scene_mask._compute_hot_zones()
+    assert (17, 5) in zones  # machine path, on the NAB labels themselves
+
+    # With only half as many, the machine threshold is not met and the
+    # backfill corrections must not carry the cell on their own.
+    db = session_maker()
+    try:
+        for d in db.query(Detection).limit(scene_mask.MIN_MACHINE_NABS_PER_CELL // 2).all():
+            db.delete(db.query(Correction).filter_by(detection_id=d.id).one())
+            db.delete(d)
+        db.commit()
+    finally:
+        db.close()
+    assert scene_mask._compute_hot_zones() == set()

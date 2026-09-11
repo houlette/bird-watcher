@@ -81,6 +81,13 @@ MIN_MACHINE_NABS_PER_CELL = 20
 MACHINE_NAB_PURITY = 0.90
 MAX_BIRD_LABELS_IN_HOT_CELL = 5
 
+# Corrections written by scripts/backfill_scene_mask.py, which applies this
+# mask to rows that were persisted while it was dark. They are excluded from
+# the hot-cell calculation below: they are this module's own output, and
+# counting them would let a cell hold itself hot for a fortnight after the
+# artifact that justified it had gone.
+BACKFILL_SOURCE = "scene-mask-backfill"
+
 # Older NABs are dropped from the mask computation so that moving objects
 # (the feeder, an ornament) cause the mask to update within two weeks
 # rather than being remembered forever.
@@ -127,6 +134,9 @@ def _compute_hot_zones() -> set[tuple[int, int]]:
             .join(Species, Correction.correct_species_id == Species.id)
             .filter(Species.common_name == NOT_A_BIRD_LABEL)
             .filter(Detection.created_at >= cutoff)
+            .filter(
+                (Correction.source.is_(None)) | (Correction.source != BACKFILL_SOURCE)
+            )
             .all()
         )
         # Every labeled detection in the window, NAB or not, so the machine
