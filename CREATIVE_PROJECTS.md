@@ -30,9 +30,16 @@ Each project below leverages a combination of data sources already present in th
 * **Authentication:** AWS Cognito User Pool, via a pool id and app client id.
 * **Where the values live:** the endpoint id, pool id and client id are
   account and vendor specific, so they stay out of this repo. Recover them
-  from the Haikubox web app's own JS bundle when Phase 3 is built, and put
-  them in `backend/.env` next to `HAIKUBOX_API_KEY` and `HAIKUBOX_SERIAL`,
-  which is where every other credential in this project already lives.
+  from the Haikubox web app's own JS bundle, and put them in `backend/.env`
+  next to `HAIKUBOX_API_KEY` and `HAIKUBOX_SERIAL`, which is where every
+  other credential in this project already lives.
+* **Status: still not recovered, so none of this is wired up.** Phase 3
+  shipped on the v2 REST cache instead, which carries a species name and a
+  timestamp and nothing else: no `specSum`, no audio path, and a
+  `confidence` column that is NULL on all 13,455 rows. The Biome page
+  therefore names the measurement it really used rather than implying a
+  loudness reading. See the Phase 3 notes below for what lands the day
+  these three values exist.
 * **Key Queries:**
   * `HitBySerialByDate`: returns `wav` (file path in Backblaze/S3), `score`, and `specSum` (spectral energy/intensity).
   * `GetAudioUrl(audioPath)`: resolves `wav` to a presigned URL streaming the raw **`audio/flac`** recording.
@@ -222,7 +229,12 @@ An ambient digital terrarium running in the background. Unlike traditional visua
    * *As built:* `/api/tavern` plus `TavernCanvas.tsx`. Each detection is a guest whose seat comes from a species archetype, whose colour and size come from the plumage palette Phase 1 introduced, and who pays Seed Shillings toward thirteen upgrades to the house. Detections the classifier would not name are cloaked strangers who pay one shilling; "Not a bird" corrections come back as tavern mishaps.
    * *Dwell:* a guest stays for their archetype's dwell, nudged by the real visit duration, at ninety wall-clock seconds a beat. The newest three never time out and neither does the quiet company, so the room is never empty on a yard that logs a few dozen birds a day.
    * *Open question:* the founding purse is capped at 1,200 shillings, so a long archive is a good start rather than an instant win. Whether that is the right figure is a guess, and a week of use is what would settle it.
-3. **Phase 3 (Acoustic Living Art): Project 5 (*Chrono-Chirps*)**
-   * *Why third:* Implement the reverse-engineered Haikubox GraphQL client to fetch raw audio and render the procedural botanical garden.
+3. **Phase 3 (Acoustic Living Art): Project 5 (*Chrono-Chirps*)** — built, on the Biome tab.
+   * *Why third:* the acoustic half of the archive had no surface at all, and `haikubox_detections` already holds about thirteen thousand rows across thirty-odd species, a third of which the camera has never once caught.
+   * *As built:* `/api/biome` plus `BiomeCanvas.tsx`. One plant per species heard, which is the one place these pages break the "a flight is a detection" rule, because the box does not track individuals. Call pitch picks one of five L-system forms and the bloom hue, body mass sets the stem girth, and call count sets how many rewrite passes the plant gets. The API sends the rules and the canvas walks them with a turtle. Plants are laid out with pitch on the x axis under a frequency ruler, so the bed reads as the bottom of a spectrogram.
+   * *Growth:* scrubbing the day grows each plant by the share of its calls that had happened by that hour, so a dawn chorus species is finished by breakfast and a bird that calls all day is still filling in at dusk.
+   * *What the data would not support:* the design above assumes `specSum` spectral energy, real `.flac` playback and `detectionArray` call offsets. All three need the AppSync GraphQL client, and its endpoint id, Cognito pool id and app client id are not in this repo. The v2 REST feed gives neither energy nor a BirdNET score either: every `confidence` in the cache is NULL. So vitality is call density and how much of the day a species called across, the page says which measurement it used in so many words, and the ambience is a synthesised note per species rather than the bird itself. The blend is already written for a score, so recovering the credentials is the only work between here and the real thing.
+   * *Cross-pollination, honestly:* `Detection.audio_confirmed` is the strict claim, a sighting matched to a call inside the correlation window, and it is true for a handful of rows in the whole database. Same-day co-occurrence is returned alongside it, marked `confirmed: false` and flown paler, so the page has something to show without overstating it.
+   * *Open question:* the garden is one camera-local day. A week or a season would show migration arriving, which is arguably the better artwork, but it is not obvious whether a plant should then mean a species-week or keep growing across the whole span.
 4. **Phase 4 (Deep Gameplay): Project 3 (*Feeder Wars*) & Project 2 (*Feederbound*)**
    * Build out deeper strategic territorial simulation and deckbuilding systems once the spatial and audio modules are proven.

@@ -599,3 +599,145 @@ export async function markTavernSeen(detection_id: number): Promise<void> {
     body: JSON.stringify({ detection_id }),
   });
 }
+
+// ── Biome page ──────────────────────────────────────────────────────────
+// The /api/biome endpoints speak in plants, and a plant is a SPECIES, not
+// a detection. That is the opposite of the Art and Tavern pages, and it is
+// deliberate: the Haikubox does not track individual birds, it reports
+// that a species was audible in a window, so seven hundred House Sparrow
+// rows are one hedge full of sparrows rather than seven hundred arrivals.
+// Times come back offset-aware in the feeder's zone, like the Art page's.
+
+export type BiomeBloom = {
+  /** Degrees on the colour wheel, deep indigo at low pitch to rose at high. */
+  hue: number;
+  sat: number;
+  light: number;
+  petals: number;
+  size: number;
+};
+
+export type BiomeFoliage = {
+  hue: number;
+  sat: number;
+  light: number;
+};
+
+export type BiomePlant = {
+  species: string;
+  /** Which L-system the canvas expands: moss, spire, vine, frond or floret. */
+  form: "moss" | "spire" | "vine" | "frond" | "floret";
+  form_title: string;
+  form_blurb: string;
+  /** Turtle-graphics L-system. F draws, X buds, +- turn, [] branch, L leaf, O bloom. */
+  axiom: string;
+  rules: Record<string, string>;
+  /** Rewrite passes. Capped server-side so one plant cannot stall the tab. */
+  depth: number;
+  /** Turn angle in degrees. */
+  angle: number;
+  /** Stem thickness multiplier, from body mass and vitality. */
+  girth: number;
+  /** Segment length multiplier, from vitality. */
+  reach: number;
+  /** How alive the plant looks, 0 to 1. */
+  energy: number;
+  /**
+   * Which measurement produced `energy`. "calls" means call density and
+   * persistence only, which is all the v2 REST feed gives: every
+   * confidence in the cache is null. "calls+score" folds in BirdNET
+   * scores, "spectral" would be real Haikubox specSum energy.
+   */
+  energy_source: "calls" | "calls+score" | "spectral";
+  /** Position on the log-frequency ramp, 0 at 400 Hz and 1 at 8 kHz. */
+  pitch: number;
+  call_hz: number;
+  mass_g: number;
+  /** call_hz snapped to a pentatonic scale, so the chorus agrees with itself. */
+  chime_hz: number;
+  bloom: BiomeBloom;
+  foliage: BiomeFoliage;
+  plumage: { primary: string; accent: string };
+  seed: number;
+  calls: number;
+  /** This species' share of the day's calls. */
+  share: number;
+  /** Calls per local hour, 24 entries. */
+  hours: number[];
+  /** First and last call as fractions of the local day. */
+  first_heard: number;
+  last_heard: number;
+  first_heard_at: string;
+  last_heard_at: string;
+  mean_confidence: number | null;
+  /** The camera logged this species the same day, so a pollinator visits. */
+  flowering: boolean;
+  /** Seen and heard within the correlation window, the strict claim. */
+  confirmed: boolean;
+};
+
+export type BiomePollinator = {
+  detection_id: number;
+  species: string;
+  species_id: number | null;
+  at: string;
+  time_of_day: number;
+  /**
+   * True means the pipeline matched this sighting to a call inside the
+   * correlation window. False means only that the camera saw the species
+   * somewhere in the same local day, which the page draws paler.
+   */
+  confirmed: boolean;
+  crop_url: string | null;
+  color: string;
+};
+
+export type BiomeGarden = {
+  date: string;
+  tz: string;
+  sun: { sunrise: number; sunset: number };
+  /** Ordered low pitch to high, so the garden plants itself front to back. */
+  plants: BiomePlant[];
+  pollinators: BiomePollinator[];
+  /** The whole yard's calls per local hour, 24 entries. */
+  chorus: number[];
+  summary: {
+    returned: number;
+    species_heard: number;
+    calls: number;
+    busiest: number;
+    peak_hour: number | null;
+    truncated: boolean;
+    quiet: boolean;
+    energy_source: BiomePlant["energy_source"] | null;
+  };
+};
+
+export type BiomeDateSummary = {
+  date: string;
+  call_count: number;
+  species_count: number;
+  top_species: { species: string; count: number }[];
+};
+
+export async function fetchBiomeGarden(
+  params: { date?: string; limit?: number; min_calls?: number } = {}
+): Promise<BiomeGarden> {
+  const url = new URL("/api/biome/garden", window.location.origin);
+  if (params.date) url.searchParams.set("date", params.date);
+  if (params.limit) url.searchParams.set("limit", String(params.limit));
+  if (params.min_calls) url.searchParams.set("min_calls", String(params.min_calls));
+  const r = await fetch(url.toString());
+  if (!r.ok) throw new Error(`fetchBiomeGarden: ${r.status}`);
+  return (await r.json()) as BiomeGarden;
+}
+
+export async function fetchBiomeDates(
+  limit = 60
+): Promise<{ tz: string; dates: BiomeDateSummary[] }> {
+  const url = new URL("/api/biome/dates", window.location.origin);
+  url.searchParams.set("limit", String(limit));
+  const r = await fetch(url.toString());
+  if (!r.ok) throw new Error(`fetchBiomeDates: ${r.status}`);
+  return (await r.json()) as { tz: string; dates: BiomeDateSummary[] };
+}

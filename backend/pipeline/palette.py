@@ -77,6 +77,25 @@ SPECIES_STYLES: dict[str, dict[str, Any]] = {
     "Cooper's Hawk": {"primary": "#5c6675", "accent": "#a35847", "call_hz": 1300, "mass_g": 450.0},
     "Herring Gull": {"primary": "#8fa0ad", "accent": "#d8a12a", "call_hz": 1100, "mass_g": 1100.0},
 
+    # ── Heard far more often than seen ──────────────────────────────────
+    #
+    # The Haikubox logs these in the hundreds while the feeder camera
+    # almost never catches them: they pass overhead, work the hedge, or
+    # sing from a tree well outside the frame. The Biome page is built on
+    # the audio cache, so without real entries here its second-biggest
+    # plant would be drawing a hash colour at a hash pitch.
+    "Chimney Swift": {"primary": "#6e6a66", "accent": "#3a3835", "call_hz": 6000, "mass_g": 23.0},
+    "Northern Parula": {"primary": "#4a7fb5", "accent": "#d9c43f", "call_hz": 7000, "mass_g": 8.6},
+    "Magnolia Warbler": {"primary": "#d6bd3a", "accent": "#2b2b2b", "call_hz": 5000, "mass_g": 8.7},
+    "Blackpoll Warbler": {"primary": "#d8d4cc", "accent": "#2a2a2a", "call_hz": 8500, "mass_g": 12.0},
+    "Wilson's Warbler": {"primary": "#e0c23a", "accent": "#1c1c1c", "call_hz": 4500, "mass_g": 7.5},
+    "Common Yellowthroat": {"primary": "#d4b52f", "accent": "#2c2c2c", "call_hz": 3900, "mass_g": 10.0},
+    "Cedar Waxwing": {"primary": "#b99a6b", "accent": "#b8452f", "call_hz": 7000, "mass_g": 32.0},
+    "House Wren": {"primary": "#7a5f46", "accent": "#cbb89a", "call_hz": 4000, "mass_g": 11.0},
+    "Winter Wren": {"primary": "#5e4433", "accent": "#c2ad92", "call_hz": 5500, "mass_g": 9.0},
+    "Blue-gray Gnatcatcher": {"primary": "#8794a8", "accent": "#f0eee8", "call_hz": 6500, "mass_g": 6.0},
+    "Fish Crow": {"primary": "#2f3338", "accent": "#585f66", "call_hz": 800, "mass_g": 290.0},
+
     # ── Plausible visitors not yet logged here ──────────────────────────
     "American Goldfinch": {"primary": "#d9aa1e", "accent": "#222222", "call_hz": 4200, "mass_g": 13.0},
     "Tufted Titmouse": {"primary": "#7d8d99", "accent": "#d6945a", "call_hz": 3200, "mass_g": 21.0},

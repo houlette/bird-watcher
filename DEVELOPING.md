@@ -149,8 +149,9 @@ BirdWatcher/
 │   │   ├── push.py          Web Push subscription mgmt + VAPID
 │   │   ├── stats.py         GET  /api/stats?days=30 + /activity
 │   │   ├── art.py           GET  /api/art/trajectories + /dates
-│   │   └── tavern.py        GET  /api/tavern/state + /arrivals +
-│   │                        /guestbook, POST /unlock + /seen
+│   │   ├── tavern.py        GET  /api/tavern/state + /arrivals +
+│   │   │                    /guestbook, POST /unlock + /seen
+│   │   └── biome.py         GET  /api/biome/garden + /dates
 │   │
 │   ├── ingest/
 │   │   └── haikubox.py
@@ -184,6 +185,8 @@ BirdWatcher/
 │   │   │                    flight-path synthesis (Art page)
 │   │   ├── tavern.py        archetypes, rarity tiers, the shilling
 │   │   │                    economy, upgrades, lore (Tavern page)
+│   │   ├── biome.py         L-system forms, bloom hues, call-density
+│   │   │                    vitality (Biome page)
 │   │   ├── exceptions.py    SkipFile sentinel
 │   │   └── worker.py        APScheduler: visit processing,
 │   │                        Haikubox poll, clip + frame retention,
@@ -239,7 +242,8 @@ BirdWatcher/
 │       │   ├── Feed.tsx, Species.tsx, Settings.tsx, Stats.tsx
 │       │   ├── Insights.tsx     per-species activity clocks
 │       │   ├── Flightlines.tsx  the Art tab
-│       │   └── Tavern.tsx       the Tavern tab
+│       │   ├── Tavern.tsx       the Tavern tab
+│       │   └── Biome.tsx        the Biome tab
 │       └── components/
 │           ├── DetectionCard.tsx
 │           ├── SpeciesPicker.tsx
@@ -250,7 +254,8 @@ BirdWatcher/
 │           ├── FieldIcons.tsx
 │           ├── Toast.tsx
 │           ├── ArtCanvas.tsx     flightlines / mandala / topography
-│           └── TavernCanvas.tsx  the common room
+│           ├── TavernCanvas.tsx  the common room
+│           └── BiomeCanvas.tsx   the L-system garden
 │
 └── scripts/                  Deploy automation (runs on Mac)
     ├── deploy_to_server.sh
@@ -521,22 +526,27 @@ nightly at 02:20 UTC by `scripts/analyze_bird_locations.py` and served
 as static PNGs under `/media/heatmaps/` (the standard `/media/` mount
 serves anything under `data/`).
 
-## The Art and Tavern pages
+## The Art, Tavern and Biome pages
 
-Two surfaces that read the same detections a second way. Both are
-read-only apart from the tavern's two POSTs, and both share three
-invariants that are easy to get wrong:
+Three surfaces that read the archive a second way. All are read-only
+apart from the tavern's two POSTs, and they share these invariants:
 
 - **A flight, and a patron, is a DETECTION, not a visit.** A visit with
   forty detections is forty tracks and usually forty birds. Treating the
   visit as the unit draws a line between two birds that never met, and
-  pours one flagon for a crowd.
-- **Days are camera-local.** `Visit.started_at` is naive UTC; both pages
+  pours one flagon for a crowd. The Biome is the deliberate exception:
+  its unit is a species, because the Haikubox does not track individuals
+  and seven hundred House Sparrow rows are one hedge, not seven hundred
+  arrivals.
+- **Days are camera-local.** `Visit.started_at` and
+  `HaikuboxDetection.detected_at` are both naive UTC; all three pages
   bin by `settings.camera_timezone`, the same way
   `pipeline.stats.compute_species_activity` does. A UTC boundary falls
   inside the feeder's active hours for part of the year.
-- **Sentinels are not guests.** Both hide `Not a bird` and
-  `Poor quality`. `Unknown bird` is a real sighting and stays.
+- **Sentinels are not guests.** All hide `Not a bird` and
+  `Poor quality`. `Unknown bird` is a real sighting and stays on the Art
+  page, but it cannot pollinate in the Biome, where a visitor needs a
+  species name to find the right plant.
 
 ### Art (`/art`)
 
@@ -584,6 +594,49 @@ Two traps:
 - Adding an upgrade to `UPGRADES` without teaching `TavernCanvas.tsx` its
   `effect` flag buys the user a line of text and no change to the room.
 
+### Biome (`/biome`)
+
+Chrono-Chirps, the only page built on `haikubox_detections` rather than
+`detections`. `GET /api/biome/garden` serves one local day as a garden,
+`GET /api/biome/dates` lists days with audio. Its default day follows
+the microphone, not the camera: the box can be offline for a week while
+the feeder stays busy.
+
+`pipeline/biome.py` maps a species to a plant. Call pitch from the
+palette picks one of five L-system forms (moss, spire, vine, frond,
+floret) and the bloom hue; body mass sets stem girth; call count sets
+rewrite depth. The API sends the rules, not the expanded string, and
+`BiomeCanvas.tsx` expands them and walks them with a turtle over the
+alphabet `F X + - [ ] L O`. Plants are laid out with pitch on the x
+axis, so the bed is the bottom of a spectrogram and carries a frequency
+ruler to say so.
+
+Three things worth knowing before changing it:
+
+- **Vitality is call density, not loudness.** The design document asks
+  for Haikubox `specSum` spectral energy. That needs the AppSync GraphQL
+  client, whose credentials are not in this repo, and the v2 REST feed
+  returns no BirdNET score either: every `confidence` in
+  `haikubox_detections` is NULL. `vitality()` takes an optional score so
+  the blend is ready, and `energy_source` names what was really used.
+  The page prints it. Do not quietly relabel it as loudness.
+- **Pollinators come at two strengths.** `confirmed` means
+  `Detection.audio_confirmed`, a match inside
+  `settings.audio_correlation_window_seconds`. That flag is rare, so the
+  endpoint also returns same-day co-occurrence with `confirmed: false`,
+  and the canvas flies those paler.
+- **The audio vocabulary is not the camera's.** Chimney Swift, Northern
+  Parula and Blackpoll Warbler are heard in the hundreds and seen
+  essentially never, which is why `SPECIES_STYLES` has a "heard far more
+  often than seen" block. A species missing from it falls back to a hash
+  colour at a hash pitch, which puts it in an arbitrary form.
+
+Knobs: `FORMS`, the band edges in `_BANDS`, the hue ramps and
+`MAX_SYMBOLS` in `pipeline/biome.py`; `MIN_GAP`, `HEIGHT_SCALE` and
+`GROWTH_STEP` in `BiomeCanvas.tsx`. Growth is rendered into a per-plant
+sprite and rebuilt only every `GROWTH_STEP`, so stroking hundreds of
+segments per plant does not happen sixty times a second.
+
 ## Database migrations
 
 `backend/db/session.py::_apply_additive_migrations` runs on every
@@ -611,7 +664,7 @@ cp backend/.env.example backend/.env
 # Fill in HAIKUBOX_API_KEY and HAIKUBOX_SERIAL (and ANTHROPIC_API_KEY if
 # you'll run the LLM backlog script)
 
-# Tests (no ML deps needed; 191 tests, ~3 s)
+# Tests (no ML deps needed; 223 tests, ~3 s)
 make test
 
 # Full local stack (Docker)
@@ -720,6 +773,7 @@ skipped. Output JSONL persists under
 | `test_worker_scan.py` | Clip-retention, frame-retention, filename parser |
 | `test_art.py` | Local-day binning, even sampling, path provenance, palette |
 | `test_tavern.py` | Archetypes, purse cap, quiet-room fallback, unlock paths |
+| `test_biome.py` | Pitch-to-form bands, symbol cap, local-day binning, pollinator strengths |
 
 None load torch/transformers/ultralytics — heavy modules use lazy
 imports + `TYPE_CHECKING` so they only resolve when actually called.

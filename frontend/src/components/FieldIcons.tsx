@@ -70,3 +70,16 @@ export function FlagonIcon(p: IconProps) {
     </Base>
   );
 }
+
+// A sprout with two leaves, for the Biome tab. Like the flagon, chosen to
+// be findable next to a row of bird-shaped ideas.
+export function SproutIcon(p: IconProps) {
+  return (
+    <Base {...p}>
+      <path d="M12 21v-8" />
+      <path d="M12 13c0-3-2.2-5.2-5.2-5.2C6.3 10.8 8.6 13 12 13Z" />
+      <path d="M12 13c0-3.6 2.6-6.2 6.2-6.2C18.2 10.4 15.6 13 12 13Z" />
+      <path d="M8 21h8" />
+    </Base>
+  );
+}
