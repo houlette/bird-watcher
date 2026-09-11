@@ -177,6 +177,12 @@ def process_visit(visit: Visit, db: Session) -> int:
         # enough labeled data with this column populated). All bboxes are
         # in full-frame 4K coords, same shape as Detection.bbox.
         track_bboxes_for_db = [list(d.bbox) for d in track.detections]
+        # The sampled frame each of those boxes came from, in the same
+        # order. Three frames a second, so this is the track's clock, and
+        # it is the only thing that lets two tracks in one clip be compared
+        # in time. The Territory page's displacement engine needs exactly
+        # that; see pipeline/territory.py.
+        track_frames_for_db = [int(d.frame_index) for d in track.detections]
 
         # Always save the YOLO-detected crop. If the classifier later rejects
         # it, the row still goes into the feed as "Unidentified" so the user
@@ -231,6 +237,7 @@ def process_visit(visit: Visit, db: Session) -> int:
                 "crop_path": str(crop_rel_path),
                 "bbox": list(best.bbox),
                 "track_bboxes": track_bboxes_for_db,
+                "track_frames": track_frames_for_db,
                 "track_id": track.track_id,
                 "crop_area_px": area_px,
                 "brightness": brightness,
@@ -313,6 +320,7 @@ def process_visit(visit: Visit, db: Session) -> int:
             "crop_path": str(crop_rel_path),
             "bbox": list(best.bbox),
             "track_bboxes": track_bboxes_for_db,
+            "track_frames": track_frames_for_db,
             "crop_area_px": area_px,
             "brightness": brightness,
             "sharpness": sharpness,

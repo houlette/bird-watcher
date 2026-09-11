@@ -83,3 +83,14 @@ export function SproutIcon(p: IconProps) {
     </Base>
   );
 }
+
+// A shield with a dividing line, for the Territory tab. Ground held and
+// ground contested, which is the whole page in one mark.
+export function ShieldIcon(p: IconProps) {
+  return (
+    <Base {...p}>
+      <path d="M12 3l7 3v5.5c0 4.2-2.9 7.7-7 9.5-4.1-1.8-7-5.3-7-9.5V6Z" />
+      <path d="M12 3v18" />
+    </Base>
+  );
+}

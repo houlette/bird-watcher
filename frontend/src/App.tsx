@@ -9,6 +9,7 @@ import Settings from "./pages/Settings";
 import Species from "./pages/Species";
 import Stats from "./pages/Stats";
 import Tavern from "./pages/Tavern";
+import Territory from "./pages/Territory";
 import {
   BirdMark,
   ChartIcon,
@@ -18,6 +19,7 @@ import {
   GearIcon,
   MoonIcon,
   PaletteIcon,
+  ShieldIcon,
   SproutIcon,
   SunIcon,
   TagIcon,
@@ -102,12 +104,13 @@ export default function App() {
           <Route path="/art" element={<Flightlines />} />
           <Route path="/tavern" element={<Tavern />} />
           <Route path="/biome" element={<Biome />} />
+          <Route path="/territory" element={<Territory />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
       </main>
 
       {/* ── Bottom nav ─────────────────────────────────────────────────── */}
-      {/* Wraps rather than clipping: eight tabs need about 475px of
+      {/* Wraps rather than clipping: nine tabs need about 530px of
           labels, so on a phone narrower than that the row folds in two
           instead of pushing Settings off the edge. */}
       <nav className="sticky bottom-0 z-30 max-w-[560px] w-full mx-auto flex flex-wrap justify-around gap-0 sm:gap-1 px-1 sm:px-2 pt-2 pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))] bg-[color-mix(in_oklab,var(--panel)_92%,transparent)] backdrop-blur-md border border-line border-b-0 rounded-t-2xl">
@@ -118,6 +121,7 @@ export default function App() {
         <Tab to="/art" label="Art" icon={<PaletteIcon size={20} />} />
         <Tab to="/tavern" label="Tavern" icon={<FlagonIcon size={20} />} />
         <Tab to="/biome" label="Biome" icon={<SproutIcon size={20} />} />
+        <Tab to="/territory" label="Wars" icon={<ShieldIcon size={20} />} />
         <Tab to="/settings" label="Settings" icon={<GearIcon size={20} />} />
       </nav>
     </div>

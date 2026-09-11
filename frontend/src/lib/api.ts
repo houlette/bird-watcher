@@ -741,3 +741,133 @@ export async function fetchBiomeDates(
   if (!r.ok) throw new Error(`fetchBiomeDates: ${r.status}`);
   return (await r.json()) as { tz: string; dates: BiomeDateSummary[] };
 }
+
+// ── Territory page ──────────────────────────────────────────────────────
+// /api/territory scores a day of footage as a turf war. Two distinctions
+// the UI has to preserve, because both are places this page could easily
+// start overstating what the camera saw:
+//
+//   - `control_basis` says whether a zone's holder was decided on seconds
+//     of dwell or on plain appearances. Only tracks carrying
+//     `track_frames` have a dwell, so an archive day falls back to
+//     counting landings.
+//   - A displacement needs two tracks on a shared clock. `summary.timed`
+//     and `summary.eligible_visits` say how much of the day could be
+//     judged at all; the rest can only be scored for occupancy.
+
+export type TerritoryControl = {
+  faction: string;
+  name: string;
+  color: string;
+  seconds: number;
+  holds: number;
+  /** Share of the zone on whatever `control_basis` says. */
+  share: number;
+};
+
+export type TerritoryZone = {
+  id: string;
+  name: string;
+  blurb: string;
+  /** Centre as a fraction of the frame, x by width and y by height. */
+  x: number;
+  y: number;
+  /** Radius in normalised units, so it draws as a wide ellipse on a 16:9 frame. */
+  radius: number;
+  seconds: number;
+  /** Detections placed in this zone, unclaimed ones included. */
+  visits: number;
+  /** Birds here the classifier could not name; they hold ground for nobody. */
+  unclaimed: number;
+  control: TerritoryControl[];
+  holder: string | null;
+  contested: boolean;
+};
+
+export type TerritoryStanding = {
+  faction: string;
+  name: string;
+  style: string;
+  blurb: string;
+  color: string;
+  weight: number;
+  seconds: number;
+  holds: number;
+  zones_held: number;
+  species: { species: string; count: number; color: string }[];
+  wins: number;
+  losses: number;
+};
+
+export type TerritoryDisplacement = {
+  zone: string;
+  zone_name: string;
+  visit_id: number;
+  winner_detection_id: number | null;
+  winner: string | null;
+  winner_faction: string | null;
+  winner_faction_name: string | null;
+  winner_color: string;
+  loser_detection_id: number | null;
+  loser: string | null;
+  loser_faction: string | null;
+  loser_faction_name: string | null;
+  loser_color: string;
+  at_frame: number;
+  /** Seconds into the clip the perch changed hands. */
+  at_seconds: number;
+  /** How long the loser had held it before that. */
+  held_seconds: number;
+};
+
+export type TerritoryDay = {
+  date: string;
+  tz: string;
+  sun: { sunrise: number; sunset: number };
+  /** "built-in" means the zone map is the hard-coded one, not calibrated here. */
+  zone_source: "built-in" | "calibrated";
+  control_basis: "seconds" | "appearances";
+  zones: TerritoryZone[];
+  standings: TerritoryStanding[];
+  displacements: TerritoryDisplacement[];
+  /** The day's scoreboard as a sentence, built from the tallies. */
+  dispatch: string;
+  summary: {
+    detections: number;
+    visits: number;
+    in_a_zone: number;
+    unclaimed: number;
+    tracked: number;
+    timed: number;
+    contested_visits: number;
+    eligible_visits: number;
+    dwell_quality: Partial<Record<"measured" | "estimated" | "unknown", number>>;
+    quiet: boolean;
+  };
+};
+
+export type TerritoryDateSummary = {
+  date: string;
+  detection_count: number;
+  timed_count: number;
+};
+
+export async function fetchTerritoryDay(
+  params: { date?: string } = {}
+): Promise<TerritoryDay> {
+  const url = new URL("/api/territory/day", window.location.origin);
+  if (params.date) url.searchParams.set("date", params.date);
+  const r = await fetch(url.toString());
+  if (!r.ok) throw new Error(`fetchTerritoryDay: ${r.status}`);
+  return (await r.json()) as TerritoryDay;
+}
+
+export async function fetchTerritoryDates(
+  limit = 60
+): Promise<{ tz: string; dates: TerritoryDateSummary[] }> {
+  const url = new URL("/api/territory/dates", window.location.origin);
+  url.searchParams.set("limit", String(limit));
+  const r = await fetch(url.toString());
+  if (!r.ok) throw new Error(`fetchTerritoryDates: ${r.status}`);
+  return (await r.json()) as { tz: string; dates: TerritoryDateSummary[] };
+}

@@ -49,6 +49,10 @@ _ADDITIVE_COLUMNS = [
     # for rows written before the column existed; populated by
     # pipeline/process.py for new detections.
     ("detections", "track_bboxes", "JSON"),
+    # Sampled frame index per entry in track_bboxes, so two tracks in one
+    # clip share a clock. Required for the Territory page's displacement
+    # engine; NULL rows can still be scored for zone occupancy.
+    ("detections", "track_frames", "JSON"),
     # Per-visit count of YOLO detections suppressed by the scene mask.
     # Surfaces an invisible funnel stage on the Stats page.
     ("visits", "scene_mask_suppressed", "INTEGER"),

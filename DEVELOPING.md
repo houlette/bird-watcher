@@ -151,7 +151,8 @@ BirdWatcher/
 │   │   ├── art.py           GET  /api/art/trajectories + /dates
 │   │   ├── tavern.py        GET  /api/tavern/state + /arrivals +
 │   │   │                    /guestbook, POST /unlock + /seen
-│   │   └── biome.py         GET  /api/biome/garden + /dates
+│   │   ├── biome.py         GET  /api/biome/garden + /dates
+│   │   └── territory.py     GET  /api/territory/day + /dates
 │   │
 │   ├── ingest/
 │   │   └── haikubox.py
@@ -187,6 +188,8 @@ BirdWatcher/
 │   │   │                    economy, upgrades, lore (Tavern page)
 │   │   ├── biome.py         L-system forms, bloom hues, call-density
 │   │   │                    vitality (Biome page)
+│   │   ├── territory.py     zone map, factions, dwell, the
+│   │   │                    displacement rule (Territory page)
 │   │   ├── exceptions.py    SkipFile sentinel
 │   │   └── worker.py        APScheduler: visit processing,
 │   │                        Haikubox poll, clip + frame retention,
@@ -243,7 +246,8 @@ BirdWatcher/
 │       │   ├── Insights.tsx     per-species activity clocks
 │       │   ├── Flightlines.tsx  the Art tab
 │       │   ├── Tavern.tsx       the Tavern tab
-│       │   └── Biome.tsx        the Biome tab
+│       │   ├── Biome.tsx        the Biome tab
+│       │   └── Territory.tsx    the Wars tab
 │       └── components/
 │           ├── DetectionCard.tsx
 │           ├── SpeciesPicker.tsx
@@ -255,7 +259,8 @@ BirdWatcher/
 │           ├── Toast.tsx
 │           ├── ArtCanvas.tsx     flightlines / mandala / topography
 │           ├── TavernCanvas.tsx  the common room
-│           └── BiomeCanvas.tsx   the L-system garden
+│           ├── BiomeCanvas.tsx   the L-system garden
+│           └── TerritoryMap.tsx  SVG zones over the camera still
 │
 └── scripts/                  Deploy automation (runs on Mac)
     ├── deploy_to_server.sh
@@ -526,9 +531,9 @@ nightly at 02:20 UTC by `scripts/analyze_bird_locations.py` and served
 as static PNGs under `/media/heatmaps/` (the standard `/media/` mount
 serves anything under `data/`).
 
-## The Art, Tavern and Biome pages
+## The Art, Tavern, Biome and Territory pages
 
-Three surfaces that read the archive a second way. All are read-only
+Four surfaces that read the archive a second way. All are read-only
 apart from the tavern's two POSTs, and they share these invariants:
 
 - **A flight, and a patron, is a DETECTION, not a visit.** A visit with
@@ -547,6 +552,11 @@ apart from the tavern's two POSTs, and they share these invariants:
   `Poor quality`. `Unknown bird` is a real sighting and stays on the Art
   page, but it cannot pollinate in the Biome, where a visitor needs a
   species name to find the right plant.
+- **Say which measurement was available.** Each page carries a field for
+  it, because each is built on a column that is NULL for most of the
+  archive: `path_kind` on Art, `energy_source` on Biome, `control_basis`
+  and `summary.timed` on Territory. Do not average the two cases
+  together and do not drop the field from a payload.
 
 ### Art (`/art`)
 
@@ -637,6 +647,47 @@ Knobs: `FORMS`, the band edges in `_BANDS`, the hue ramps and
 sprite and rebuilt only every `GROWTH_STEP`, so stroking hundreds of
 segments per plant does not happen sixty times a second.
 
+### Territory (`/territory`)
+
+Feeder Wars. `GET /api/territory/day` scores one local day as a turf
+war, `GET /api/territory/dates` lists days and how many of their birds
+carry a clock. `pipeline/territory.py` holds the zone map, the seven
+factions, dwell, and the displacement rule.
+
+Zones are four places in this yard, not quadrants: the hanging cage, the
+dish, the drop zone and the rail. Their centres were read off the
+25/50/75% contours in `data/heatmaps/location_heatmap.png`, and
+`TerritoryMap.tsx` draws them as SVG over the same camera still the
+heatmap uses, served from `/media/calibration/heatmap_bg.jpg`. A
+generated `data/calibration/zones.json` overrides them if one exists;
+`zone_source` says which was used, since the built-in map stops being
+true the day a feeder moves.
+
+The part worth understanding before touching it:
+
+- **`Detection.track_frames` is why this page exists in this shape.**
+  `track_bboxes` had no frame index, so two tracks in one clip could not
+  be put on a shared clock and a displacement was not computable at all.
+  The column was added here and is written by `pipeline/process.py` from
+  `BirdDetection.frame_index`; it is NULL on every row captured before.
+  Old visits can be scored for occupancy and can never yield a
+  displacement, which is what `summary.eligible_visits` reports.
+- **Control is scored in seconds only once timings cover the day.**
+  `SECONDS_BASIS_COVERAGE` (half) is the switch. Below it the page counts
+  landings instead, because with a handful of timed rows every untimed
+  bird scores zero and a perch with two real landings reads as unheld
+  while one timed visitor takes the day. There is a regression test for
+  exactly that.
+- **Unidentified birds are traffic, never allegiance.** Most rows have no
+  species; folding them into a faction would decide the war by
+  classifier noise. They are tallied in `unclaimed`.
+
+Knobs: `DEFAULT_ZONES`, `FACTIONS`, `DISPLACE_WINDOW_FRAMES`,
+`MIN_HOLD_FRAMES` and `FRAME_SECONDS` in `pipeline/territory.py`;
+`SECONDS_BASIS_COVERAGE` in `routers/territory.py`. `FRAME_SECONDS`
+tracks the 3 fps in `pipeline/frames.extract_frames` — change one
+without the other and every dwell silently rescales.
+
 ## Database migrations
 
 `backend/db/session.py::_apply_additive_migrations` runs on every
@@ -664,7 +715,7 @@ cp backend/.env.example backend/.env
 # Fill in HAIKUBOX_API_KEY and HAIKUBOX_SERIAL (and ANTHROPIC_API_KEY if
 # you'll run the LLM backlog script)
 
-# Tests (no ML deps needed; 223 tests, ~3 s)
+# Tests (no ML deps needed; 270 tests, ~3 s)
 make test
 
 # Full local stack (Docker)
@@ -774,6 +825,7 @@ skipped. Output JSONL persists under
 | `test_art.py` | Local-day binning, even sampling, path provenance, palette |
 | `test_tavern.py` | Archetypes, purse cap, quiet-room fallback, unlock paths |
 | `test_biome.py` | Pitch-to-form bands, symbol cap, local-day binning, pollinator strengths |
+| `test_territory.py` | Zone assignment, faction fallback, dwell provenance, the displacement rule |
 
 None load torch/transformers/ultralytics — heavy modules use lazy
 imports + `TYPE_CHECKING` so they only resolve when actually called.

@@ -123,6 +123,18 @@ class Detection(Base):
     # noisy bbox. Nullable because rows inserted before this column existed
     # don't have it.
     track_bboxes: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # The sampled frame index each entry in `track_bboxes` came from, same
+    # length and same order. Frames are sampled at 3 fps (see
+    # pipeline/frames.extract_frames), so index 6 is two seconds in.
+    #
+    # Without this, two tracks in one clip cannot be put on a shared clock:
+    # `track_bboxes[0]` for track 1 and for track 2 are different moments,
+    # and a gap in the list is indistinguishable from a bird that sat still.
+    # That is what the Territory page needs to say a bird was displaced
+    # rather than merely present, so rows without it can be scored for zone
+    # occupancy but never for a displacement. NULL for everything written
+    # before the column existed.
+    track_frames: Mapped[list | None] = mapped_column(JSON, nullable=True)
     track_id: Mapped[int] = mapped_column(Integer)
 
     # ── Crop-quality metrics (populated at ingest; nullable for old rows) ──
