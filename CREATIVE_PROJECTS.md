@@ -220,6 +220,7 @@ An ambient digital terrarium running in the background. Unlike traditional visua
 2. **Phase 2 (Cozy Companion): Project 1 (*The Perch & Flagon*)** — built, on the Tavern tab.
    * *Why second:* Reuses existing frontend React components and `/api/detections` feed to create an immediate, daily-playable idle tavern.
    * *As built:* `/api/tavern` plus `TavernCanvas.tsx`. Each detection is a guest whose seat comes from a species archetype, whose colour and size come from the plumage palette Phase 1 introduced, and who pays Seed Shillings toward thirteen upgrades to the house. Detections the classifier would not name are cloaked strangers who pay one shilling; "Not a bird" corrections come back as tavern mishaps.
+   * *Dwell:* a guest stays for their archetype's dwell, nudged by the real visit duration, at ninety wall-clock seconds a beat. The newest three never time out and neither does the quiet company, so the room is never empty on a yard that logs a few dozen birds a day.
    * *Open question:* the founding purse is capped at 1,200 shillings, so a long archive is a good start rather than an instant win. Whether that is the right figure is a guess, and a week of use is what would settle it.
 3. **Phase 3 (Acoustic Living Art): Project 5 (*Chrono-Chirps*)**
    * *Why third:* Implement the reverse-engineered Haikubox GraphQL client to fetch raw audio and render the procedural botanical garden.

@@ -135,7 +135,8 @@ BirdWatcher/
 │   │   │                    additive-column migrations
 │   │   ├── models.py        Species, Visit, Detection,
 │   │   │                    HaikuboxDetection, PushSubscription,
-│   │   │                    Correction, PipelineStatsDaily
+│   │   │                    Correction, PipelineStatsDaily,
+│   │   │                    TavernState
 │   │   ├── families.py      family-level catch-all definitions
 │   │   │                    + DB seeder
 │   │   └── utils.py         utcnow() helper
@@ -146,7 +147,10 @@ BirdWatcher/
 │   │   ├── species.py       GET  /api/species (yard/extra/families)
 │   │   ├── corrections.py   POST + /bulk + /confirm + /llm-confirm
 │   │   ├── push.py          Web Push subscription mgmt + VAPID
-│   │   └── stats.py         GET  /api/stats?days=30
+│   │   ├── stats.py         GET  /api/stats?days=30 + /activity
+│   │   ├── art.py           GET  /api/art/trajectories + /dates
+│   │   └── tavern.py        GET  /api/tavern/state + /arrivals +
+│   │                        /guestbook, POST /unlock + /seen
 │   │
 │   ├── ingest/
 │   │   └── haikubox.py
@@ -176,6 +180,10 @@ BirdWatcher/
 │   │   ├── stats.py         daily funnel aggregation,
 │   │   │                    global totals, classifier accuracy
 │   │   │                    (top1 vs corrected_name)
+│   │   ├── palette.py       plumage colours, body mass, call pitch,
+│   │   │                    flight-path synthesis (Art page)
+│   │   ├── tavern.py        archetypes, rarity tiers, the shilling
+│   │   │                    economy, upgrades, lore (Tavern page)
 │   │   ├── exceptions.py    SkipFile sentinel
 │   │   └── worker.py        APScheduler: visit processing,
 │   │                        Haikubox poll, clip + frame retention,
@@ -207,7 +215,7 @@ BirdWatcher/
 │   │       └── …                        replay harness, scoring,
 │   │                                    multi-config experiments
 │   │
-│   ├── tests/                17 test modules, 141 passing
+│   ├── tests/                17 test modules, 191 passing
 │   ├── data/                 gitignored
 │   ├── models/               gitignored
 │   └── secrets/              gitignored
@@ -221,17 +229,28 @@ BirdWatcher/
 │       │   │                 submitCorrection, bulkCorrection,
 │       │   │                 confirmClassifierLabel,
 │       │   │                 confirmLlmCorrection,
-│       │   │                 fetchStats, fetchSpecies
+│       │   │                 fetchStats, fetchSpecies,
+│       │   │                 fetchArtDay, fetchTavernState
+│       │   ├── chartTheme.ts Recharts colours from the CSS vars
+│       │   ├── useThemeKey.ts re-read the palette on a theme flip
+│       │   │                 (shared by both canvases)
 │       │   └── push.ts
 │       ├── pages/
 │       │   ├── Feed.tsx, Species.tsx, Settings.tsx, Stats.tsx
+│       │   ├── Insights.tsx     per-species activity clocks
+│       │   ├── Flightlines.tsx  the Art tab
+│       │   └── Tavern.tsx       the Tavern tab
 │       └── components/
 │           ├── DetectionCard.tsx
 │           ├── SpeciesPicker.tsx
 │           ├── FilterPicker.tsx
 │           ├── BulkActionBar.tsx
 │           ├── ImageZoom.tsx
-│           └── AudioBadge.tsx
+│           ├── AudioBadge.tsx
+│           ├── FieldIcons.tsx
+│           ├── Toast.tsx
+│           ├── ArtCanvas.tsx     flightlines / mandala / topography
+│           └── TavernCanvas.tsx  the common room
 │
 └── scripts/                  Deploy automation (runs on Mac)
     ├── deploy_to_server.sh
@@ -502,6 +521,69 @@ nightly at 02:20 UTC by `scripts/analyze_bird_locations.py` and served
 as static PNGs under `/media/heatmaps/` (the standard `/media/` mount
 serves anything under `data/`).
 
+## The Art and Tavern pages
+
+Two surfaces that read the same detections a second way. Both are
+read-only apart from the tavern's two POSTs, and both share three
+invariants that are easy to get wrong:
+
+- **A flight, and a patron, is a DETECTION, not a visit.** A visit with
+  forty detections is forty tracks and usually forty birds. Treating the
+  visit as the unit draws a line between two birds that never met, and
+  pours one flagon for a crowd.
+- **Days are camera-local.** `Visit.started_at` is naive UTC; both pages
+  bin by `settings.camera_timezone`, the same way
+  `pipeline.stats.compute_species_activity` does. A UTC boundary falls
+  inside the feeder's active hours for part of the year.
+- **Sentinels are not guests.** Both hide `Not a bird` and
+  `Poor quality`. `Unknown bird` is a real sighting and stays.
+
+### Art (`/art`)
+
+`GET /api/art/trajectories` serves one local day as normalised paths;
+`GET /api/art/dates` lists days with activity. `pipeline/palette.py`
+maps a species to a plumage colour, a body mass and a call pitch, and
+turns a detection's boxes into a path. Detections carrying
+`track_bboxes` get their real per-frame path, the rest get a synthesised
+arc around a real perch, and the response says which via `path_kind` so
+the page can admit it. A busy day is sampled evenly across its span
+rather than truncated, so the artwork still runs dawn to dusk.
+`ArtCanvas.tsx` draws three modes off that one payload and exports PNG
+at 3840x2160.
+
+### Tavern (`/tavern`)
+
+`pipeline/tavern.py` holds the rules: seven archetypes that decide where
+a guest sits and how long they stay, rarity tiers computed from this
+yard's own counts rather than a range map, the payment formula, the
+upgrade catalogue and the seeded lore. Everything is deterministic on
+the detection id, so a guest's line and order never change under them.
+
+`GET /api/tavern/state` is the first paint, `/arrivals?after=<id>` is
+the poll, `/guestbook` is the species ledger, `POST /unlock` buys an
+upgrade and `POST /seen` moves the marker for "new to this reader".
+Arrivals page by detection id, not capture time, because the worker can
+drain a backlog out of order.
+
+Money is derived on every read: earnings from the detections table,
+spending from the list of upgrades owned. `TavernState` is one row and
+stores only what the user chose. History pays into a founding purse
+capped at `FOUNDING_PURSE_CAP`, since production has ~186k shillings of
+all-time takings against a catalogue costing 7,310 and crediting the
+archive would end the game before it started.
+
+Knobs worth knowing: `FOUNDING_PURSE_CAP` and `UPGRADES` in
+`pipeline/tavern.py`; `SECONDS_PER_BEAT` (wall-clock time per beat of a
+patron's dwell), `MIN_COMPANY` (newest guests that never time out) and
+`ROOM_CAPACITY` in `pages/Tavern.tsx`.
+
+Two traps:
+
+- `TavernState.unlocked` is a JSON column, so SQLAlchemy does not see an
+  in-place `append`. Reassign the list or the purchase is lost on commit.
+- Adding an upgrade to `UPGRADES` without teaching `TavernCanvas.tsx` its
+  `effect` flag buys the user a line of text and no change to the room.
+
 ## Database migrations
 
 `backend/db/session.py::_apply_additive_migrations` runs on every
@@ -529,7 +611,7 @@ cp backend/.env.example backend/.env
 # Fill in HAIKUBOX_API_KEY and HAIKUBOX_SERIAL (and ANTHROPIC_API_KEY if
 # you'll run the LLM backlog script)
 
-# Tests (no ML deps needed; 141 tests, ~2 s)
+# Tests (no ML deps needed; 191 tests, ~3 s)
 make test
 
 # Full local stack (Docker)
@@ -617,13 +699,12 @@ skipped. Output JSONL persists under
 
 ## Tests
 
-141 tests across 17 modules, organized by component:
+191 tests across 17 modules, organized by component:
 
 | File | Coverage |
 |---|---|
 | `test_track.py` | IoU geometry, tracking, gap bridging, best-crop scoring |
 | `test_fuse.py` | Bayesian renormalization, audio close-call flips, seasonal |
-| `test_fuse_crops.py` | Phase-correlation alignment + averaging |
 | `test_calibration.py` | Yard-priors loader + cache + fallback |
 | `test_notify.py` | Rarity decision |
 | `test_process.py` | Classifier-rejection persistence, Laplacian ranking |
@@ -637,6 +718,8 @@ skipped. Output JSONL persists under
 | `test_families.py` | Family seeder, picker exposure, partial credit |
 | `test_species_and_corrections.py` | Picker endpoint, single + bulk correction paths |
 | `test_worker_scan.py` | Clip-retention, frame-retention, filename parser |
+| `test_art.py` | Local-day binning, even sampling, path provenance, palette |
+| `test_tavern.py` | Archetypes, purse cap, quiet-room fallback, unlock paths |
 
 None load torch/transformers/ultralytics — heavy modules use lazy
 imports + `TYPE_CHECKING` so they only resolve when actually called.
@@ -661,6 +744,22 @@ host's real `yard_priors.json` never pollutes test runs.
    you see `all crops rejected`, lower `IN_RANGE_THRESHOLD` in
    `pipeline/classify.py` from 0.10 to 0.05, OR check whether the
    actual species is in the yard allow-list.
+5. Binary NAB post-filter: the most likely answer, and invisible from
+   the feed because the rows it kills are labelled `Not a bird` and
+   hidden. It suppresses 78-100 % of detections on a normal day, so a
+   day with nothing in the feed is often a day where it ate everything.
+   Check before suspecting the camera:
+
+   ```bash
+   # what the filter killed today, newest first
+   curl -s "$HOST/api/detections?limit=50&binary_nab=true" \
+     | python3 -m json.tool | grep -E 'captured_at|nab_override_p'
+   ```
+
+   Then open a few `crop_url`s and look. On 2026-09-10 every one of the
+   day's 37 kills was a squirrel, a stone wall or sunlit foliage, so the
+   filter was right and the yard was simply quiet. The Tavern and Art
+   pages hide the same rows, so all three surfaces go empty together.
 
 ### "Push notifications never arrive"
 
