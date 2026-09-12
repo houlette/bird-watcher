@@ -28,6 +28,7 @@ from pipeline.exceptions import SkipFile
 from pipeline.frames import extract_frames
 from pipeline.fuse import FusedPrediction, fuse
 from pipeline.notify import dispatch_for_detection
+from pipeline.recurrence import filter_detections as _recurrence_filter
 from pipeline.scene_mask import filter_detections as _scene_mask_filter
 from pipeline.track import Track, Tracker
 
@@ -114,6 +115,12 @@ def process_visit(visit: Visit, db: Session) -> int:
         # Detections with strong YOLO confidence override the mask, so
         # an actual bird at the feeder still gets through.
         dets, this_frame_suppressed = _scene_mask_filter(dets)
+        scene_mask_suppressed += this_frame_suppressed
+        # Second spatial pass, on exact boxes rather than coarse cells. The
+        # scene mask needs the user to label; this one derives its own
+        # fixtures from boxes that keep reappearing, so it keeps working
+        # through a fortnight where nobody labels anything.
+        dets, this_frame_suppressed = _recurrence_filter(dets)
         scene_mask_suppressed += this_frame_suppressed
         for d in dets:
             d.crop = _extract_crop_from_image(d, frame.image)

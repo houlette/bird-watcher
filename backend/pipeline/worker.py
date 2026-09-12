@@ -31,6 +31,8 @@ from ingest.haikubox import (
 )
 from db.models import PipelineStatsDaily
 from pipeline.daylight import is_daylight
+from pipeline.recurrence import WINDOW_DAYS as RECURRENCE_WINDOW_DAYS
+from pipeline.recurrence import relabel_fixtures
 from pipeline.stats import dates_with_visits, upsert_daily_stats
 from pipeline.exceptions import SkipFile
 from pipeline.frames import IMAGE_EXTS, VIDEO_EXTS
@@ -288,6 +290,32 @@ def _cleanup_old_frames() -> int:
     return deleted
 
 
+def _relabel_recurring_fixtures() -> int:
+    """Nightly: mark detections sitting on a recurring box as Not a bird.
+
+    Runs after the stats snapshot so the funnel reports the day as it was
+    processed rather than as this pass leaves it. A fixture needs three
+    separate days before it qualifies, so nothing here is urgent and a
+    nightly cadence is the right one.
+    """
+    db = SessionLocal()
+    try:
+        since = utcnow() - timedelta(days=RECURRENCE_WINDOW_DAYS)
+        result = relabel_fixtures(db, since, apply=True)
+        if result.get("relabeled"):
+            log.info("Recurrence sweep: %d fixture(s), relabeled %d detection(s) as Not a bird; skipped %s",
+                     result["fixtures"], result["relabeled"], result.get("skipped"))
+        else:
+            log.info("Recurrence sweep: %d fixture(s), nothing new to relabel",
+                     result.get("fixtures", 0))
+        return result.get("relabeled", 0)
+    except Exception:
+        log.exception("Recurrence sweep failed")
+        return 0
+    finally:
+        db.close()
+
+
 def _cleanup_old_clips() -> int:
     """Delete MP4 / JPG clips older than CLIP_RETENTION_HOURS.
 
@@ -407,6 +435,13 @@ def start_worker() -> BackgroundScheduler:
         id="cleanup_old_clips",
         next_run_time=datetime.now(timezone.utc),  # run once at startup
     )
+    scheduler.add_job(
+        _relabel_recurring_fixtures,
+        CronTrigger(hour=3, minute=10),
+        max_instances=1,
+        coalesce=True,
+        id="relabel_recurring_fixtures",
+    )
     # Nightly funnel stats snapshot at 02:15 UTC. The endpoint recomputes
     # today's row on demand, so we only need the cron to lock in
     # yesterday + backfill any missing historical days.
@@ -443,7 +478,7 @@ def start_worker() -> BackgroundScheduler:
     )
     scheduler.start()
     log.info(
-        "Workers started: pipeline every %ds, Haikubox poller every %ds, frame cleanup daily, clip cleanup hourly",
+        "Workers started: pipeline every %ds, Haikubox poller every %ds, frame cleanup daily, clip cleanup hourly, recurrence sweep nightly 03:10 UTC",
         POLL_INTERVAL_SECONDS,
         HAIKUBOX_POLL_SECONDS,
     )
