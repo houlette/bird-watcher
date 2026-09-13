@@ -217,10 +217,32 @@ FRAME_CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60
 # frame we'd want for future YOLO retraining was already extracted into
 # FRAMES_DIR during process_visit. Holding longer just risks disk-full
 # (we hit it twice already, 75 GB VM and ~10-40 GB of clips/day depending
-# on bird activity). 1-day retention bounds growth without losing
-# never-processed clips.
+# on bird activity). 1-day retention bounds growth. It does NOT spare
+# never-processed clips, whatever this comment used to claim: it deletes on
+# mtime alone, which is what stranded 30,694 visits in June and July 2026.
+# `_reap_expired_visits` cleans up after it rather than holding clips longer,
+# because disk-full is the worse failure of the two.
 CLIP_RETENTION_HOURS = 24
 CLIP_CLEANUP_INTERVAL_SECONDS = 60 * 60   # hourly, since 24h windows tighter than 14d
+
+# Retention deletes a clip 24h after it lands whether or not it was ever
+# processed, and step 2 above takes the NEWEST pending visit first, so during
+# a backlog the oldest arrivals can have their clips deleted out from under
+# them and then sit pending forever. 30,694 rows captured between 2 June and
+# 18 July 2026 were in exactly that state: every clip gone, no detections
+# attached, and never once attempted, because newest-first never reached
+# them. They cost no CPU, which is why nobody noticed, but they make the
+# pending count useless as a health signal — and a health signal nobody can
+# read is how the scene mask, the Haikubox poller and the clip retention bug
+# all stayed hidden (see LESSONS.md).
+#
+# process_visit already raises SkipFile when the clip is gone, so this pass
+# is only about reaching rows the ordering never will. Capped per run and
+# committed in batches: SQLite has one writer, and a 30k-row transaction is
+# exactly the kind of thing that starved user corrections before.
+VISIT_REAP_INTERVAL_SECONDS = 60 * 60
+VISIT_REAP_MAX_PER_RUN = 5_000
+VISIT_REAP_BATCH = 500
 
 
 # Frame filenames are written by pipeline.process._save_source_frames as
@@ -289,6 +311,44 @@ def _cleanup_old_frames() -> int:
             deleted, FRAME_RETENTION_DAYS, preserved_labeled,
         )
     return deleted
+
+
+def _reap_expired_visits() -> int:
+    """Close out pending visits whose clip no longer exists.
+
+    Marked `skipped:` so they land in the same bucket as the daylight skips
+    and stay out of `visits_with_processing_error`, which is reserved for
+    real operational failures. The row is kept rather than deleted: those
+    clips genuinely arrived and were genuinely never looked at, and that is
+    a fact worth being able to count later.
+    """
+    cutoff = utcnow() - timedelta(hours=CLIP_RETENTION_HOURS * 2)
+    db = SessionLocal()
+    reaped = 0
+    try:
+        pending = db.execute(
+            select(Visit)
+            .where(Visit.processed_at.is_(None), Visit.started_at < cutoff)
+            .order_by(Visit.started_at.asc())
+            .limit(VISIT_REAP_MAX_PER_RUN)
+        ).scalars().all()
+        for visit in pending:
+            if visit.clip_path and (DATA_DIR / visit.clip_path).exists():
+                continue        # still processable; leave it for the worker
+            visit.processed_at = utcnow()
+            visit.processing_error = "skipped: clip expired before the worker reached it"
+            reaped += 1
+            if reaped % VISIT_REAP_BATCH == 0:
+                db.commit()
+        db.commit()
+    except Exception:
+        db.rollback()
+        log.exception("Visit reap failed")
+    finally:
+        db.close()
+    if reaped:
+        log.info("Visit reap: closed out %d pending visit(s) whose clip was already deleted", reaped)
+    return reaped
 
 
 def _rebuild_backdrop() -> int:
@@ -453,6 +513,15 @@ def start_worker() -> BackgroundScheduler:
         next_run_time=datetime.now(timezone.utc),  # run once at startup
     )
     scheduler.add_job(
+        _reap_expired_visits,
+        "interval",
+        seconds=VISIT_REAP_INTERVAL_SECONDS,
+        max_instances=1,
+        coalesce=True,
+        id="reap_expired_visits",
+        next_run_time=datetime.now(timezone.utc),  # run once at startup
+    )
+    scheduler.add_job(
         _rebuild_backdrop,
         CronTrigger(hour=2, minute=40),
         max_instances=1,
@@ -503,7 +572,7 @@ def start_worker() -> BackgroundScheduler:
     )
     scheduler.start()
     log.info(
-        "Workers started: pipeline every %ds, Haikubox poller every %ds, frame cleanup daily, clip cleanup hourly, backdrop rebuild nightly 02:40 UTC, recurrence sweep nightly 03:10 UTC",
+        "Workers started: pipeline every %ds, Haikubox poller every %ds, frame cleanup daily, clip cleanup hourly, visit reap hourly, backdrop rebuild nightly 02:40 UTC, recurrence sweep nightly 03:10 UTC",
         POLL_INTERVAL_SECONDS,
         HAIKUBOX_POLL_SECONDS,
     )

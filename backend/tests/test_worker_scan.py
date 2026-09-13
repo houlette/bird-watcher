@@ -342,3 +342,51 @@ def test_cleanup_old_frames_handles_unparseable_filenames(db, tmp_path, monkeypa
     deleted = worker._cleanup_old_frames()
     assert deleted == 1
     assert not weird.exists()
+
+
+def test_reap_closes_pending_visits_whose_clip_is_gone(db, clips_dir, monkeypatch):
+    """Newest-first ordering never reaches an old pending visit, so one whose
+    clip retention has already deleted would sit pending forever. 30,694 rows
+    from June and July 2026 were in exactly that state."""
+    from datetime import timedelta
+
+    from db.utils import utcnow
+
+    monkeypatch.setattr(worker, "SessionLocal", db)
+    session = db()
+    stale = Visit(started_at=utcnow() - timedelta(days=30), clip_path="clips/gone.mp4")
+    fresh = Visit(started_at=utcnow(), clip_path="clips/also_gone.mp4")
+    session.add_all([stale, fresh])
+    session.commit()
+    stale_id, fresh_id = stale.id, fresh.id
+    session.close()
+
+    assert worker._reap_expired_visits() == 1
+
+    session = db()
+    assert session.get(Visit, stale_id).processed_at is not None
+    assert session.get(Visit, stale_id).processing_error.startswith("skipped:")
+    # Inside the grace window, so the worker still owns it.
+    assert session.get(Visit, fresh_id).processed_at is None
+    session.close()
+
+
+def test_reap_leaves_a_visit_whose_clip_still_exists(db, clips_dir, monkeypatch):
+    from datetime import timedelta
+
+    from db.utils import utcnow
+
+    monkeypatch.setattr(worker, "SessionLocal", db)
+    (clips_dir / "here.mp4").write_bytes(b"x")
+    session = db()
+    v = Visit(started_at=utcnow() - timedelta(days=30), clip_path="clips/here.mp4")
+    session.add(v)
+    session.commit()
+    vid = v.id
+    session.close()
+
+    assert worker._reap_expired_visits() == 0
+
+    session = db()
+    assert session.get(Visit, vid).processed_at is None
+    session.close()
