@@ -133,6 +133,40 @@ person (or the next Claude session) doesn't pay the same tuition.
   before the next is decoded, and the per-visit RAM bound scales with
   bird-count not frame-count — which lets you raise sampling fps to
   give the sharpness ranker more candidates.
+- **On a fixed camera, model the backdrop — but bin it by hour.** A
+  per-pixel median over enough frames converges on the empty scene:
+  birds and blowing leaves all average out. A median across *all*
+  hours is useless on a sunlit stone wall, because shadows crossing
+  it differ from the average as much as a bird does. Split per
+  hour-of-day and junk separates from birds cleanly.
+- **Score a box against its own surroundings, not a threshold.**
+  Absolute pixel difference from a background model trips on any
+  lighting change. Dividing the mean difference inside a detection box
+  by the mean difference in a ring around it cancels whatever the light
+  is doing to both. Backdrop lands near 1.0; a real object sits above.
+- **Perceptual hashing of crops does not find recurring artifacts.**
+  It sounds like the obvious way to spot the same fixture appearing
+  again, and it fails: the detector box jitters by tens of pixels
+  between detections, so the same object is framed differently every
+  time and the hash moves with it. Hashing 1,280 real crops grouped
+  almost nothing across separate visits even at a loose threshold.
+  Match on **box overlap** instead, which separated the same fixtures
+  cleanly.
+- **"Same place, repeatedly, across days" is a usable not-a-bird
+  signal, but all three conditions matter.** Fitted against a month of
+  hand labels: at IoU ≥0.9, ≥3 distinct days and ≥20 hits it flagged
+  260 detections, 235 of them confirmed junk and zero confirmed birds.
+  Loosening the overlap to 0.8 cost 22 real birds, because a perch
+  tolerates that much variation and a fixture does not. The minimum
+  cluster size is what saves the birds that *do* reuse a favourite
+  perch a handful of times.
+- **Validate a suppression threshold against the current scene, by
+  eye.** We lowered a threshold after scoring it against an archive of
+  hand labels where it looked free. In the current frame it would have
+  relabeled cardinals, a robin and a dozen feeder sparrows as scenery,
+  because a cell reads as pure junk whenever its birds happen to fall
+  outside the lookback window. An old labeled archive and today's yard
+  are different scenes.
 
 ## Backend / Python
 
@@ -238,6 +272,40 @@ person (or the next Claude session) doesn't pay the same tuition.
   classifier falls back to default model, push falls back to no-op
   when VAPID isn't configured. Means the system is always shippable
   even when half the upstream pieces aren't set up yet.
+- **Every suppression writes an attributable, reversible record.**
+  Offline passes that relabel rows write a `Correction` with a
+  `source` tag and a one-line rationale rather than overwriting
+  `species_id` silently. Made it possible to audit exactly what each
+  pass had done, and to undo one by deleting its source tag.
+
+## A defence that depends on a human decays silently
+
+The scene mask learned only from the user's own NAB corrections inside
+a rolling 14-day window. Stop labelling for a fortnight and it empties
+out — not with an error, but by returning zero hot cells forever while
+logging that fact at INFO once an hour. It sat that way for weeks while
+every fixed artifact in the frame flowed into the feed, and the visible
+symptom was "the classifier got worse," which sent us looking in
+entirely the wrong place.
+
+Three things came out of that:
+
+- **Feed the machine's own verdicts back in.** The binary filter was
+  producing hundreds of NAB judgements a day that nothing read, because
+  it writes `species_id` directly and never creates a `Correction`. The
+  mask now counts those too, at a higher bar.
+- **An empty defence should say so loudly.** Zero hot cells now logs a
+  WARNING, not an INFO line indistinguishable from healthy operation.
+- **Count each defence separately.** Three spatial filters briefly
+  shared one counter, which makes it impossible to tell which is doing
+  the work. And count the *denominator*: "suppressed 0" reads
+  identically whether a filter rejected nothing or never ran.
+
+The same failure shape showed up twice more the same week: the Haikubox
+poller returning HTTP 200 with an empty list for 85 days, and the clip
+retention pass deleting 80,138 uploads before anything had opened them.
+All three were silent, and all three were visible in a log line nobody
+was reading. A staleness check on each is cheaper than the debugging.
 
 ## Things to revisit if revived later
 
@@ -253,6 +321,20 @@ person (or the next Claude session) doesn't pay the same tuition.
   shift the system from "generic classifier filtered by allow-list"
   to "fine-tuned classifier of this yard's birds." Likely worth ~5
   accuracy points on lookalikes.
+- **Backdrop-removed crops for the classifier.** `backdrop.cut_out()`
+  isolates the bird from the scene and is implemented but not wired in.
+  Per-species accuracy is poor on lookalikes and a crop that is 80 %
+  mulch is plausibly part of why — but changing what the classifier
+  sees needs its own before-and-after on `eval_binary_filter.py`.
+- **Solar azimuth and elevation as binary-filter features.** The yard's
+  lens flare is strongly sun-conditioned (39 of 52 detections in one
+  UTC hour; azimuth 255-270° with elevation 12-26° covers 81 %). A hard
+  time gate would need constant re-tuning since azimuth at a fixed
+  clock time drifts about a degree a day, so feed the angles to the
+  model and let it learn the interaction with frame position. `astral`
+  is already a dependency. Colour-based flare detection was tested and
+  failed: flares are *less* colourful than the average crop by the
+  Hasler-Süsstrunk metric, being mostly white against green ivy.
 - **Per-species expected count alerts.** "I haven't seen a chickadee
   in 5 days" is more useful than "ooh, a new cardinal." The
   infrastructure (push subscriptions, threshold per subscription)

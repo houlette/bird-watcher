@@ -13,10 +13,13 @@ container on our VM. The backend's filesystem-scan worker picks new files
 out of the FTPS drop directory, **gates on daylight** (no point running
 inference on nighttime IR/grayscale), extracts frames at ~3 fps for the
 first 10 s, runs **tiled YOLO11-small** over each frame (4K downsampling
-drops small birds otherwise), runs the YOLO output through a **scene
-mask** that drops bbox centers in NAB-clustered cells unless YOLO
-confidence is strong, tracks the survivors across frames with a simple
-**IoU tracker**, ranks each track's crops by area × confidence ×
+drops small birds otherwise), runs the YOLO output through **three
+spatial filters** — a **scene mask** over NAB-clustered grid cells, a
+**recurrence** filter on boxes that reappear at the same pixel across
+days, and a per-hour **backdrop model** that rejects a box which differs
+from the empty yard no more than its own surroundings do — each of which
+a strong YOLO confidence overrides, tracks the survivors across frames
+with a simple **IoU tracker**, ranks each track's crops by area × confidence ×
 Laplacian-variance sharpness, optionally **phase-correlation-aligns the
 top crops and averages** them into a denoised composite, **CLAHE**-
 normalizes for lighting, hands the result to a fine-grained
@@ -78,11 +81,17 @@ snapshots plus on-demand today's row, including server-side-rendered
    │     (labeled-detection frames preserved forever)   │
    │   • nightly stats — cron 02:15 UTC                 │
    │   • nightly heatmap render — cron 02:20 UTC        │
+   │   • nightly backdrop rebuild — cron 02:40 UTC      │
+   │     (one median frame per hour-of-day, 21d window) │
+   │   • nightly recurrence sweep — cron 03:10 UTC      │
+   │     (relabels boxes that recur across days)        │
    │                                                    │
    │  SQLite (data/birdwatcher.db) + image files        │
    │  (data/clips/, data/crops/, data/frames/,          │
-   │   data/calibration/, data/heatmaps/,               │
-   │   data/llm_classify_results/). mem_limit: 4g.      │
+   │   data/backdrop/, data/calibration/,               │
+   │   data/heatmaps/, data/llm_classify_results/).     │
+   │  mem_limit: 4g. data/frames/ is bind-mounted from  │
+   │  an attached volume on the VM — see DEPLOY.md.     │
    │                                                    │
    │  Caddy reverse-proxy in front, TLS via LE.         │
    └────────────┬───────────────────────────────────────┘
@@ -163,6 +172,8 @@ BirdWatcher/
 │   │   ├── frames.py        OpenCV frame extraction, 3 fps, 10 s cap
 │   │   ├── detect.py        Tiled YOLO11-small + NMS + NMM
 │   │   ├── scene_mask.py    100×100 grid NAB-cluster suppression
+│   │   ├── recurrence.py    boxes recurring at one pixel across days
+│   │   ├── backdrop.py      per-hour median of the empty yard
 │   │   ├── track.py         IoU tracker
 │   │   ├── classify.py      EfficientNet-B2 + allow-list +
 │   │   │                    in-range threshold + CLAHE pre-proc
@@ -325,18 +336,37 @@ Trace one motion event from camera to phone notification:
    frame can be released before the next iteration — caching ~120 KB
    crops scales with bird-count, not frame-count.
 
-6. **Scene-mask suppression.** `pipeline/scene_mask.py::filter_detections`
-   drops detections whose bbox center falls inside a "hot" 100 × 100 px
-   grid cell, where "hot" means ≥ `MIN_NABS_PER_CELL` (10) user-labeled
-   "Not a bird" detections in the last `LOOKBACK_DAYS` (14). A detection
-   with YOLO confidence ≥ `OVERRIDE_YOLO_CONFIDENCE` (0.65) is kept
-   regardless — a confident bird at the hummingbird feeder shouldn't get
-   dropped just because the location usually contains glints. The mask
-   refreshes every hour from the DB. Both the kept list and the
-   suppressed count are returned; the count is persisted to
-   `Visit.scene_mask_suppressed` so the Stats page can surface the
-   otherwise-invisible "real bird at a hot cell got dropped" failure
-   mode.
+6. **Three spatial filters.** They run in order and all three honour the
+   same escape hatch: a detection with YOLO confidence ≥
+   `OVERRIDE_YOLO_CONFIDENCE` (0.65) survives all of them, because a
+   confident bird at the hummingbird feeder shouldn't be dropped just
+   because that spot usually contains glints. Each returns its own
+   suppressed count, persisted separately on the `Visit` row. They were
+   briefly summed into one column, which made it impossible to tell which
+   filter was doing the work or whether a new one earned its place.
+
+   - **Scene mask** (`pipeline/scene_mask.py`) drops a bbox whose centre
+     falls in a "hot" 100 × 100 px cell, over `LOOKBACK_DAYS` (14).
+     A cell goes hot on ≥ `MIN_NABS_PER_CELL` (10) of the user's own NAB
+     corrections, or on ≥ `MIN_MACHINE_NABS_PER_CELL` (20) of the binary
+     filter's NAB verdicts provided the cell is ≥ 90 % NAB and holds ≤ 5
+     bird labels. That second path exists because the first dries up: a
+     mask fed only by hand labels empties out during any fortnight nobody
+     labels, and in September 2026 it sat at zero hot cells for weeks
+     while every fixed artifact in the frame reached the feed.
+   - **Recurrence** (`pipeline/recurrence.py`) drops a bbox overlapping a
+     box that has already appeared ≥ 20 times across ≥ 3 separate days at
+     IoU ≥ 0.90. Birds reuse a perch; they do not reuse it twenty times
+     at the same pixel across three days. Needs no labels at all.
+   - **Backdrop** (`pipeline/backdrop.py`) drops a bbox that differs from
+     the empty yard no more than the ring around it does. This is the only
+     one that catches a novel artifact on its first appearance, which
+     matters because a stretch of concrete step or a length of downspout
+     neither sits in one cell nor repeats at one box.
+
+   None of the three catches the lens flare, which genuinely differs from
+   the backdrop and wanders along its streak. That one is waiting on solar
+   features in the binary-filter retrain.
 
 7. **Tracking.** `pipeline/track.py::Tracker` is a greedy IoU matcher
    (`MATCH_IOU_THRESHOLD = 0.30`, `MAX_MISSED_FRAMES = 3`). It assigns
@@ -450,7 +480,6 @@ A one-line summary of every algorithm in the pipeline + its constants.
 | Detection | YOLO11-small | `pipeline/detect.py` | `BIRD_CONFIDENCE_THRESHOLD=0.35`, COCO class 14 |
 | Tiled inference | 1024×1024 tiles, 20 % overlap, NMS@0.50 within tile | `pipeline/detect.py::_tile` | `TILE_PX=1024`, `TILE_OVERLAP_PX=205` |
 | Cross-tile dedup | NMM (Non-Maximum Merging) — union bbox for ordinary overlaps; seam-stitching for half-bird fragments | `pipeline/detect.py::_nmm` | `TILE_SEAM_GAP_PX=20` |
-| Scene mask | 100×100 px grid, hot cells = ≥10 NAB labels in 14 days; high-confidence override | `pipeline/scene_mask.py` | `GRID_PX=100`, `MIN_NABS_PER_CELL=10`, `LOOKBACK_DAYS=14`, `OVERRIDE_YOLO_CONFIDENCE=0.65` |
 | Tracker | Greedy IoU matcher | `pipeline/track.py` | `MATCH_IOU_THRESHOLD=0.30`, `MAX_MISSED_FRAMES=3` |
 | Sharpness rank | `area × confidence × (Laplacian-variance + 1)` | `pipeline/process.py::_rank_detections` | `cv2.Laplacian(gray, cv2.CV_64F).var()` |
 | Multi-frame fusion | Phase-correlation alignment + pixel averaging, top-3 crops → one composite | `pipeline/process.py::_fuse_crops` | `_USE_MULTI_FRAME_FUSION=True` |
@@ -465,6 +494,63 @@ A one-line summary of every algorithm in the pipeline + its constants.
 | Rarity (push) | "First in N days" per-subscription | `pipeline/notify.py::is_rare` | default `notify_window_days=30` |
 | LLM backlog classify | Claude Opus 4.8 vision + structured-output JSON schema + prompt caching | `scripts/llm_classify_unidentified.py` | `MODEL="claude-opus-4-8"`, `EFFORT="medium"`, HIGH auto-commits, MEDIUM queues for review, LOW skipped |
 | Heatmap rendering | numpy `histogram2d` + scipy `gaussian_filter` (σ=2), matplotlib overlay on a clean background frame | `scripts/analyze_bird_locations.py` | bins=96; size-grid cell=240 px, minimum 5 samples |
+| Scene mask | Hot 100 px cells from NAB labels, two evidence paths | `pipeline/scene_mask.py` | user ≥10; machine ≥20 at ≥90 % purity and ≤5 bird labels; 14 d lookback |
+| Recurrence | Greedy box clustering, spatially bucketed | `pipeline/recurrence.py` | IoU ≥0.90, ≥3 distinct days, ≥20 hits, 14 d window |
+| Backdrop | Per-hour per-pixel median at ¼ scale; box-vs-ring contrast ratio | `pipeline/backdrop.py` | cut 1.20, ring 40 px, ≥25 frames per hour, 21 d rebuild window |
+
+## The backdrop model
+
+The camera never moves, so a per-pixel median over enough frames converges
+on the yard with nothing in it — birds, squirrels and blowing leaves all
+average out. `data/backdrop/hour_HH.png` holds one such median per hour of
+day, rebuilt nightly at 02:40 UTC from the preserved frames of the last 21
+days.
+
+Two design points, both of which were arrived at by getting them wrong
+first:
+
+**Bin by hour.** A single median across the whole day cannot work on a
+scene with a large sunlit stone wall: shadows crossing it differ from the
+all-day median as much as a bird does. Split per hour, junk and birds
+separate cleanly.
+
+**Score against the ring, not a threshold.** Absolute pixel difference
+trips on any lighting change. `contrast_ratio` divides the mean difference
+inside the detection box by the mean difference in a 40 px ring around it,
+so whatever the light is doing cancels out. Backdrop lands near 1.0; a real
+object sits above it.
+
+Measured on 130 frames from the 21:00 UTC hour: NAB detections sit at a
+median ratio of 1.46 against 2.01 for rows the binary filter calls birds.
+A cut at 1.5 catches 51 % of NAB rows and touches 7.9 % of the others;
+`MIN_CONTRAST_RATIO` ships at **1.20**, the conservative end, catching
+about a quarter of the junk at a 2.6 % cost. In a yard this sparse, leaving
+junk in beats taking birds out.
+
+`cut_out()` produces a backdrop-removed crop and is deliberately **not**
+wired into classification — changing what the classifier sees needs its own
+before-and-after on `scripts/eval_binary_filter.py`, not a guess.
+
+## Measuring whether the filters help
+
+Three filters share the detect path, so each carries its own counters:
+
+| Column | Meaning |
+|---|---|
+| `Visit.scene_mask_suppressed` | Dropped by the cell mask |
+| `Visit.recurrence_suppressed` | Dropped by the recurring-box rule |
+| `Visit.backdrop_suppressed` | Dropped by the backdrop model |
+| `Visit.backdrop_scored` | How many the backdrop model *scored*. Without this denominator, "suppressed 0" reads identically whether it rejected nothing or had no model for that hour. |
+
+Each aggregates into the matching `detections_*` column on
+`PipelineStatsDaily`.
+
+Those are activity metrics: they say how hard each filter is firing, not
+whether the feed got better. The outcome metric is **`user_fp_rate`** —
+of the detections that reached the feed and the user then reviewed, the
+share that turned out to be junk. It only means anything while the user
+keeps labelling, which is the same dependency that silently broke the
+scene mask, so it is worth watching that it stays populated.
 
 ## The `Correction.source` taxonomy
 
@@ -478,6 +564,8 @@ The DB schema allows multiple kinds of labels. The `source` column on
 | `llm-claude` | HIGH-confidence Claude call (≥99 % spot-check accuracy on our data). Auto-committed by `scripts/llm_classify_unidentified.py`. |
 | `llm-claude-medium` | MEDIUM-confidence Claude call. Auto-committed but flagged for one-tap review via the `LLM-labeled MEDIUM (review)` filter. |
 | `llm-claude-confirmed` | User tapped ✓ on a `llm-claude-medium` card — promotes the source tag and drops the row out of the review queue. |
+| `scene-mask-backfill` | Written by `scripts/backfill_scene_mask.py`, which applies the cell mask to rows persisted while it was dark. Excluded from the mask's own hot-cell query, or a cell would hold itself hot on its own output. |
+| `recurrence` | Written by `scripts/backfill_recurrence.py` and the nightly sweep, for boxes that recur at the same pixel across days. |
 
 These tags must propagate to any future fine-tune script: LLM-generated
 labels carry Claude's biases and shouldn't be confused with human
@@ -805,6 +893,32 @@ MEDIUM commit as `source="llm-claude-medium"` and surface in the
 skipped. Output JSONL persists under
 `data/llm_classify_results/` for audit.
 
+### Clear junk out of the feed after a filter change
+
+Both offline passes are **dry-run by default**, unlike the older
+backfills in that directory, because they rewrite `species_id` on rows
+you are looking at. Neither touches a detection the user has already
+corrected, one already carrying a sentinel, or one clearing the
+confidence override.
+
+```bash
+# Recurring boxes, whole archive, windowed so each fortnight is judged
+# by its own evidence:
+docker compose exec api python scripts/backfill_recurrence.py
+docker compose exec api python scripts/backfill_recurrence.py --apply
+
+# The cell mask, for rows persisted while it was dark:
+docker compose exec api python scripts/backfill_scene_mask.py --since 2026-08-01 --show
+docker compose exec api python scripts/backfill_scene_mask.py --since 2026-08-01 \
+  --only-ids 33783,34519,36084 --apply
+```
+
+`--show` prints every candidate with its crop path. **Look at them.** A
+100 px cell is coarse enough that a verified batch of 24 contained four
+real birds, which is what `--only-ids` exists for: apply exactly the
+ones a human has checked. Every change writes a `Correction` with a
+`source` tag, so a whole pass can be undone by deleting that tag.
+
 ### Swap the classifier model
 
 1. Set `BIRD_CLASSIFIER_MODEL` in `backend/.env` if it's a
@@ -817,7 +931,7 @@ skipped. Output JSONL persists under
 
 ## Tests
 
-191 tests across 17 modules, organized by component:
+300 tests across 21 modules, organized by component:
 
 | File | Coverage |
 |---|---|
@@ -828,7 +942,9 @@ skipped. Output JSONL persists under
 | `test_process.py` | Classifier-rejection persistence, Laplacian ranking |
 | `test_classify_normalize.py` | Apostrophe-tolerant name matching + typo fixes |
 | `test_polish_for_display.py` | CLAHE pre-write display polish |
-| `test_scene_mask.py` | Hot-cell computation, suppression with confidence override |
+| `test_scene_mask.py` | Hot-cell computation from both evidence paths, windowed queries, suppression with confidence override |
+| `test_recurrence.py` | Box clustering, the one-busy-day and favourite-perch cases, bucket-edge matching |
+| `test_backdrop.py` | Median convergence, the too-few-frames refusal, backdrop-vs-object scoring, scored-count reporting |
 | `test_detect.py` | Tile geometry, NMS, NMM (incl. seam-stitching) |
 | `test_daylight.py` | Sunrise/sunset gate with timezone |
 | `test_size_prior.py` | Log-normal multiplier, aspect gating, perch scaling |
