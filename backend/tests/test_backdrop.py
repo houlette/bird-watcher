@@ -114,3 +114,48 @@ def test_filter_drops_a_pure_backdrop_box(tmp_path, yard):
     d = _FakeDet(bbox=(2000, 1200, 300, 300))
     kept, suppressed, scored = backdrop.filter_detections([d], frame, datetime(2026, 9, 13, 21))
     assert suppressed == 1 and scored == 1 and kept == []
+
+
+def test_visit_id_parsed_from_frame_name(tmp_path):
+    assert backdrop.visit_id_from_frame(tmp_path / "v00251200_t0001.jpg") == 251200
+    assert backdrop.visit_id_from_frame(tmp_path / "crop_12.jpg") is None
+
+
+def test_frames_bin_on_capture_time_not_write_time(tmp_path):
+    """The bug this replaced: a frame written at 15:00 but shot at 13:00
+    belongs in the 13:00 median, or that hour's model blends two lightings."""
+    shot_at_13 = tmp_path / "v00000001_t0001.jpg"
+    shot_at_21 = tmp_path / "v00000002_t0001.jpg"
+    captured = {
+        1: datetime(2026, 9, 6, 13, 5, 5),
+        2: datetime(2026, 9, 6, 21, 40, 0),
+    }
+    bins, dropped = backdrop.bin_by_capture_hour([shot_at_13, shot_at_21], captured)
+    assert dropped == 0
+    assert bins[13] == [shot_at_13]
+    assert bins[21] == [shot_at_21]
+
+
+def test_frame_without_a_visit_is_dropped_not_guessed(tmp_path):
+    """Outside the rebuild window, or orphaned by a deleted visit. Either
+    way its hour is unknown, and an unknown hour is what poisoned the
+    median before."""
+    bins, dropped = backdrop.bin_by_capture_hour(
+        [tmp_path / "v00000009_t0001.jpg", tmp_path / "not_a_frame.jpg"], {})
+    assert bins == {} and dropped == 2
+
+
+def test_rebuild_prunes_an_hour_it_can_no_longer_build(tmp_path, yard):
+    """A model left over from a previous rebuild reads as current forever."""
+    backdrop.rebuild(_write_frames(tmp_path, yard, backdrop.MIN_FRAMES_PER_HOUR + 10, hour=21))
+    assert backdrop.get_backdrop(21) is not None
+    backdrop.rebuild(_write_frames(tmp_path, yard, backdrop.MIN_FRAMES_PER_HOUR + 10, hour=13))
+    assert backdrop.get_backdrop(13) is not None
+    assert backdrop.get_backdrop(21) is None
+
+
+def test_a_rebuild_that_builds_nothing_keeps_what_is_there(tmp_path, yard):
+    """An unmounted frames volume must not wipe every hour's model."""
+    backdrop.rebuild(_write_frames(tmp_path, yard, backdrop.MIN_FRAMES_PER_HOUR + 10, hour=21))
+    assert backdrop.rebuild({}) == {}
+    assert backdrop.get_backdrop(21) is not None

@@ -13,9 +13,11 @@ neither, yet each is provably nothing but backdrop.
 
 Two things had to be right before it worked at all:
 
-**Bin by hour.** A median across the whole day is useless here, because
-shadows crossing a stone wall differ from it as much as a bird does. Scored
-against a single-hour model instead, junk and birds separate.
+**Bin by hour, on capture time.** A median across the whole day is useless
+here, because shadows crossing a stone wall differ from it as much as a bird
+does. Scored against a single-hour model instead, junk and birds separate.
+The hour has to be the one the frame was shot in rather than the one it was
+written in; see `frames_by_hour` for what binning on mtime cost.
 
 **Measure locally.** An absolute difference threshold trips on any lighting
 change. Scoring a box against the ring around it cancels that: whatever the
@@ -33,6 +35,7 @@ backdrop; it is a light, not a fixture.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -40,6 +43,9 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+
+from db.models import Visit
+from db.session import SessionLocal
 
 log = logging.getLogger(__name__)
 
@@ -106,10 +112,22 @@ def rebuild(frame_paths_by_hour: dict[int, list[Path]]) -> dict[int, int]:
         median = np.median(np.stack(grays), axis=0).astype(np.uint8)
         cv2.imwrite(str(_path_for(hour)), median)
         used[hour] = len(grays)
+    # Drop models for hours this rebuild could not build. Without this a
+    # stale file is indistinguishable from a current one and keeps being
+    # scored against: the mtime-binned models covered all 24 hours, night
+    # included, out of frames that were all shot in daylight. Skipped when
+    # nothing built at all, so an unmounted frames volume cannot wipe the
+    # set.
+    pruned = []
+    if used:
+        for hour in range(24):
+            if hour not in used and _path_for(hour).exists():
+                _path_for(hour).unlink()
+                pruned.append(hour)
     with _lock:
         _cache.clear()
         _cache_stamp.clear()
-    log.info("Backdrop rebuilt for %d hour(s): %s", len(used), used)
+    log.info("Backdrop rebuilt for %d hour(s): %s; pruned %s", len(used), used, pruned)
     return used
 
 
@@ -223,27 +241,74 @@ def cut_out(crop_bgr, box, captured_at: datetime):
     return cv2.bitwise_and(crop_bgr, crop_bgr, mask=mask)
 
 
-def frames_by_hour(since: datetime, frames_dir: Path = FRAMES_DIR) -> dict[int, list[Path]]:
-    """Group recent preserved frames by the hour they were written.
+# Frames are written as v{visit_id:08d}_t{track_id:04d}.jpg by
+# pipeline/process.py, so the visit, and through it the capture time, is
+# recoverable from the name.
+_FRAME_NAME = re.compile(r"^v(\d+)_t\d+\.jpg$")
 
-    File mtime stands in for capture hour. The frames are written minutes
-    after capture, which is inside the bin except for the handful that land
-    either side of the hour, and one stray frame does not move a median.
+# SQLite caps the variables in one statement, so the id lookup goes in
+# chunks well under that limit.
+_ID_CHUNK = 500
+
+
+def visit_id_from_frame(path: Path) -> int | None:
+    m = _FRAME_NAME.match(path.name)
+    return int(m.group(1)) if m else None
+
+
+def bin_by_capture_hour(paths, captured_by_visit) -> tuple[dict[int, list[Path]], int]:
+    """Sort frame paths into UTC hour bins by their visit's capture time.
+
+    A frame whose visit is missing from the map is dropped rather than
+    guessed at, because a frame in the wrong bin is the thing this exists
+    to prevent. Returns the bins and how many were dropped.
     """
     out: dict[int, list[Path]] = defaultdict(list)
+    dropped = 0
+    for p in paths:
+        vid = visit_id_from_frame(p)
+        started = captured_by_visit.get(vid) if vid is not None else None
+        if started is None:
+            dropped += 1
+            continue
+        out[started.hour].append(p)
+    return out, dropped
+
+
+def frames_by_hour(db, since: datetime, frames_dir: Path = FRAMES_DIR) -> dict[int, list[Path]]:
+    """Group recent preserved frames by the hour they were captured.
+
+    Capture time comes from the frame's visit. It used to come from the
+    file mtime, on the reasoning that frames are written minutes after
+    capture. Measured over 2,766 frames from late August 2026, the write
+    trails capture by a median of 131 minutes and by more than 17 hours at
+    p95, which put 1,481 of them, 54%, in an hour other than the one they
+    were shot in. Every hour's median was therefore a blend of several
+    lightings including night, and the ring around a detection sat a median
+    of 40 grey levels off the model instead of near zero.
+    """
     if not frames_dir.exists():
-        return out
-    cutoff = since.timestamp()
-    for p in frames_dir.glob("*.jpg"):
-        try:
-            st = p.stat()
-        except OSError:
-            continue
-        if st.st_mtime < cutoff:
-            continue
-        out[datetime.utcfromtimestamp(st.st_mtime).hour].append(p)
+        return {}
+    paths = list(frames_dir.glob("*.jpg"))
+    ids = sorted({v for v in (visit_id_from_frame(p) for p in paths) if v is not None})
+    captured: dict[int, datetime] = {}
+    for i in range(0, len(ids), _ID_CHUNK):
+        rows = (
+            db.query(Visit.id, Visit.started_at)
+            .filter(Visit.id.in_(ids[i:i + _ID_CHUNK]), Visit.started_at >= since)
+            .all()
+        )
+        captured.update({vid: started for vid, started in rows if started is not None})
+    out, dropped = bin_by_capture_hour(paths, captured)
+    if dropped:
+        log.info("Backdrop: %d of %d frame(s) fell outside the window or had no visit",
+                 dropped, len(paths))
     return out
 
 
 def rebuild_from_recent(days: int = REBUILD_WINDOW_DAYS) -> dict[int, int]:
-    return rebuild(frames_by_hour(datetime.utcnow() - timedelta(days=days)))
+    db = SessionLocal()
+    try:
+        return rebuild(frames_by_hour(db, datetime.utcnow() - timedelta(days=days)))
+    finally:
+        db.close()
