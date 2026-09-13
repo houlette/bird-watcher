@@ -1,36 +1,44 @@
 """Per-hour model of the fixed backdrop, and a test for "is this any of it".
 
-The camera never moves, so nearly every pixel is the same yard it was
-yesterday. A per-pixel median over many frames converges on the empty scene:
-birds, squirrels and blowing leaves all average out, and what is left is the
-wall, the downspout, the ledge and the pots.
+OFF BY DEFAULT since 2026-09-13, because the premise does not hold in this
+yard. See `settings.backdrop_filter_enabled` to put it back, and read the
+measurement below first.
 
-That is the one instrument that reaches the junk the other defences cannot.
-The scene mask needs an artifact to sit in one 100px cell and collect NAB
-labels. The recurrence detector needs it at the same box on three separate
-days. A stretch of concrete step, a leaf, or a length of downspout satisfies
-neither, yet each is provably nothing but backdrop.
+The idea was that the camera never moves, so a per-pixel median over many
+frames converges on the empty scene: birds, squirrels and blowing leaves
+average out, and what is left is the wall, the downspout, the ledge and the
+pots. That would have reached junk the other defences cannot, since the
+scene mask needs an artifact to sit in one 100px cell and collect NAB
+labels, and the recurrence detector needs it at the same box on three
+separate days, while a stretch of concrete step or a length of downspout
+satisfies neither.
 
-Two things had to be right before it worked at all:
+**What it actually costs.** Scored against a June-2026 model built with
+capture-time binning, over 630 user-confirmed birds and 930 user-confirmed
+junk, the ratio barely separates the two: birds sit at a median of 1.382 and
+junk at 1.353. At the 1.20 cut that ran in production it removed 34.0% of
+the junk and 37.5% of the birds, and 30.4% of the 23 independently
+audio-confirmed birds. Bird loss tracks junk catch at every threshold from
+0.90 to 1.50, so it was slightly worse than a coin flip, and suppression
+happens before persistence so everything it took is gone.
 
-**Bin by hour, on capture time.** A median across the whole day is useless
-here, because shadows crossing a stone wall differ from it as much as a bird
-does. Scored against a single-hour model instead, junk and birds separate.
-The hour has to be the one the frame was shot in rather than the one it was
-written in; see `frames_by_hour` for what binning on mtime cost.
+**Why, as far as it is understood.** The yard is not a fixed backdrop at a
+21-day timescale. Per-pixel median absolute deviation runs 6 to 25 grey
+levels by hour, and even the calmest 5% of pixels move 3.5 to 14, so the
+median is a blend of three weeks of different yards rather than a picture of
+an empty one. The typical pixel sits 24 grey levels off the model, and a
+gain-plus-bias fit over every pixel recovers only 2.3 of those, so it is not
+an exposure problem that normalisation could fix. Scoring a box against the
+ring around it was meant to cancel lighting, and it does, but what remains
+on both sides is the scene changing rather than an object arriving.
 
-**Measure locally.** An absolute difference threshold trips on any lighting
-change. Scoring a box against the ring around it cancels that: whatever the
-light does, it does to both.
+Two details are still right and worth keeping if this is ever revived. Bin
+by hour, on capture time and not on file mtime; see `frames_by_hour` for
+what mtime binning cost. And measure locally, since an absolute difference
+threshold trips on any lighting change.
 
-Measured on 130 frames from the 21:00 UTC hour, NAB detections sit at a
-median ratio of 1.46 against 2.01 for the ones the filter calls birds, and
-a cut at 1.5 catches 51% of the NAB rows while touching 7.9% of the others —
-and that second figure is an overestimate, since roughly two thirds of what
-the filter calls a bird in this yard is junk too.
-
-What it will not catch is the lens flare. A flare genuinely differs from the
-backdrop; it is a light, not a fixture.
+The model itself is still rebuilt nightly, because `cut_out()` wants it and
+because a variance-aware successor would start from the same stack.
 """
 from __future__ import annotations
 
@@ -46,6 +54,7 @@ import numpy as np
 
 from db.models import Visit
 from db.session import SessionLocal
+from settings import settings
 
 log = logging.getLogger(__name__)
 
@@ -199,6 +208,8 @@ def filter_detections(detections, frame_bgr, captured_at: datetime,
     exists for the hour, everything is kept and scored_count is 0, so the
     metric never confuses "nothing suppressed" with "not running".
     """
+    if not settings.backdrop_filter_enabled:
+        return list(detections), 0, 0
     ready = prepare(frame_bgr, captured_at)
     if ready is None:
         return list(detections), 0, 0

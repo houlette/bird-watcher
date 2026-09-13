@@ -47,6 +47,15 @@ class Settings(BaseSettings):
         os.getenv("BIRD_BINARY_NAB_THRESHOLD", "0.75")
     )
 
+    # The per-hour backdrop filter, off by default. Measured 2026-09-13
+    # against June 2026 (630 user-confirmed birds, 930 user-confirmed junk,
+    # scored on a June-era model with capture-time binning), it removes
+    # 37.5% of the birds to remove 34.0% of the junk, and 30.4% of the 23
+    # independently audio-confirmed birds. It is slightly worse than a coin
+    # flip at every threshold tried, so it stays off until the mechanism
+    # itself changes. Set BACKDROP_FILTER_ENABLED=1 to put it back.
+    backdrop_filter_enabled: bool = os.getenv("BACKDROP_FILTER_ENABLED", "") not in ("", "0", "false", "False")
+
     # Web Push (VAPID). The public key is sent to the browser at subscription
     # time; the private key signs the JWT in each push request. Generate both
     # via scripts/generate_vapid_keys.py.

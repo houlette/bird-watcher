@@ -106,7 +106,9 @@ def test_filter_reports_scored_count_so_silence_is_readable(tmp_path, yard):
     assert kept == [d] and suppressed == 0 and scored == 0
 
 
-def test_filter_drops_a_pure_backdrop_box(tmp_path, yard):
+def test_filter_drops_a_pure_backdrop_box(tmp_path, yard, monkeypatch):
+    from settings import settings
+    monkeypatch.setattr(settings, "backdrop_filter_enabled", True)
     frames = _write_frames(tmp_path, yard, backdrop.MIN_FRAMES_PER_HOUR + 10)
     backdrop.rebuild(frames)
     frame = cv2.cvtColor(cv2.resize(yard, (960 * backdrop.SCALE, 540 * backdrop.SCALE),
@@ -159,3 +161,21 @@ def test_a_rebuild_that_builds_nothing_keeps_what_is_there(tmp_path, yard):
     backdrop.rebuild(_write_frames(tmp_path, yard, backdrop.MIN_FRAMES_PER_HOUR + 10, hour=21))
     assert backdrop.rebuild({}) == {}
     assert backdrop.get_backdrop(21) is not None
+
+
+def test_filter_is_off_unless_explicitly_enabled(tmp_path, yard, monkeypatch):
+    """It removed 37.5% of confirmed birds to remove 34.0% of confirmed junk
+    on June 2026, so it stays off until the mechanism changes."""
+    from settings import settings
+    frames = _write_frames(tmp_path, yard, backdrop.MIN_FRAMES_PER_HOUR + 10)
+    backdrop.rebuild(frames)
+    frame = cv2.cvtColor(cv2.resize(yard, (960 * backdrop.SCALE, 540 * backdrop.SCALE),
+                                    interpolation=cv2.INTER_NEAREST), cv2.COLOR_GRAY2BGR)
+    d = _FakeDet(bbox=(2000, 1200, 300, 300))
+    monkeypatch.setattr(settings, "backdrop_filter_enabled", False)
+    kept, suppressed, scored = backdrop.filter_detections([d], frame, datetime(2026, 9, 13, 21))
+    # scored == 0 is the existing "did not run" signal, not "found nothing".
+    assert kept == [d] and suppressed == 0 and scored == 0
+    monkeypatch.setattr(settings, "backdrop_filter_enabled", True)
+    kept, suppressed, scored = backdrop.filter_detections([d], frame, datetime(2026, 9, 13, 21))
+    assert suppressed == 1 and scored == 1 and kept == []

@@ -207,9 +207,9 @@ function buildPanels(daily: DailyStats[], t: Tokens): Panel[] {
       heading: "Spatial defences",
       mechanism: (
         <>
-          <Fn>_scene_mask_filter</Fn> then <Fn>_recurrence_filter</Fn> then{" "}
-          <Fn>_backdrop_filter</Fn>, run in that order on every sampled frame
-          inside the detect loop.
+          <Fn>_scene_mask_filter</Fn> then <Fn>_recurrence_filter</Fn>, run in
+          that order on every sampled frame inside the detect loop.{" "}
+          <Fn>_backdrop_filter</Fn> ran third until 13 Sep 2026 and is now off.
         </>
       ),
       inflow: "YOLO boxes removed",
@@ -226,10 +226,12 @@ function buildPanels(daily: DailyStats[], t: Tokens): Panel[] {
         sceneMask: d.detections_scene_mask_suppressed,
       })),
       caption:
-        `Boxes on sampled frames, so one bird over ten frames is ten boxes — these ` +
-        `do not compare with the detection counts in panels 4 and 5. The backdrop ` +
-        `model scored ${scored.toLocaleString()} of them, so a zero means it cleared ` +
-        `what it looked at rather than that it never ran.`,
+        `Boxes on sampled frames, so one bird over ten frames is ten boxes, and these ` +
+        `do not compare with the detection counts in panels 4 and 5. Backdrop is ` +
+        (scored > 0
+          ? `on and scored ${scored.toLocaleString()} boxes over this window.`
+          : `off: measured against June 2026 it removed 37.5% of confirmed birds to ` +
+            `remove 34.0% of confirmed junk, so it was costing more than it caught.`),
     },
     {
       id: "detector",
