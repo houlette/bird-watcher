@@ -307,6 +307,72 @@ retention pass deleting 80,138 uploads before anything had opened them.
 All three were silent, and all three were visible in a log line nobody
 was reading. A staleness check on each is cheaper than the debugging.
 
+## Four experiments to answer one question about a leaf
+
+The question was why six near-identical crops of the same hosta leaf,
+labelled Lesser Goldfinch across two days, survived the backdrop filter.
+Answering it took most of 2026-09-13 and four experiments, three of which
+failed, and the signal that finally worked was a database query that ran
+in two minutes and touched no images at all. The failures were worth more
+than the success, so they are written down here in the order they happened.
+
+- **Check the commit date before explaining a filter's behaviour.** The
+  crops were from 6 and 7 September; `backdrop.py` landed on the 13th and
+  `recurrence.py` on the 12th. Nothing had looked at them. This was the
+  cheapest possible check and it should always be the first one.
+- **Measure the numerator and the denominator separately before
+  explaining a ratio.** The first mechanism offered for the survivals was
+  a still ring flooring `ring_mean` at 1.0 and inflating the score.
+  Measured, the ring ran 32 to 60 grey levels, and across every sample
+  taken since, 570 boxes and then 400, the floor has never once fired. The
+  numbers to distinguish those two stories were one query away and had not
+  been asked for.
+- **A write timestamp is not a capture timestamp.** `frames_by_hour`
+  binned on file mtime, assuming frames are written minutes after capture.
+  The real lag is a median of 131 minutes and over 17 hours at p95, so 54%
+  of frames landed in the wrong hour and every hour's median blended
+  several lightings, night included. Preserved frames only exist for
+  10:00 to 22:00 UTC captures, yet the mtime bins had produced a model for
+  all 24 hours.
+- **Do not deploy a change that shifts the distribution under a live
+  threshold.** Fixing the binning was right, but `MIN_CONTRAST_RATIO` had
+  been fitted on the old distribution and suppression happens before
+  persistence, so anything it drops is gone rather than hidden. The fix and
+  the threshold should move together, or the threshold should be
+  neutralised for that deploy.
+- **Check class balance before reading an evaluation table.** The first
+  comparison run had 78 of its 85 boxes drawn from the confirmed-junk rows
+  themselves, which made "share of junk caught" and "share of everything
+  suppressed" nearly the same quantity, and the table looked meaningful
+  anyway.
+- **A zero result is a claim about the query before it is a claim about
+  the world.** Three separate recommendations rested on there being no
+  user-confirmed real birds to measure bird-loss against. There are 1,990.
+  The 30-day window came from the image tests, which need preserved frames,
+  and was then carried into a database-only test that had no such
+  constraint. The disconfirming number was sitting in `recurrence.py`'s own
+  docstring the whole time.
+- **This yard is not a fixed backdrop at a 21-day timescale.** Per-pixel
+  median absolute deviation runs from 6.0 grey levels at hour 10 to 25.0 at
+  hour 21, and even the calmest 5% of pixels move 3.5 to 14. A three-week
+  per-hour median is a blend of three weeks of different yards, and every
+  scoring function built on top of it inherits that. Brightness is not the
+  culprit: a gain-plus-bias fit over every pixel moves the typical pixel
+  only from 24.0 to 21.7 grey levels off the model, so at most a tenth of
+  the error is photometric, and it inverts the junk-versus-population
+  ordering into the bargain.
+- **Motion within the clip beats appearance against a model.** A track's
+  box travels a median of 0.106 of its own width across its clip for
+  confirmed birds and 0.006 for confirmed junk. A cut at 0.005 takes 43.5%
+  of the junk for 1.6% of the birds, needs no model, no nightly rebuild and
+  no rolling window, and so has nothing in it that can decay.
+- **Order experiments by cost, not by narrative.** Three image-processing
+  experiments ran first, each needing a rebuild or a re-decode of thousands
+  of 4K frames, and the winner was a query over `track_bboxes`, which was
+  already persisted on every row. The question named the backdrop filter,
+  and that framing quietly set the scope of the investigation for hours
+  longer than it deserved.
+
 ## Things to revisit if revived later
 
 - **Audio correlation backfill.** Currently the Haikubox poller only
