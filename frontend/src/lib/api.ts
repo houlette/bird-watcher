@@ -174,6 +174,10 @@ export type DailyStats = {
   classifier_accuracy: number | null;
   payload: {
     hour_of_day?: number[];
+    // Detections the binary bird-or-not head overrode to NAB. Counted as
+    // `nab_override_p IS NOT NULL`, which corrections never clear, so the
+    // split against detections_total stays exact after review.
+    binary_nab_overrides?: number;
     yolo_confidence_hist?: { nab: number[]; species: number[] };
     // Per-day crop-quality percentiles. Each metric is nullable when no
     // detections that day had the column populated (legacy rows

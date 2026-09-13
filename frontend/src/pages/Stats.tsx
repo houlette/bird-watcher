@@ -121,10 +121,20 @@ type Panel = {
   /** Position in the pipeline, shown so the grid reads in order. */
   step: number;
   heading: string;
-  /** What entered this stage over the window, e.g. "34,464 clips in". */
+  /** The code that actually does the filtering. Naming it is the only way
+   *  to tell, from the card, which mechanism a panel is measuring — the
+   *  headings alone left that guessable at best. */
+  mechanism: React.ReactNode;
+  /** What entered this stage over the window, e.g. "34,464 clips in".
+   *  Carries the unit, because the unit changes three times down the
+   *  pipeline and every panel is counted in a different thing. */
   inflow: string;
   /** Singular noun for the panel's unit, used in the tooltip. */
   unit: string;
+  /** Full row on wide screens. Set on the last clip-level panel so each
+   *  unit gets its own row and the two detection panels, which reference
+   *  each other, end up adjacent. */
+  span?: boolean;
   /** Deepest stage first: Recharts stacks in declaration order, so this is
    *  the bottom-up order, which puts what carried on at the baseline where
    *  it can be compared across days. The legend and tooltip reverse it to
@@ -148,36 +158,60 @@ function countIn(n: number, unit: string): string {
   return `${n.toLocaleString()} ${unit}${n === 1 ? "" : "s"} in`;
 }
 
+/** The pipeline's own identifiers, so a panel says which code it measures
+ *  rather than leaving the reader to match a friendly name to a function. */
+function Fn({ children }: { children: React.ReactNode }) {
+  return <code className="bg-panel border border-line rounded px-1 text-[10px]">{children}</code>;
+}
+
 function buildPanels(daily: DailyStats[], t: Tokens): Panel[] {
-  // Dark = carried on to the next stage, pale = stopped here. The daylight
-  // gate and the detector both get the same two steps so the two panels
-  // read as one sentence.
+  // Dark green = carried on with its label intact, pale = stopped at this
+  // stage, rust = something decided it was not a bird. That last one is
+  // the same colour whether the caller was the backdrop model, the binary
+  // head or you, so a rejection looks like a rejection everywhere.
   const CARRIED = t.funnel[3];
   const STOPPED = t.funnel[0];
+  const REJECTED = t.removed[2];
+
   const scored = sum(daily, (d) => d.detections_backdrop_scored);
+  const dets = sum(daily, (d) => d.detections_total);
+  const overrides = sum(daily, (d) => Number(d.payload.binary_nab_overrides ?? 0));
 
   return [
     {
       id: "daylight",
       step: 1,
       heading: "Daylight gate",
+      mechanism: (
+        <>
+          The worker's daylight check, before a model is even loaded. Skipped clips
+          get a <Fn>skipped:</Fn> processing_error and are never decoded.
+        </>
+      ),
       inflow: countIn(sum(daily, (d) => d.clips_received), "clip"),
       unit: "clip",
       segments: [
-        { key: "daylight", label: "To the detector", color: CARRIED },
-        { key: "night", label: "After dark", color: STOPPED },
+        { key: "daylight", label: "Clips to the detector", color: CARRIED },
+        { key: "night", label: "Clips dropped after dark", color: STOPPED },
       ],
       rows: daily.map((d) => ({
         date: shortDate(d.date),
         daylight: d.clips_daylight,
         night: Math.max(0, d.clips_received - d.clips_daylight),
       })),
-      caption: "Runs before YOLO, so it tracks day length more than anything the pipeline decides.",
+      caption: "Tracks day length more than anything the pipeline decides.",
     },
     {
       id: "defences",
       step: 2,
       heading: "Spatial defences",
+      mechanism: (
+        <>
+          <Fn>_scene_mask_filter</Fn> then <Fn>_recurrence_filter</Fn> then{" "}
+          <Fn>_backdrop_filter</Fn>, run in that order on every sampled frame
+          inside the detect loop.
+        </>
+      ),
       inflow: "YOLO boxes removed",
       unit: "box",
       segments: [
@@ -192,19 +226,28 @@ function buildPanels(daily: DailyStats[], t: Tokens): Panel[] {
         sceneMask: d.detections_scene_mask_suppressed,
       })),
       caption:
-        `Boxes on sampled frames, not detections — one bird over ten frames is ten boxes. ` +
-        `The backdrop model scored ${scored.toLocaleString()} of them, so zero here means it ` +
-        `cleared what it looked at rather than that it never ran.`,
+        `Boxes on sampled frames, so one bird over ten frames is ten boxes — these ` +
+        `do not compare with the detection counts in panels 4 and 5. The backdrop ` +
+        `model scored ${scored.toLocaleString()} of them, so a zero means it cleared ` +
+        `what it looked at rather than that it never ran.`,
     },
     {
       id: "detector",
       step: 3,
+      span: true,
       heading: "Detection outcome",
+      mechanism: (
+        <>
+          <Fn>detect_birds</Fn> per frame, the three filters above, then{" "}
+          <Fn>Tracker</Fn> to join boxes into tracks and <Fn>_rank_detections</Fn> to
+          pick each track's best frame. Back to clips, one row per clip.
+        </>
+      ),
       inflow: countIn(sum(daily, (d) => d.clips_daylight), "clip"),
       unit: "daylight clip",
       segments: [
-        { key: "birdFound", label: "Kept a detection", color: CARRIED },
-        { key: "noBird", label: "Nothing survived", color: STOPPED },
+        { key: "birdFound", label: "Kept ≥ 1 detection", color: CARRIED },
+        { key: "noBird", label: "Kept none", color: STOPPED },
       ],
       rows: daily.map((d) => ({
         date: shortDate(d.date),
@@ -213,19 +256,54 @@ function buildPanels(daily: DailyStats[], t: Tokens): Panel[] {
         // gains a detection between them would print a negative segment.
         noBird: Math.max(0, d.clips_daylight - d.clips_with_detections),
       })),
-      caption: "Where each daylight clip landed after YOLO and the three defences had run.",
+      caption:
+        "Counted in clips, not detections: a clip that kept three detections is one " +
+        "column-unit here and three in panels 4 and 5.",
+    },
+    {
+      id: "binary",
+      step: 4,
+      heading: "Binary not-a-bird filter",
+      mechanism: (
+        <>
+          <Fn>nab_probability</Fn>, a bird-or-not head trained on this yard's own
+          false positives, scoring the same crop the species classifier saw. It
+          relabels rather than deletes, so both bands persist to the feed.
+        </>
+      ),
+      inflow: countIn(dets, "detection"),
+      unit: "detection",
+      segments: [
+        { key: "asClassified", label: "Left as classified", color: CARRIED },
+        { key: "overridden", label: "Overridden to not a bird", color: REJECTED },
+      ],
+      rows: daily.map((d) => {
+        const over = Number(d.payload.binary_nab_overrides ?? 0);
+        return {
+          date: shortDate(d.date),
+          asClassified: Math.max(0, d.detections_total - over),
+          overridden: over,
+        };
+      }),
+      caption:
+        `The heaviest filter in the pipeline: ${fmtShare(dets ? overrides / dets : 0)} of ` +
+        `detections in the window. Two things it does not tell you — a detection the ` +
+        `classifier already called not-a-bird is never scored by this head and sits ` +
+        `in the green band, and there is no count of what it scored, so a flat zero ` +
+        `would also be what a switched-off filter looks like.`,
     },
     {
       id: "review",
-      step: 4,
+      step: 5,
       heading: "Your review",
-      inflow: countIn(sum(daily, (d) => d.detections_total), "detection"),
+      mechanism: <>Your corrections in the feed. Nothing automatic writes here.</>,
+      inflow: countIn(dets, "detection"),
       unit: "detection",
       segments: [
-        { key: "confirmed", label: "Confirmed", color: t.funnel[3] },
-        { key: "unknown", label: "Unidentified", color: t.funnel[2] },
+        { key: "confirmed", label: "Confirmed a species", color: t.funnel[3] },
+        { key: "unknown", label: "Unidentified bird", color: t.funnel[2] },
         { key: "awaiting", label: "Awaiting you", color: t.funnel[1] },
-        { key: "nab", label: "Not a bird", color: t.funnel[0] },
+        { key: "nab", label: "You marked not a bird", color: REJECTED },
       ],
       rows: daily.map((d) => ({
         date: shortDate(d.date),
@@ -234,7 +312,11 @@ function buildPanels(daily: DailyStats[], t: Tokens): Panel[] {
         awaiting: Math.max(0, d.detections_total - d.detections_user_corrected),
         nab: d.corrections_nab,
       })),
-      caption: "Everything that reached the feed. The backlog band grows on days you did not label.",
+      caption:
+        `Same ${dets.toLocaleString()} detections as panel 4, split by your verdict ` +
+        `instead of the model's. The backlog band still holds nearly all of the ` +
+        `${overrides.toLocaleString()} the binary head already rejected, so it ` +
+        `overstates how much genuinely needs your eyes.`,
     },
   ];
 }
@@ -253,7 +335,7 @@ function buildTapers(daily: DailyStats[]): Taper[] {
       rows: [
         { label: "Arrived from the camera", value: sum(daily, (d) => d.clips_received) },
         { label: "Passed the daylight gate", value: sum(daily, (d) => d.clips_daylight) },
-        { label: "Kept a detection", value: sum(daily, (d) => d.clips_with_detections) },
+        { label: "Kept ≥ 1 detection", value: sum(daily, (d) => d.clips_with_detections) },
       ],
     },
     {
@@ -375,19 +457,22 @@ function StagePanel({ panel, t }: { panel: Panel; t: Tokens }) {
 
   return (
     <div>
-      <h4 className="text-xs font-semibold text-ink">
-        <span className="text-faint tnum mr-1.5">{panel.step}</span>
-        {panel.heading}
-        <span className="ml-1.5 font-normal text-faint tnum">{panel.inflow}</span>
-      </h4>
-      <div className="flex gap-x-3 gap-y-0.5 flex-wrap text-[11px] text-muted mt-0.5 mb-0.5 min-h-[2.05rem] content-start">
-        {[...panel.segments].reverse().map((seg) => (
-          <span key={seg.key} className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-sm" style={{ background: seg.color }} />
-            {seg.label}
-            <span className="tnum text-faint">{totals[seg.key].toLocaleString()}</span>
-          </span>
-        ))}
+      <div className="min-h-[6.6rem] flex flex-col">
+        <h4 className="text-xs font-semibold text-ink">
+          <span className="text-faint tnum mr-1.5">{panel.step}</span>
+          {panel.heading}
+          <span className="ml-1.5 font-normal text-faint tnum">{panel.inflow}</span>
+        </h4>
+        <p className="text-[11px] text-muted leading-snug mt-1">{panel.mechanism}</p>
+        <div className="flex gap-x-3 gap-y-0.5 flex-wrap text-[11px] text-muted mt-auto pt-1.5">
+          {[...panel.segments].reverse().map((seg) => (
+            <span key={seg.key} className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-sm" style={{ background: seg.color }} />
+              {seg.label}
+              <span className="tnum text-faint">{totals[seg.key].toLocaleString()}</span>
+            </span>
+          ))}
+        </div>
       </div>
       <ResponsiveContainer width="100%" height={150}>
         <BarChart data={panel.rows} margin={{ left: 0, right: 6, top: 6, bottom: 0 }} barCategoryGap="16%">
@@ -475,10 +560,17 @@ function FunnelChart({ daily }: { daily: DailyStats[] }) {
     <Card>
       <CardTitle hint="(30d)">Pipeline funnel</CardTitle>
       <p className="text-xs text-muted mb-3">
-        Every stage in order, with what it removed. A column is everything that
-        entered that stage that day; the stronger segment carried on and the faded
-        one stopped there. Each stage has its own scale — the survivors are a few
-        percent of the input, so a shared axis would flatten them.
+        Every stage in order, each naming the code that does the filtering. A
+        column is everything that entered that stage that day; green carried on,
+        pale stopped there, rust was called not-a-bird by a model or by you.
+        <span className="text-ink">
+          {" "}Read the unit on each panel before comparing two of them.
+        </span>{" "}
+        A clip is one video, a box is one YOLO hit on one sampled frame, and a
+        detection is one track over many frames. Panel 3 counting less than panel 4
+        for the same day is that unit change and not a disagreement: one clip can
+        hold several detections. Each stage also has its own scale, since the
+        survivors are a few percent of the input.
       </p>
       <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
         {tapers.map((g) => (
@@ -490,7 +582,9 @@ function FunnelChart({ daily }: { daily: DailyStats[] }) {
       </p>
       <div className="grid gap-4 lg:grid-cols-2">
         {panels.map((p) => (
-          <StagePanel key={p.id} panel={p} t={t} />
+          <div key={p.id} className={p.span ? "lg:col-span-2" : undefined}>
+            <StagePanel panel={p} t={t} />
+          </div>
         ))}
       </div>
       <FunnelTable panels={panels} />
