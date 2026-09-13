@@ -12,7 +12,7 @@ import {
 } from "recharts";
 
 import { fetchSpeciesActivity, type SpeciesActivity } from "../lib/api";
-import { readTokens, tip } from "../lib/chartTheme";
+import { tip, useTokens } from "../lib/chartTheme";
 import { ChevronIcon } from "../components/FieldIcons";
 
 // ─── Axis label helpers ─────────────────────────────────────────────────────
@@ -164,7 +164,7 @@ function SpeciesPickerButton({
 
 // ─── Charts ──────────────────────────────────────────────────────────────────
 function TimeOfDayChart({ sp }: { sp: SpeciesActivity }) {
-  const t = readTokens();
+  const t = useTokens();
   const rows = useMemo(
     () => sp.by_hour.map((count, hour) => ({ hour, label: hourTick(hour), count })),
     [sp],
@@ -204,7 +204,7 @@ function TimeOfDayChart({ sp }: { sp: SpeciesActivity }) {
 }
 
 function TimeOfYearChart({ sp }: { sp: SpeciesActivity }) {
-  const t = readTokens();
+  const t = useTokens();
   const rows = useMemo(
     () => sp.by_week.map((count, week) => ({ week, label: WEEK_TICKS[week], count })),
     [sp],

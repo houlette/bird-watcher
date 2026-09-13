@@ -17,7 +17,7 @@ import {
 } from "recharts";
 
 import { fetchStats, type DailyStats, type StatsResponse } from "../lib/api";
-import { readTokens, tip, type Tokens } from "../lib/chartTheme";
+import { tip, useTokens, type Tokens } from "../lib/chartTheme";
 
 // ─── Model-update markers ──────────────────────────────────────────────────
 type ModelMarker = { date: string; label: string };
@@ -89,50 +89,418 @@ function HeadlineCards({ data }: { data: StatsResponse }) {
   );
 }
 
-// ─── Funnel chart ─────────────────────────────────────────────────────────
-function FunnelChart({ daily }: { daily: DailyStats[] }) {
-  const t = readTokens();
-  const rows = useMemo(
-    () =>
-      daily.map((d) => ({
+// ─── Pipeline funnel ───────────────────────────────────────────────────────
+//
+// The old version drew five lines on one axis, which hid the funnel three
+// ways: clips outnumber detections about 30:1, so every detection series
+// lay flat on the floor; the scene-mask count shared that axis even though
+// suppressions are frame-level YOLO boxes rather than tracked detections;
+// and a line per stage shows the level each stage reached without ever
+// showing what the stage removed.
+//
+// This version is a taper of window totals for the funnel's shape, then one
+// small panel per stage in pipeline order. A day's column in a panel is
+// everything that entered THAT stage on that day, and the segments are
+// where it went — dark for what carried on, pale for what stopped there.
+//
+// One panel per stage rather than one stacked column for the whole
+// pipeline, because two things break a single stack:
+//
+//   - Scale. Only about 6% of the clips that clear the daylight gate keep a
+//     detection, and only 4% of everything the camera sends. Stacked on one
+//     axis against 57k clips, the survivors are a two-pixel line, so every
+//     stage gets its own axis scaled to its own input.
+//   - Unit. A clip is one video, a suppression is one YOLO box on one
+//     sampled frame, and a detection is one track spanning many frames, so
+//     a stack mixing them would total nothing real. Panel 2 therefore runs
+//     well above panel 4 on a busy day without either being wrong.
+
+type Segment = { key: string; label: string; color: string };
+type Panel = {
+  id: string;
+  /** Position in the pipeline, shown so the grid reads in order. */
+  step: number;
+  heading: string;
+  /** What entered this stage over the window, e.g. "34,464 clips in". */
+  inflow: string;
+  /** Singular noun for the panel's unit, used in the tooltip. */
+  unit: string;
+  /** Deepest stage first: Recharts stacks in declaration order, so this is
+   *  the bottom-up order, which puts what carried on at the baseline where
+   *  it can be compared across days. The legend and tooltip reverse it to
+   *  read down the pipeline. */
+  segments: Segment[];
+  rows: Record<string, number | string>[];
+  caption: string;
+};
+
+function sum(daily: DailyStats[], pick: (d: DailyStats) => number): number {
+  return daily.reduce((s, d) => s + pick(d), 0);
+}
+/** Counts rounded to nothing still matter here — 14 of 3,538 reviewed is a
+ *  real number and "0%" reads as "none". */
+function fmtShare(x: number): string {
+  if (!Number.isFinite(x) || x <= 0) return "0%";
+  if (x < 0.005) return "<1%";
+  return `${Math.round(x * 100)}%`;
+}
+function countIn(n: number, unit: string): string {
+  return `${n.toLocaleString()} ${unit}${n === 1 ? "" : "s"} in`;
+}
+
+function buildPanels(daily: DailyStats[], t: Tokens): Panel[] {
+  // Dark = carried on to the next stage, pale = stopped here. The daylight
+  // gate and the detector both get the same two steps so the two panels
+  // read as one sentence.
+  const CARRIED = t.funnel[3];
+  const STOPPED = t.funnel[0];
+  const scored = sum(daily, (d) => d.detections_backdrop_scored);
+
+  return [
+    {
+      id: "daylight",
+      step: 1,
+      heading: "Daylight gate",
+      inflow: countIn(sum(daily, (d) => d.clips_received), "clip"),
+      unit: "clip",
+      segments: [
+        { key: "daylight", label: "To the detector", color: CARRIED },
+        { key: "night", label: "After dark", color: STOPPED },
+      ],
+      rows: daily.map((d) => ({
         date: shortDate(d.date),
-        Clips: d.clips_received,
-        Detections: d.detections_total,
-        "Classifier-labeled": d.detections_labeled_by_classifier,
-        Corrected: d.detections_user_corrected,
-        "Mask-suppressed": d.detections_scene_mask_suppressed ?? 0,
+        daylight: d.clips_daylight,
+        night: Math.max(0, d.clips_received - d.clips_daylight),
       })),
-    [daily],
+      caption: "Runs before YOLO, so it tracks day length more than anything the pipeline decides.",
+    },
+    {
+      id: "defences",
+      step: 2,
+      heading: "Spatial defences",
+      inflow: "YOLO boxes removed",
+      unit: "box",
+      segments: [
+        { key: "backdrop", label: "Backdrop", color: t.removed[2] },
+        { key: "recurrence", label: "Recurrence", color: t.removed[1] },
+        { key: "sceneMask", label: "Scene mask", color: t.removed[0] },
+      ],
+      rows: daily.map((d) => ({
+        date: shortDate(d.date),
+        backdrop: d.detections_backdrop_suppressed,
+        recurrence: d.detections_recurrence_suppressed,
+        sceneMask: d.detections_scene_mask_suppressed,
+      })),
+      caption:
+        `Boxes on sampled frames, not detections — one bird over ten frames is ten boxes. ` +
+        `The backdrop model scored ${scored.toLocaleString()} of them, so zero here means it ` +
+        `cleared what it looked at rather than that it never ran.`,
+    },
+    {
+      id: "detector",
+      step: 3,
+      heading: "Detection outcome",
+      inflow: countIn(sum(daily, (d) => d.clips_daylight), "clip"),
+      unit: "daylight clip",
+      segments: [
+        { key: "birdFound", label: "Kept a detection", color: CARRIED },
+        { key: "noBird", label: "Nothing survived", color: STOPPED },
+      ],
+      rows: daily.map((d) => ({
+        date: shortDate(d.date),
+        birdFound: d.clips_with_detections,
+        // Clamped: the two counts come from separate queries, so a clip that
+        // gains a detection between them would print a negative segment.
+        noBird: Math.max(0, d.clips_daylight - d.clips_with_detections),
+      })),
+      caption: "Where each daylight clip landed after YOLO and the three defences had run.",
+    },
+    {
+      id: "review",
+      step: 4,
+      heading: "Your review",
+      inflow: countIn(sum(daily, (d) => d.detections_total), "detection"),
+      unit: "detection",
+      segments: [
+        { key: "confirmed", label: "Confirmed", color: t.funnel[3] },
+        { key: "unknown", label: "Unidentified", color: t.funnel[2] },
+        { key: "awaiting", label: "Awaiting you", color: t.funnel[1] },
+        { key: "nab", label: "Not a bird", color: t.funnel[0] },
+      ],
+      rows: daily.map((d) => ({
+        date: shortDate(d.date),
+        confirmed: d.corrections_real_species,
+        unknown: d.corrections_unknown,
+        awaiting: Math.max(0, d.detections_total - d.detections_user_corrected),
+        nab: d.corrections_nab,
+      })),
+      caption: "Everything that reached the feed. The backlog band grows on days you did not label.",
+    },
+  ];
+}
+
+/** One taper group: sequential survivor counts, so the rows need not
+ *  partition anything the way a panel's segments do. */
+type Taper = { heading: string; unit: string; rows: { label: string; value: number; hint?: string }[] };
+
+function buildTapers(daily: DailyStats[]): Taper[] {
+  const total = sum(daily, (d) => d.detections_total);
+  const labeled = sum(daily, (d) => d.detections_labeled_by_classifier);
+  return [
+    {
+      heading: "Clips",
+      unit: "clips",
+      rows: [
+        { label: "Arrived from the camera", value: sum(daily, (d) => d.clips_received) },
+        { label: "Passed the daylight gate", value: sum(daily, (d) => d.clips_daylight) },
+        { label: "Kept a detection", value: sum(daily, (d) => d.clips_with_detections) },
+      ],
+    },
+    {
+      heading: "Detections",
+      unit: "detections",
+      rows: [
+        { label: "Persisted to the feed", value: total },
+        {
+          label: "Classifier gave a top-1",
+          value: labeled,
+          // Worth stating rather than drawing: a stage that passes
+          // everything is a flat band, and the day worth seeing is the one
+          // where this stops matching the row above it.
+          hint: labeled === total ? "all" : undefined,
+        },
+        { label: "You reviewed", value: sum(daily, (d) => d.detections_user_corrected) },
+        {
+          label: "You confirmed as a bird",
+          value: sum(daily, (d) => d.corrections_real_species + d.corrections_unknown),
+        },
+      ],
+    },
+  ];
+}
+
+/** The taper: window totals as shrinking bars, each labelled with the share
+ *  of the stage above it that got through. This is the funnel's shape; the
+ *  panels below are the same stages over time. */
+function TaperGroup({ group, t }: { group: Taper; t: Tokens }) {
+  const top = group.rows[0].value;
+  return (
+    <div>
+      <div className="fg-overline mb-2">
+        {group.heading}{" "}
+        <span className="text-faint">· {top.toLocaleString()} {group.unit}</span>
+      </div>
+      <div className="space-y-1.5">
+        {group.rows.map((r, i) => {
+          const prev = i === 0 ? null : group.rows[i - 1].value;
+          return (
+            <div key={r.label} className="flex items-baseline gap-2 text-xs">
+              <div className="flex-1 min-w-0">
+                <div className="flex justify-between gap-2">
+                  <span className="text-ink truncate">{r.label}</span>
+                  <span className="tnum text-ink font-semibold shrink-0">{r.value.toLocaleString()}</span>
+                </div>
+                {/* A meter, not a chart: the track is the stage at the top of
+                    the group, so the bar's length is what survives to here. */}
+                <div className="h-1.5 mt-1 rounded-full overflow-hidden" style={{ background: "var(--panel)" }}>
+                  <div
+                    className="h-full rounded-full"
+                    style={{ width: `${top > 0 ? (r.value / top) * 100 : 0}%`, background: t.funnel[3] }}
+                  />
+                </div>
+              </div>
+              <span className="w-14 text-right text-[11px] text-faint tnum shrink-0">
+                {r.hint ?? (prev === null ? "" : fmtShare(prev > 0 ? r.value / prev : 0))}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function StageTooltip({
+  active, payload, label, panel, t,
+}: {
+  active?: boolean;
+  payload?: { payload: Record<string, number | string> }[];
+  label?: string;
+  panel: Panel;
+  t: Tokens;
+}) {
+  if (!active || !payload?.length) return null;
+  const row = payload[0].payload;
+  const total = panel.segments.reduce((s, seg) => s + Number(row[seg.key] ?? 0), 0);
+  return (
+    <div
+      className="text-xs"
+      style={{
+        background: t.surface,
+        border: `1px solid ${t.grid}`,
+        borderRadius: 10,
+        padding: "8px 10px",
+        color: t.ink,
+        boxShadow: "0 14px 30px -16px rgba(24,26,18,.35)",
+      }}
+    >
+      <div className="font-semibold mb-1">
+        {label} — <span className="tnum">{total.toLocaleString()}</span> {panel.unit}
+        {total === 1 ? "" : "s"}
+      </div>
+      {/* Reversed: the stack reads deepest-at-the-baseline, the tooltip
+          reads down the pipeline. */}
+      {[...panel.segments].reverse().map((seg) => (
+        <div key={seg.key} className="flex items-center gap-2">
+          <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: seg.color }} />
+          <span className="flex-1">{seg.label}</span>
+          <span className="tnum font-semibold">{Number(row[seg.key] ?? 0).toLocaleString()}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function StagePanel({ panel, t }: { panel: Panel; t: Tokens }) {
+  const totals = useMemo(
+    () =>
+      Object.fromEntries(
+        panel.segments.map((seg) => [
+          seg.key,
+          panel.rows.reduce((s, r) => s + Number(r[seg.key] ?? 0), 0),
+        ]),
+      ),
+    [panel],
   );
 
   return (
-    <Card>
-      <CardTitle>Pipeline funnel (30d)</CardTitle>
-      <ResponsiveContainer width="100%" height={220}>
-        <LineChart data={rows} margin={{ left: -10, right: 10, top: 8, bottom: 4 }}>
-          <CartesianGrid stroke={t.grid} strokeDasharray="3 3" />
-          <XAxis dataKey="date" tick={{ fontSize: 11, fill: t.axis }} interval="preserveStartEnd" />
-          <YAxis tick={{ fontSize: 11, fill: t.axis }} />
-          <Tooltip {...tip(t)} />
-          <Legend wrapperStyle={{ fontSize: 12, color: t.ink }} />
-          {MODEL_MARKERS.map((m, i) => (
-            <ReferenceLine key={m.date} x={m.date} stroke={t.slate} strokeDasharray="2 3"
-              label={markerLabel(m, i, t)} />
+    <div>
+      <h4 className="text-xs font-semibold text-ink">
+        <span className="text-faint tnum mr-1.5">{panel.step}</span>
+        {panel.heading}
+        <span className="ml-1.5 font-normal text-faint tnum">{panel.inflow}</span>
+      </h4>
+      <div className="flex gap-x-3 gap-y-0.5 flex-wrap text-[11px] text-muted mt-0.5 mb-0.5 min-h-[2.05rem] content-start">
+        {[...panel.segments].reverse().map((seg) => (
+          <span key={seg.key} className="flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-sm" style={{ background: seg.color }} />
+            {seg.label}
+            <span className="tnum text-faint">{totals[seg.key].toLocaleString()}</span>
+          </span>
+        ))}
+      </div>
+      <ResponsiveContainer width="100%" height={150}>
+        <BarChart data={panel.rows} margin={{ left: 0, right: 6, top: 6, bottom: 0 }} barCategoryGap="16%">
+          <CartesianGrid stroke={t.grid} vertical={false} />
+          <XAxis dataKey="date" tick={{ fontSize: 10, fill: t.axis }} interval="preserveStartEnd" minTickGap={24} />
+          <YAxis
+            width={44}
+            tick={{ fontSize: 10, fill: t.axis }}
+            allowDecimals={false}
+            tickFormatter={(v: number) => v.toLocaleString()}
+          />
+          <Tooltip content={<StageTooltip panel={panel} t={t} />} cursor={{ fill: t.grid, fillOpacity: 0.45 }} />
+          {MODEL_MARKERS.map((m) => (
+            <ReferenceLine key={m.date} x={m.date} stroke={t.slate} strokeDasharray="2 3" />
           ))}
-          <Line type="monotone" dataKey="Clips" stroke={t.slate} strokeWidth={2} dot={false} />
-          <Line type="monotone" dataKey="Detections" stroke={t.leaf} strokeWidth={2} dot={false} />
-          <Line type="monotone" dataKey="Classifier-labeled" stroke={t.blue} strokeWidth={2} dot={false} />
-          <Line type="monotone" dataKey="Corrected" stroke={t.sand} strokeWidth={2} dot={false} />
-          <Line type="monotone" dataKey="Mask-suppressed" stroke={t.rust} strokeWidth={2} strokeDasharray="4 3" dot={false} />
-        </LineChart>
+          {panel.segments.map((seg, i) => (
+            <Bar
+              key={seg.key}
+              dataKey={seg.key}
+              name={seg.label}
+              stackId="s"
+              fill={seg.color}
+              maxBarSize={24}
+              // The 2px gap between touching segments is the surface showing
+              // through, not a border: Recharts has no segment spacing, so a
+              // surface-coloured stroke stands in for one.
+              stroke={t.surface}
+              strokeWidth={2}
+              radius={i === panel.segments.length - 1 ? [3, 3, 0, 0] : undefined}
+              isAnimationActive={false}
+            />
+          ))}
+        </BarChart>
       </ResponsiveContainer>
+      <p className="text-[11px] text-muted mt-1">{panel.caption}</p>
+    </div>
+  );
+}
+
+/** Every plotted number as a table, so nothing on this card is reachable
+ *  only by hovering. */
+function FunnelTable({ panels }: { panels: Panel[] }) {
+  const cols = panels.flatMap((p) => p.segments.map((seg) => ({ panel: p, seg })));
+  const dates = panels[0].rows.map((r) => String(r.date));
+  return (
+    <details className="mt-3">
+      <summary className="text-xs text-muted cursor-pointer hover:text-ink">Show the numbers</summary>
+      <div className="overflow-x-auto mt-2">
+        <table className="text-[11px] tnum">
+          <thead>
+            <tr className="text-left align-bottom">
+              <th className="fg-overline font-semibold pr-3 pb-1">Date</th>
+              {cols.map(({ panel, seg }) => (
+                <th key={`${panel.id}-${seg.key}`} className="font-semibold pr-3 pb-1 text-right text-muted">
+                  <span className="block text-faint font-normal">{panel.step}. {panel.heading}</span>
+                  {seg.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {dates.map((date, i) => (
+              <tr key={date} className="border-t border-line">
+                <td className="pr-3 py-1 text-ink whitespace-nowrap">{date}</td>
+                {cols.map(({ panel, seg }) => (
+                  <td key={`${panel.id}-${seg.key}`} className="pr-3 py-1 text-right text-muted">
+                    {Number(panel.rows[i][seg.key] ?? 0).toLocaleString()}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </details>
+  );
+}
+
+function FunnelChart({ daily }: { daily: DailyStats[] }) {
+  const t = useTokens();
+  const panels = useMemo(() => buildPanels(daily, t), [daily, t]);
+  const tapers = useMemo(() => buildTapers(daily), [daily]);
+
+  return (
+    <Card>
+      <CardTitle hint="(30d)">Pipeline funnel</CardTitle>
+      <p className="text-xs text-muted mb-3">
+        Every stage in order, with what it removed. A column is everything that
+        entered that stage that day; the stronger segment carried on and the faded
+        one stopped there. Each stage has its own scale — the survivors are a few
+        percent of the input, so a shared axis would flatten them.
+      </p>
+      <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+        {tapers.map((g) => (
+          <TaperGroup key={g.heading} group={g} t={t} />
+        ))}
+      </div>
+      <p className="text-[11px] text-faint mt-1.5 mb-4">
+        Percentages are the share of the row above that got through.
+      </p>
+      <div className="grid gap-4 lg:grid-cols-2">
+        {panels.map((p) => (
+          <StagePanel key={p.id} panel={p} t={t} />
+        ))}
+      </div>
+      <FunnelTable panels={panels} />
     </Card>
   );
 }
 
 // ─── Rate chart ────────────────────────────────────────────────────────────
 function RatesChart({ daily }: { daily: DailyStats[] }) {
-  const t = readTokens();
+  const t = useTokens();
   const rows = useMemo(
     () =>
       daily.map((d) => ({
@@ -177,7 +545,7 @@ function RatesChart({ daily }: { daily: DailyStats[] }) {
 
 // ─── Per-species accuracy ─────────────────────────────────────────────────
 function SpeciesAccuracy({ totals }: { totals: StatsResponse["totals"] }) {
-  const t = readTokens();
+  const t = useTokens();
   const rows = totals.species_accuracy.map((s) => ({ species: s.species, accuracy: s.accuracy, n: s.n }));
   if (rows.length === 0) {
     return (
@@ -213,7 +581,7 @@ function SpeciesAccuracy({ totals }: { totals: StatsResponse["totals"] }) {
 
 // ─── Training-data progress ────────────────────────────────────────────────
 function TrainingDataCard({ totals }: { totals: StatsResponse["totals"] }) {
-  const t = readTokens();
+  const t = useTokens();
   const rows = totals.training_data ?? [];
   if (rows.length === 0) {
     return (
@@ -306,7 +674,7 @@ function ImageQualityPanel({
   badThreshold?: number;
   badLabel?: string;
 }) {
-  const t = readTokens();
+  const t = useTokens();
   const rows = useMemo<QualityRow[]>(
     () =>
       daily.map((d) => {
@@ -428,7 +796,7 @@ function HourOfDayHeatmap({ daily }: { daily: DailyStats[] }) {
 
 // ─── YOLO-confidence histogram ─────────────────────────────────────────────
 function YoloConfidenceHist({ daily }: { daily: DailyStats[] }) {
-  const t = readTokens();
+  const t = useTokens();
   const buckets = useMemo(() => {
     const nab = new Array(10).fill(0);
     const species = new Array(10).fill(0);

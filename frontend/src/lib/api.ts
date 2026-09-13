@@ -157,7 +157,17 @@ export type DailyStats = {
   classifier_eligible: number;
   visits_with_processing_error: number;
   detections_audio_confirmed: number;
+  // The three spatial defences, counted separately so each can be judged
+  // on its own. These are frame-level YOLO boxes, not detections — one
+  // detection is a track over many frames, so they don't share a scale
+  // with detections_total.
   detections_scene_mask_suppressed: number;
+  detections_recurrence_suppressed: number;
+  detections_backdrop_suppressed: number;
+  // How many boxes the backdrop model actually scored. Without it,
+  // "suppressed 0" reads the same whether it rejected nothing or was
+  // never loaded for those hours.
+  detections_backdrop_scored: number;
   yolo_bird_rate: number | null;
   classifier_label_rate: number | null;
   user_fp_rate: number | null;
