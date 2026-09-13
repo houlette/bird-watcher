@@ -82,6 +82,12 @@ _ADDITIVE_COLUMNS = [
     # "Not a bird". Non-NULL marks the binary-filter-killed cohort so its
     # precision can be audited; see Detection.nab_override_p.
     ("detections", "nab_override_p", "REAL"),
+    # Three-way binary-filter scores for the crop-representation experiment;
+    # see Detection.nab_p_served. NULL for rows written before it started.
+    ("detections", "nab_p_served", "REAL"),
+    ("detections", "nab_p_single", "REAL"),
+    ("detections", "nab_p_polished", "REAL"),
+    ("detections", "fusion_n_used", "INTEGER"),
     # Per-visit counts for the two spatial defences added after the scene
     # mask. They were briefly folded into scene_mask_suppressed, which made
     # it impossible to tell which one was doing the work.

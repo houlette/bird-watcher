@@ -167,6 +167,32 @@ class Detection(Base):
     # a false kill. NULL for every other detection.
     nab_override_p: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # A bounded experiment, added 2026-09-13. The binary filter scores the
+    # multi-frame fused composite in production, while everything that trains
+    # or evaluates it reads the CLAHE-polished JPEG on disk. Those two images
+    # differ in three ways at once — three-frame average, CLAHE, JPEG q90 —
+    # and the 0.75 decision flips on more than half the cases the user later
+    # called junk, so the factors have to be measured apart before anyone
+    # picks a representation. All three are recorded on every detection the
+    # filter scores; only `nab_p_served` feeds the decision, so behaviour is
+    # unchanged. `nab_override_p` keeps its old meaning (set iff the filter
+    # fired) because the funnel metrics count overrides with it.
+    #
+    #   served   — what production actually scored (fused, or best.crop when
+    #              _USE_MULTI_FRAME_FUSION is off)
+    #   single   — the same detection's best raw crop, unfused, unpolished
+    #   polished — _polish_for_display(best.crop), what training/eval see
+    #
+    # served vs single isolates the fusion; single vs polished isolates the
+    # display polish. Drop these once the question is answered.
+    nab_p_served: Mapped[float | None] = mapped_column(Float, nullable=True)
+    nab_p_single: Mapped[float | None] = mapped_column(Float, nullable=True)
+    nab_p_polished: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # How many crops the fuser actually averaged, after alignment rejection.
+    # 1 means fusion fell back to the anchor, so served and single differ only
+    # by a resize and that row says nothing about whether fusion helps.
+    fusion_n_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     visit: Mapped[Visit] = relationship(back_populates="detections")

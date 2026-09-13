@@ -159,3 +159,76 @@ def test_rank_detections_prefers_sharper_crops(tmp_path):
     ranked = process_module._rank_detections(track)
     assert ranked[0] is d_sharp
     assert ranked[1] is d_blurry
+
+
+# --- crop-representation experiment (Detection.nab_p_served) --------------
+
+def _solid(h, w, value):
+    import numpy as np
+    return np.full((h, w, 3), value, dtype=np.uint8)
+
+
+def test_fuse_reports_how_many_crops_it_averaged():
+    """fusion_n_used == 1 means fusion fell back to the anchor, so that row
+    says nothing about whether fusion helps and must be excluded."""
+    from pipeline import process
+
+    stats: dict = {}
+    process._fuse_crops([_solid(40, 40, 100)], stats=stats)
+    assert stats["n_used"] == 1
+
+    stats = {}
+    process._fuse_crops([_solid(40, 40, 100), _solid(40, 40, 102)], stats=stats)
+    assert stats["n_used"] == 2
+
+
+def test_fuse_without_stats_still_works():
+    from pipeline import process
+
+    assert process._fuse_crops([_solid(40, 40, 100)]) is not None
+
+
+def test_variant_scoring_reuses_the_served_probability_when_fusion_is_off(monkeypatch):
+    """With fusion off the served crop IS the raw crop, so scoring it again
+    would pay for the same answer twice."""
+    from pipeline import process
+
+    calls = []
+
+    def fake(img):
+        calls.append(img)
+        return 0.42
+
+    monkeypatch.setattr(process, "nab_probability", fake)
+
+    class _Best:
+        crop = _solid(40, 40, 100)
+
+    best = _Best()
+    single, polished = process._score_crop_variants(best, best.crop, 0.9)
+    assert single == 0.9              # reused, not re-scored
+    assert polished == 0.42
+    assert len(calls) == 1            # only the polished crop was scored
+
+
+def test_variant_scoring_scores_both_when_the_served_crop_is_fused(monkeypatch):
+    from pipeline import process
+
+    monkeypatch.setattr(process, "nab_probability", lambda img: 0.3)
+
+    class _Best:
+        crop = _solid(40, 40, 100)
+
+    best = _Best()
+    fused = _solid(260, 260, 101)
+    single, polished = process._score_crop_variants(best, fused, 0.9)
+    assert single == 0.3 and polished == 0.3
+
+
+def test_variant_scoring_tolerates_a_missing_crop():
+    from pipeline import process
+
+    class _Best:
+        crop = None
+
+    assert process._score_crop_variants(_Best(), None, 0.5) == (None, None)

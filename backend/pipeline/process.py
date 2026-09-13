@@ -243,8 +243,9 @@ def process_visit(visit: Visit, db: Session) -> int:
         # received the list of FusedPrediction tuples instead of the
         # numpy crop.
         fused_crop_image: "cv2.Mat | None" = None
+        fusion_stats: dict = {}
         if _USE_MULTI_FRAME_FUSION:
-            fused_crop_image = _fuse_crops(candidate_crops)
+            fused_crop_image = _fuse_crops(candidate_crops, stats=fusion_stats)
             preds = classify_bird(fused_crop_image) if fused_crop_image is not None else []
             per_crop_predictions = [preds] if preds else []
         else:
@@ -307,9 +308,14 @@ def process_visit(visit: Visit, db: Session) -> int:
         # disagrees confidently, override to NAB. We score the fused crop
         # (or best candidate when fusion is off) so the binary head sees
         # the same pixels the species classifier did.
+        nab_p_single = nab_p_polished = None
         if binary_filter_enabled() and top.species != NOT_A_BIRD_LABEL:
             filter_crop = fused_crop_image if _USE_MULTI_FRAME_FUSION else best.crop
             nab_p = nab_probability(filter_crop) if filter_crop is not None else None
+            # Record the same detection scored two other ways. Costs two extra
+            # model calls (~0.08 s each) and changes no decision: only `nab_p`
+            # below is acted on. See Detection.nab_p_served for why.
+            nab_p_single, nab_p_polished = _score_crop_variants(best, filter_crop, nab_p)
             if nab_p is not None and nab_p >= settings.bird_binary_nab_threshold:
                 log.info(
                     "track %d: binary filter override → NAB (was %s @ %.2f; NAB P=%.2f)",
@@ -355,6 +361,10 @@ def process_visit(visit: Visit, db: Session) -> int:
             "sharpness": sharpness,
             "track_id": track.track_id,
             "nab_override_p": nab_override_p,
+            "nab_p_served": nab_p if binary_filter_enabled() else None,
+            "nab_p_single": nab_p_single,
+            "nab_p_polished": nab_p_polished,
+            "fusion_n_used": fusion_stats.get("n_used"),
         })
         frames_to_save[track.track_id] = best.frame_index
 
@@ -477,7 +487,7 @@ _FUSION_MIN_CORR_PEAK = 0.10
 _FUSION_RESIZE_PX = 260
 
 
-def _fuse_crops(crops: list) -> "cv2.Mat | None":
+def _fuse_crops(crops: list, stats: dict | None = None) -> "cv2.Mat | None":
     """Align top-K sharpness-ranked crops via phase correlation and average.
 
     Inputs:
@@ -512,6 +522,8 @@ def _fuse_crops(crops: list) -> "cv2.Mat | None":
     target = (_FUSION_RESIZE_PX, _FUSION_RESIZE_PX)
     anchor = cv2.resize(crops[0], target)
     if len(crops) == 1:
+        if stats is not None:
+            stats["n_used"] = 1
         return anchor
 
     anchor_gray = cv2.cvtColor(anchor, cv2.COLOR_BGR2GRAY).astype(np.float32)
@@ -530,6 +542,8 @@ def _fuse_crops(crops: list) -> "cv2.Mat | None":
         warped = cv2.warpAffine(resized, M, target, borderMode=cv2.BORDER_REPLICATE)
         aligned.append(warped)
 
+    if stats is not None:
+        stats["n_used"] = len(aligned)
     if len(aligned) == 1:
         return anchor   # all candidates rejected; just use the anchor
     return np.mean(np.stack(aligned), axis=0).astype(np.uint8)
@@ -678,6 +692,26 @@ _DISPLAY_CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 _UNSHARP_AMOUNT = 0.0
 _UNSHARP_BLUR_KSIZE = (0, 0)         # auto-compute from sigma
 _UNSHARP_BLUR_SIGMA = 1.5
+
+
+def _score_crop_variants(best, served_crop, served_p):
+    """Score the un-fused and display-polished versions of one detection.
+
+    Production's verdict uses the served crop alone; these two ride along so
+    the fusion and the display polish can later be told apart. Returns
+    `(single, polished)`, either of which may be None when the filter
+    declines to score.
+    """
+    raw = getattr(best, "crop", None)
+    if raw is None or getattr(raw, "size", 0) == 0:
+        return None, None
+    # When fusion is off the served crop IS the raw crop; don't pay twice.
+    single = served_p if served_crop is raw else nab_probability(raw)
+    try:
+        polished = nab_probability(_polish_for_display(raw))
+    except cv2.error:
+        polished = None
+    return single, polished
 
 
 def _polish_for_display(bgr: np.ndarray) -> np.ndarray:
