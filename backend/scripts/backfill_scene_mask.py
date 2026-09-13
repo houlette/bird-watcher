@@ -88,12 +88,22 @@ def main() -> None:
     ap.add_argument("--include-unidentified", action="store_true",
                     help="also relabel rows the classifier never named")
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--only-ids", type=str, default=None,
+                    help="comma-separated detection ids; restrict the pass to "
+                         "exactly these. For applying a dry run that a human "
+                         "has checked crop by crop, which is the only "
+                         "responsible way to run this at cell resolution: a "
+                         "100px cell is coarse enough that a verified batch "
+                         "of 24 contained 4 real birds.")
+    ap.add_argument("--show", action="store_true",
+                    help="print every candidate with its crop path, so the "
+                         "dry run can be checked by eye before anything is "
+                         "written. Worth doing: an earlier version of this "
+                         "pass judged old rows by today's hot cells and "
+                         "proposed relabeling a set of cardinals and feeder "
+                         "sparrows as scenery.")
     args = ap.parse_args()
 
-    hot = scene_mask.get_hot_zones(force_refresh=True)
-    if not hot:
-        log.error("No hot cells, so there is nothing this pass could suppress. Stopping.")
-        return
 
     db = SessionLocal()
     try:
@@ -102,8 +112,6 @@ def main() -> None:
             if args.since
             else _default_since(db)
         )
-        log.info("Hot cells: %d. Window: detections created since %s.",
-                 len(hot), since.strftime("%Y-%m-%d %H:%M"))
 
         nab = db.query(Species).filter_by(common_name=NOT_A_BIRD_LABEL).one_or_none()
         if nab is None:
@@ -118,8 +126,44 @@ def main() -> None:
             .filter(Species.common_name.in_(SENTINEL_LABELS)).all()
         }
 
-        q = db.query(Detection).filter(Detection.created_at >= since)
-        rows = q.order_by(Detection.id).all()
+        # Hot cells are recomputed per window from the labels that existed in
+        # that window. Judging August's rows by today's cells reads a cell as
+        # pure junk whenever its birds fall outside the current fortnight.
+        until = utcnow()
+        step = timedelta(days=scene_mask.LOOKBACK_DAYS)
+        windows = []
+        cursor = since
+        while cursor < until:
+            stop = min(cursor + step, until)
+            windows.append((cursor, stop))
+            cursor = stop
+        log.info("Sweeping %s to %s in %d-day windows, hot cells recomputed per window.",
+                 since.strftime("%Y-%m-%d"), until.strftime("%Y-%m-%d"), scene_mask.LOOKBACK_DAYS)
+
+        rows = []
+        hot_for = {}
+        for w_start, w_stop in windows:
+            hot_w = scene_mask._compute_hot_zones(w_start, w_stop)
+            if not hot_w:
+                continue
+            got = (
+                db.query(Detection)
+                .filter(Detection.created_at >= w_start, Detection.created_at < w_stop)
+                .order_by(Detection.id)
+                .all()
+            )
+            for d in got:
+                hot_for[d.id] = hot_w
+            rows.extend(got)
+        hot = set().union(*hot_for.values()) if hot_for else set()
+        if not rows:
+            log.info("No window produced any hot cells. Nothing to do.")
+            return
+
+        only = None
+        if args.only_ids:
+            only = {int(x) for x in args.only_ids.split(",") if x.strip()}
+            log.info("Restricted to %d explicitly listed detection id(s).", len(only))
 
         hits: list[Detection] = []
         by_cell: Counter = Counter()
@@ -127,6 +171,8 @@ def main() -> None:
         skipped = defaultdict(int)
 
         for d in rows:
+            if only is not None and d.id not in only:
+                continue
             if d.id in corrected_ids:
                 skipped["already corrected by you"] += 1
                 continue
@@ -140,7 +186,7 @@ def main() -> None:
                 skipped["no usable bbox"] += 1
                 continue
             cell = scene_mask._bbox_to_cell(d.bbox)
-            if cell not in hot:
+            if cell not in hot_for.get(d.id, ()):
                 continue
             if d.yolo_confidence is None:
                 skipped["in a hot cell but no YOLO confidence recorded"] += 1
@@ -155,6 +201,15 @@ def main() -> None:
             if args.limit and len(hits) >= args.limit:
                 break
 
+        if args.show:
+            log.info("candidates:")
+            for d in hits:
+                sp = db.get(Species, d.species_id) if d.species_id else None
+                log.info("    id=%-7d %s  %-26s conf=%.2f  cell=%-9s /media/%s",
+                         d.id, d.created_at.strftime("%Y-%m-%d %H:%M"),
+                         (sp.common_name if sp else "Unidentified"),
+                         d.yolo_confidence or 0.0,
+                         str(scene_mask._bbox_to_cell(d.bbox)), d.crop_path)
         log.info("=" * 66)
         log.info("%d detection(s) would be relabeled %s", len(hits), NOT_A_BIRD_LABEL)
         for cell, n in by_cell.most_common():

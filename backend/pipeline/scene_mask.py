@@ -64,8 +64,17 @@ MIN_NABS_PER_CELL = 10
 # of NAB verdicts a day that nothing read. These thresholds let those count
 # without letting a machine mistake blind a real perch:
 #
-#   - MIN_MACHINE: 20 rather than 10, because one verdict is weaker evidence
-#     than one of the user's.
+#   - MIN_MACHINE: 20 rather than 10, because one machine verdict is weaker
+#     evidence than one of the user's. Briefly lowered to 10 on 2026-09-12
+#     and reverted the same day. Scored against May's hand labels the change
+#     looked free — 998 confirmed NAB covered instead of 835, with 4
+#     confirmed birds caught either way — but May's hot cells are not this
+#     September's. Checked against the current scene, 10 turns seven cells
+#     hot that hold real birds (cardinals, a robin, feeder sparrows) where 20
+#     turns two. A cell reads as pure junk when its birds happen to fall
+#     outside the 14-day window, and the count is what stops that from
+#     mattering. Validate a threshold change against the CURRENT frame, by
+#     looking at the crops, not only against an old labeled archive.
 #   - PURITY: the cell has to be almost entirely NAB. A genuine perch is not.
 #     The feeder cell (14, 18) ran 30 NAB against 23 birds, mostly sparrows,
 #     and is correctly left alone by this.
@@ -116,8 +125,16 @@ def _bbox_to_cell(bbox) -> tuple[int, int]:
     return (cx, cy)
 
 
-def _compute_hot_zones() -> set[tuple[int, int]]:
+def _compute_hot_zones(since: datetime | None = None,
+                       until: datetime | None = None) -> set[tuple[int, int]]:
     """Return the cells where NAB detections cluster densely enough to suppress.
+
+    `since` and `until` bound the evidence window, and exist for the offline
+    backfill, which has to judge a historical window by the labels that
+    existed then. Applying today's hot cells to August's rows reads a cell as
+    pure junk whenever its birds fall outside the current fortnight: on
+    2026-09-13 that would have relabeled a set of cardinals, a robin and a
+    dozen feeder sparrows as scenery.
 
     Two independent paths into the hot set. The user's own NAB corrections
     qualify a cell on count alone, since a hand label is authoritative. The
@@ -127,8 +144,8 @@ def _compute_hot_zones() -> set[tuple[int, int]]:
     """
     db = SessionLocal()
     try:
-        cutoff = datetime.utcnow() - timedelta(days=LOOKBACK_DAYS)
-        human_rows = (
+        cutoff = since if since is not None else datetime.utcnow() - timedelta(days=LOOKBACK_DAYS)
+        human_q = (
             db.query(Detection.bbox)
             .join(Correction, Correction.detection_id == Detection.id)
             .join(Species, Correction.correct_species_id == Species.id)
@@ -137,19 +154,23 @@ def _compute_hot_zones() -> set[tuple[int, int]]:
             .filter(
                 (Correction.source.is_(None)) | (Correction.source != BACKFILL_SOURCE)
             )
-            .all()
         )
+        if until is not None:
+            human_q = human_q.filter(Detection.created_at < until)
+        human_rows = human_q.all()
         # Every labeled detection in the window, NAB or not, so the machine
         # path can measure how much of each cell is NAB rather than just how
         # many. Sentinels other than NAB (Poor Quality, Unknown bird) and
         # unlabeled rows count as neither, so they neither qualify a cell nor
         # protect one.
-        labeled_rows = (
+        labeled_q = (
             db.query(Detection.bbox, Species.common_name)
             .join(Species, Detection.species_id == Species.id)
             .filter(Detection.created_at >= cutoff)
-            .all()
         )
+        if until is not None:
+            labeled_q = labeled_q.filter(Detection.created_at < until)
+        labeled_rows = labeled_q.all()
     finally:
         db.close()
 

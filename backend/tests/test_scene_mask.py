@@ -213,7 +213,7 @@ def test_pipeline_nab_below_machine_threshold_is_not_hot(session_maker):
     that qualifies a cell by hand is deliberately not enough on its own."""
     db = session_maker()
     try:
-        for _ in range(scene_mask.MIN_NABS_PER_CELL):
+        for _ in range(scene_mask.MIN_MACHINE_NABS_PER_CELL - 1):
             _seed_labeled(db, (1710, 510, 80, 80), NOT_A_BIRD_LABEL)
     finally:
         db.close()
@@ -271,45 +271,84 @@ def test_user_labels_still_qualify_at_the_lower_threshold(session_maker):
     assert (17, 5) in scene_mask._compute_hot_zones()
 
 
+def _seed_correction_only(db, bbox, source, label="House Sparrow"):
+    """A detection carrying a NAB correction while its own label is a bird.
+
+    Artificial on purpose. A real backfill sets species_id to NAB too, which
+    would let the machine path qualify the cell by itself and hide whether
+    the human path is doing anything. Keeping the row labeled as a bird
+    isolates the human path, which is the thing under test.
+    """
+    nab = db.query(Species).filter_by(common_name=NOT_A_BIRD_LABEL).one_or_none()
+    if nab is None:
+        nab = Species(common_name=NOT_A_BIRD_LABEL, scientific_name="", is_rare=False)
+        db.add(nab); db.flush()
+    sp = db.query(Species).filter_by(common_name=label).one_or_none()
+    if sp is None:
+        sp = Species(common_name=label, scientific_name="", is_rare=False)
+        db.add(sp); db.flush()
+    visit = Visit(clip_path="clips/x.mp4")
+    db.add(visit); db.flush()
+    det = Detection(
+        visit_id=visit.id, species_id=sp.id, confidence=0.5,
+        raw_predictions=[], audio_confirmed=False,
+        crop_path="crops/x.jpg", bbox=list(bbox), track_id=1,
+    )
+    db.add(det); db.flush()
+    db.add(Correction(detection_id=det.id, correct_species_id=nab.id, source=source))
+    db.commit()
+
+
+def test_user_corrections_alone_qualify_a_cell(session_maker):
+    """Control for the test below: this seeding does make a cell hot when the
+    corrections come from the user, so a null result there means the source
+    filter worked and not that the fixture was inert."""
+    db = session_maker()
+    try:
+        for _ in range(scene_mask.MIN_NABS_PER_CELL):
+            _seed_correction_only(db, (1710, 510, 80, 80), source=None)
+    finally:
+        db.close()
+
+    assert (17, 5) in scene_mask._compute_hot_zones()
+
+
 def test_backfill_corrections_do_not_hold_a_cell_hot(session_maker):
     """The backfill writes NAB corrections of its own. If those counted as
-    user labels, a cell could keep itself hot for a fortnight after the
-    artifact justifying it had gone."""
+    user labels, a cell could keep itself hot on the strength of this
+    module's own output after the artifact justifying it had gone."""
     db = session_maker()
     try:
-        species = db.query(Species).filter_by(common_name=NOT_A_BIRD_LABEL).one_or_none()
-        if species is None:
-            species = Species(common_name=NOT_A_BIRD_LABEL, scientific_name="", is_rare=False)
-            db.add(species); db.flush()
-        for _ in range(scene_mask.MIN_NABS_PER_CELL * 2):
-            visit = Visit(clip_path="clips/x.mp4")
-            db.add(visit); db.flush()
-            det = Detection(
-                visit_id=visit.id, species_id=species.id, confidence=0.0,
-                raw_predictions=[], audio_confirmed=False,
-                crop_path="crops/x.jpg", bbox=[1710, 510, 80, 80], track_id=1,
-            )
-            db.add(det); db.flush()
-            db.add(Correction(detection_id=det.id, correct_species_id=species.id,
-                              source=scene_mask.BACKFILL_SOURCE))
-        db.commit()
+        for _ in range(scene_mask.MIN_NABS_PER_CELL * 3):
+            _seed_correction_only(db, (1710, 510, 80, 80),
+                                  source=scene_mask.BACKFILL_SOURCE)
     finally:
         db.close()
 
-    # The detections themselves are NAB-labeled, so the machine path sees 20
-    # of them and that alone is enough. What must not happen is the human
-    # path counting the backfill's corrections at its lower threshold.
-    zones = scene_mask._compute_hot_zones()
-    assert (17, 5) in zones  # machine path, on the NAB labels themselves
-
-    # With only half as many, the machine threshold is not met and the
-    # backfill corrections must not carry the cell on their own.
-    db = session_maker()
-    try:
-        for d in db.query(Detection).limit(scene_mask.MIN_MACHINE_NABS_PER_CELL // 2).all():
-            db.delete(db.query(Correction).filter_by(detection_id=d.id).one())
-            db.delete(d)
-        db.commit()
-    finally:
-        db.close()
     assert scene_mask._compute_hot_zones() == set()
+
+
+def test_hot_zones_respect_an_explicit_window(session_maker):
+    """The offline backfill judges a historical window by the labels that
+    existed in it. Without the bounds, a cell whose birds fall outside the
+    current fortnight reads as pure junk — which on 2026-09-13 would have
+    relabeled cardinals and feeder sparrows as scenery."""
+    from datetime import datetime, timedelta
+
+    db = session_maker()
+    try:
+        for _ in range(scene_mask.MIN_MACHINE_NABS_PER_CELL):
+            _seed_labeled(db, (1710, 510, 80, 80), NOT_A_BIRD_LABEL)
+        # Plenty of real birds in the same cell, which should disqualify it.
+        for _ in range(scene_mask.MAX_BIRD_LABELS_IN_HOT_CELL + 3):
+            _seed_labeled(db, (1710, 510, 80, 80), "Northern Cardinal")
+    finally:
+        db.close()
+
+    wide = datetime.utcnow() - timedelta(days=365)
+    assert scene_mask._compute_hot_zones(wide) == set(), "birds in the cell must protect it"
+
+    # A window that excludes everything finds nothing, which is the property
+    # the backfill relies on to judge each window separately.
+    future = datetime.utcnow() + timedelta(days=1)
+    assert scene_mask._compute_hot_zones(future, future + timedelta(days=1)) == set()
