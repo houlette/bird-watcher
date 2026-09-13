@@ -498,46 +498,292 @@ function FunnelChart({ daily }: { daily: DailyStats[] }) {
   );
 }
 
-// ─── Rate chart ────────────────────────────────────────────────────────────
-function RatesChart({ daily }: { daily: DailyStats[] }) {
-  const t = useTokens();
-  const rows = useMemo(
-    () =>
-      daily.map((d) => ({
-        date: shortDate(d.date),
-        "YOLO bird rate": d.yolo_bird_rate,
-        "Classifier label rate": d.classifier_label_rate,
-        "NAB share of corrections": d.user_fp_rate,
-        "Top-1 hit rate (on reviewed)": d.classifier_accuracy,
-      })),
-    [daily],
+// ─── Pipeline rates ────────────────────────────────────────────────────────
+//
+// The old version drew four rates as four lines on one 0–100% axis, and
+// only one of them was a line worth drawing:
+//
+//   - Clips that held a bird runs 1–24%, so a 0–100% axis spent three
+//     quarters of its height on range the series never visits.
+//   - The classifier label rate was 100.0% on all thirty days — a flat
+//     line along the ceiling.
+//   - The not-a-bird share was defined on three days out of thirty, off
+//     two to six reviewed detections, and `connectNulls` joined those
+//     three points into a solid line at 100% across the whole window.
+//     Twenty-seven days of that line were drawn from no data at all.
+//   - The top-1 hit rate was null every day, because confirming a species
+//     is what makes a detection eligible and every correction in the
+//     window was "not a bird". It held a legend slot and a caption
+//     paragraph while drawing nothing.
+//
+// So: a tile per rate carrying its own denominator, and a line only for
+// the rates that vary day to day, each on an axis scaled to its own range.
+// The classifier's quality rates are not broken, they are starved — the
+// tiles say which ones are waiting on review rather than leaving the
+// reader to infer it from an empty axis.
+
+/** Under this many observations a share is a count wearing a percent sign,
+ *  so the tile says so instead of printing a confident-looking rate. */
+const MIN_SAMPLE = 30;
+
+type Rate = {
+  label: string;
+  num: number;
+  den: number;
+  /** Which way is good. The meter is filled in the matching colour, so a
+   *  full bar does not read as a win on a rate where more is worse. */
+  dir: "up-good" | "up-bad";
+  /** What the ratio is, in one line. */
+  note: string;
+  /** Shown in place of the value when the denominator is zero: an empty
+   *  rate has a reason, and the reason is the useful part. */
+  absent?: string;
+};
+
+function buildRates(daily: DailyStats[], totals: StatsResponse["totals"]): Rate[] {
+  const reviewed = sum(daily, (d) => d.detections_user_corrected);
+  const eligible = sum(daily, (d) => d.classifier_eligible);
+  return [
+    {
+      label: "Classifier gave a top-1",
+      num: sum(daily, (d) => d.detections_labeled_by_classifier),
+      den: sum(daily, (d) => d.detections_total),
+      dir: "up-good",
+      note: "Detections the classifier was confident enough to name rather than leave unidentified.",
+    },
+    {
+      label: "You reviewed",
+      num: reviewed,
+      den: sum(daily, (d) => d.detections_total),
+      dir: "up-good",
+      note: `Detections you labelled. ${totals.pending_backlog.toLocaleString()} are still pending across all time.`,
+    },
+    {
+      label: "Not a bird, of reviewed",
+      num: sum(daily, (d) => d.corrections_nab),
+      den: reviewed,
+      dir: "up-bad",
+      note: "Of what you reviewed, the share that was junk. Biased by which detections you chose to open.",
+      absent: reviewed === 0 ? "nothing reviewed in the window" : undefined,
+    },
+    {
+      label: "Top-1 already right",
+      num: sum(daily, (d) => d.classifier_correct),
+      den: eligible,
+      dir: "up-good",
+      note: "Of the detections you confirmed as a real species, the share the classifier had already named. Family labels count.",
+      absent: eligible === 0 ? "needs a confirmed species, not just a rejection" : undefined,
+    },
+    {
+      label: "Clips that failed to process",
+      num: sum(daily, (d) => d.visits_with_processing_error),
+      // Daylight-skipped clips are excluded from the error count upstream
+      // (stats.py filters out the "skipped:" prefix), so they do not belong
+      // in the denominator either — a clip the gate dropped never ran.
+      den: sum(daily, (d) => d.clips_daylight),
+      dir: "up-bad",
+      note: "Errors that are not the daylight skip. An operational check rather than a model one.",
+    },
+  ];
+}
+
+function RateTile({ rate, t }: { rate: Rate; t: Tokens }) {
+  const share = rate.den > 0 ? rate.num / rate.den : null;
+  const thin = rate.den > 0 && rate.den < MIN_SAMPLE;
+  return (
+    <div className="fg-card p-3">
+      <div className="fg-overline">{rate.label}</div>
+      {share === null ? (
+        <div className="text-ink text-sm mt-1.5 leading-snug">
+          No reading yet
+          <span className="block text-[11px] text-faint mt-0.5">{rate.absent}</span>
+        </div>
+      ) : (
+        <>
+          {/* Proportional figures, not tabular: these sit alone rather than
+              in a column, and equal-width digits read loose at this size. */}
+          <div className="font-serif text-2xl text-ink leading-none mt-1.5">{fmtShare(share)}</div>
+          <div className="text-[11px] text-faint mt-1 tnum">
+            {rate.num.toLocaleString()} of {rate.den.toLocaleString()}
+            {thin && <span className="text-rust"> · too few to read as a rate</span>}
+          </div>
+          {/* A meter against 100%, which is the only limit every one of
+              these shares has in common. */}
+          <div className="h-1 mt-2 rounded-full overflow-hidden" style={{ background: "var(--panel)" }}>
+            <div
+              className="h-full rounded-full"
+              style={{
+                width: `${share * 100}%`,
+                background: rate.dir === "up-bad" ? t.rust : t.funnel[3],
+              }}
+            />
+          </div>
+        </>
+      )}
+      <p className="text-[11px] text-muted mt-2 leading-snug">{rate.note}</p>
+    </div>
   );
+}
+
+type Trend = {
+  id: string;
+  title: string;
+  rows: { date: string; v: number | null }[];
+  /** Pooled over the window (total ÷ total), not the mean of the daily
+   *  rates, which would weight a quiet day the same as a busy one. */
+  mean: number;
+  domain: [number, number];
+  ticks: number[];
+  fmt: (v: number) => string;
+  /** The heading average, where a whole percent is too coarse: 6.5% reads
+   *  against a 5% gridline, "7%" does not. Falls back to `fmt`. */
+  fmtMean?: (v: number) => string;
+  caption: string;
+};
+
+/** Clean ticks from `from` to at least `max`, in steps of `step`. */
+function axisTicks(from: number, max: number, step: number): { domain: [number, number]; ticks: number[] } {
+  const top = Math.max(from + step, Math.ceil((max + step * 0.15) / step) * step);
+  const ticks: number[] = [];
+  for (let v = from; v <= top + step / 2; v += step) ticks.push(Number(v.toFixed(4)));
+  return { domain: [from, top], ticks };
+}
+
+function buildTrends(daily: DailyStats[]): Trend[] {
+  const held = daily.map((d) => (d.clips_daylight ? d.clips_with_detections / d.clips_daylight : null));
+  const perClip = daily.map((d) =>
+    d.clips_with_detections ? d.detections_total / d.clips_with_detections : null,
+  );
+  const heldAxis = axisTicks(0, Math.max(...held.map((v) => v ?? 0)), 0.05);
+  const perClipAxis = axisTicks(1, Math.max(...perClip.map((v) => v ?? 1)), 0.25);
+
+  return [
+    {
+      id: "held",
+      title: "Clips that kept a detection",
+      rows: daily.map((d, i) => ({ date: shortDate(d.date), v: held[i] })),
+      mean: sum(daily, (d) => d.clips_with_detections) / Math.max(1, sum(daily, (d) => d.clips_daylight)),
+      ...heldAxis,
+      fmt: (v) => fmtPct(v),
+      fmtMean: (v) => `${(v * 100).toFixed(1)}%`,
+      caption:
+        "Moves with how busy the feeder is and with how twitchy the camera's motion trigger is, " +
+        "so read it against the dashed average rather than as a detector score. A kept detection " +
+        "is not yet a confirmed bird.",
+    },
+    {
+      id: "perClip",
+      title: "Detections per clip that kept one",
+      rows: daily.map((d, i) => ({ date: shortDate(d.date), v: perClip[i] })),
+      mean: sum(daily, (d) => d.detections_total) / Math.max(1, sum(daily, (d) => d.clips_with_detections)),
+      ...perClipAxis,
+      fmt: (v) => v.toFixed(2),
+      caption:
+        "How many separate tracks a triggered clip turns out to hold. The axis starts at 1 because " +
+        "a clip only counts here once it has kept at least one.",
+    },
+  ];
+}
+
+function TrendPanel({
+  trend, t, labelMarkers,
+}: {
+  trend: Trend;
+  t: Tokens;
+  /** Only the first panel in a card names the model markers; repeating the
+   *  labels on every panel is noise, and a bare line is meaningless. */
+  labelMarkers: boolean;
+}) {
+  return (
+    <div>
+      {/* One series, so no legend box — the heading names it. */}
+      <h4 className="text-xs font-semibold text-ink mb-0.5">
+        {trend.title}
+        <span className="ml-1.5 font-normal text-faint tnum">
+          avg {(trend.fmtMean ?? trend.fmt)(trend.mean)}
+        </span>
+      </h4>
+      <ResponsiveContainer width="100%" height={168}>
+        <LineChart data={trend.rows} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
+          <CartesianGrid stroke={t.grid} vertical={false} />
+          <XAxis dataKey="date" tick={{ fontSize: 10, fill: t.axis }} interval="preserveStartEnd" minTickGap={24} />
+          <YAxis
+            width={46}
+            tick={{ fontSize: 10, fill: t.axis }}
+            domain={trend.domain}
+            ticks={trend.ticks}
+            tickFormatter={trend.fmt}
+          />
+          <Tooltip
+            {...tip(t)}
+            formatter={(v) => (v == null ? "—" : trend.fmt(Number(v)))}
+            labelFormatter={(l) => String(l)}
+          />
+          {MODEL_MARKERS.map((m, i) => (
+            <ReferenceLine
+              key={m.date}
+              x={m.date}
+              stroke={t.slate}
+              strokeDasharray="2 3"
+              label={labelMarkers ? markerLabel(m, i, t) : undefined}
+            />
+          ))}
+          {/* Dashed because it is a reference, which is the one thing on a
+              chart that dashing should mean. */}
+          <ReferenceLine y={trend.mean} stroke={t.slate} strokeDasharray="4 3" />
+          <Line
+            type="monotone"
+            dataKey="v"
+            name={trend.title}
+            stroke={t.leaf}
+            strokeWidth={2}
+            dot={false}
+            // Surface ring so the hovered point stays legible where it
+            // crosses the average line.
+            activeDot={{ r: 4, fill: t.leaf, stroke: t.surface, strokeWidth: 2 }}
+            connectNulls={false}
+            isAnimationActive={false}
+          />
+        </LineChart>
+      </ResponsiveContainer>
+      <p className="text-[11px] text-muted mt-1">{trend.caption}</p>
+    </div>
+  );
+}
+
+function RatesChart({ daily, totals }: { daily: DailyStats[]; totals: StatsResponse["totals"] }) {
+  const t = useTokens();
+  const rates = useMemo(() => buildRates(daily, totals), [daily, totals]);
+  const trends = useMemo(() => buildTrends(daily), [daily]);
+  const reviewed = rates.find((r) => r.label === "You reviewed");
 
   return (
     <Card>
-      <CardTitle>Pipeline rates (30d)</CardTitle>
-      <ResponsiveContainer width="100%" height={220}>
-        <LineChart data={rows} margin={{ left: -10, right: 10, top: 8, bottom: 4 }}>
-          <CartesianGrid stroke={t.grid} strokeDasharray="3 3" />
-          <XAxis dataKey="date" tick={{ fontSize: 11, fill: t.axis }} interval="preserveStartEnd" />
-          <YAxis tick={{ fontSize: 11, fill: t.axis }} domain={[0, 1]} tickFormatter={(v) => `${Math.round(v * 100)}%`} />
-          <Tooltip {...tip(t)} formatter={(v) => (v == null ? "—" : fmtPct(Number(v)))} />
-          <Legend wrapperStyle={{ fontSize: 12, color: t.ink }} />
-          {MODEL_MARKERS.map((m, i) => (
-            <ReferenceLine key={m.date} x={m.date} stroke={t.slate} strokeDasharray="2 3"
-              label={markerLabel(m, i, t)} />
-          ))}
-          <Line type="monotone" dataKey="YOLO bird rate" stroke={t.leaf} strokeWidth={2} dot={false} connectNulls />
-          <Line type="monotone" dataKey="Classifier label rate" stroke={t.blue} strokeWidth={2} dot={false} connectNulls />
-          <Line type="monotone" dataKey="NAB share of corrections" stroke={t.rust} strokeWidth={2} dot={false} connectNulls />
-          <Line type="monotone" dataKey="Top-1 hit rate (on reviewed)" stroke={t.sand} strokeWidth={2} dot={false} connectNulls />
-        </LineChart>
-      </ResponsiveContainer>
-      <div className="text-xs text-muted mt-2 space-y-1">
-        <p><span className="font-semibold" style={{ color: t.leaf }}>YOLO bird rate</span> — daylight clips where YOLO found anything (clips with detections ÷ daylight clips).</p>
-        <p><span className="font-semibold" style={{ color: t.blue }}>Classifier label rate</span> — detections the species classifier was confident enough to label (vs. "Unidentified"). Denominator: all detections that day.</p>
-        <p><span className="font-semibold" style={{ color: t.rust }}>NAB share of corrections</span> — of the detections you reviewed today, the fraction you marked "Not a bird." Biased by what you chose to review.</p>
-        <p><span className="font-semibold" style={{ color: t.sand }}>Top-1 hit rate (on reviewed)</span> — of detections where you confirmed a real species, the fraction where the classifier's top-1 already matched. Biased downward.</p>
+      <CardTitle hint="(30d)">Pipeline rates</CardTitle>
+      <p className="text-xs text-muted mb-3">
+        The rates that sit still, each with the denominator it was measured
+        against, then the two that move enough day to day to be worth a line.
+        The dashed line on each is that panel's window average.
+      </p>
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+        {rates.map((r) => (
+          <RateTile key={r.label} rate={r} t={t} />
+        ))}
+      </div>
+      {reviewed && reviewed.num < MIN_SAMPLE && (
+        <p className="text-[11px] text-muted mt-3">
+          The classifier's quality rates are starved rather than bad:{" "}
+          <span className="tnum">{reviewed.num.toLocaleString()}</span> reviewed
+          detections in thirty days against{" "}
+          <span className="tnum">{totals.corrections_total.toLocaleString()}</span>{" "}
+          all-time, so there is nothing recent to score the model on. Working the
+          backlog down is what makes this card mean something.
+        </p>
+      )}
+      <div className="grid gap-4 lg:grid-cols-2 mt-4">
+        {trends.map((tr, i) => (
+          <TrendPanel key={tr.id} trend={tr} t={t} labelMarkers={i === 0} />
+        ))}
       </div>
     </Card>
   );
@@ -923,7 +1169,7 @@ export default function Stats() {
       </div>
       <HeadlineCards data={data} />
       <FunnelChart daily={data.daily} />
-      <RatesChart daily={data.daily} />
+      <RatesChart daily={data.daily} totals={data.totals} />
       <ImageQuality daily={data.daily} />
       <TrainingDataCard totals={data.totals} />
       <SpeciesAccuracy totals={data.totals} />
