@@ -82,6 +82,19 @@ _ADDITIVE_COLUMNS = [
     # "Not a bird". Non-NULL marks the binary-filter-killed cohort so its
     # precision can be audited; see Detection.nab_override_p.
     ("detections", "nab_override_p", "REAL"),
+    # Per-visit counts for the two spatial defences added after the scene
+    # mask. They were briefly folded into scene_mask_suppressed, which made
+    # it impossible to tell which one was doing the work.
+    ("visits", "recurrence_suppressed", "INTEGER"),
+    ("visits", "backdrop_suppressed", "INTEGER"),
+    # How many detections the backdrop model scored at all. Distinguishes
+    # "rejected nothing" from "no model for that hour", which otherwise
+    # look identical in the suppression count.
+    ("visits", "backdrop_scored", "INTEGER"),
+    # Daily aggregates of the three above.
+    ("pipeline_stats_daily", "detections_recurrence_suppressed", "INTEGER"),
+    ("pipeline_stats_daily", "detections_backdrop_suppressed", "INTEGER"),
+    ("pipeline_stats_daily", "detections_backdrop_scored", "INTEGER"),
 ]
 
 

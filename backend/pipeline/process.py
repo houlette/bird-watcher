@@ -28,6 +28,7 @@ from pipeline.exceptions import SkipFile
 from pipeline.frames import extract_frames
 from pipeline.fuse import FusedPrediction, fuse
 from pipeline.notify import dispatch_for_detection
+from pipeline.backdrop import filter_detections as _backdrop_filter
 from pipeline.recurrence import filter_detections as _recurrence_filter
 from pipeline.scene_mask import filter_detections as _scene_mask_filter
 from pipeline.track import Track, Tracker
@@ -94,6 +95,15 @@ def process_visit(visit: Visit, db: Session) -> int:
     # we can spot-check when real birds get filtered (e.g., a
     # woodpecker on the lilac near the hummingbird feeder).
     scene_mask_suppressed = 0
+    # The three spatial defences are counted separately. They used to share
+    # one total, which makes it impossible to tell which one is doing the
+    # work or whether a newly-added one is earning its place.
+    recurrence_suppressed = 0
+    backdrop_suppressed = 0
+    # How many detections the backdrop model actually scored. Without it,
+    # "suppressed 0" reads the same whether the model rejected nothing or
+    # was never loaded for that hour.
+    backdrop_scored = 0
 
     # We sample at 3 fps (vs the source's 20 fps) — every ~7th frame.
     # Combined with the 10 s clip-duration cap in frames.py, this gives the
@@ -121,7 +131,16 @@ def process_visit(visit: Visit, db: Session) -> int:
         # fixtures from boxes that keep reappearing, so it keeps working
         # through a fortnight where nobody labels anything.
         dets, this_frame_suppressed = _recurrence_filter(dets)
-        scene_mask_suppressed += this_frame_suppressed
+        recurrence_suppressed += this_frame_suppressed
+        # Third pass, and the only one that needs neither a label nor a
+        # repeat: the backdrop model knows what this yard looks like with
+        # nothing in it, so a box that is pure wall, step or downspout is
+        # rejected the first time it appears.
+        dets, this_frame_suppressed, this_frame_scored = _backdrop_filter(
+            dets, frame.image, visit.started_at or utcnow()
+        )
+        backdrop_suppressed += this_frame_suppressed
+        backdrop_scored += this_frame_scored
         for d in dets:
             d.crop = _extract_crop_from_image(d, frame.image)
         tracker.update(frame.index, dets)
@@ -133,6 +152,9 @@ def process_visit(visit: Visit, db: Session) -> int:
         visit.processed_at = utcnow()
         visit.processing_error = "no frames decoded"
         visit.scene_mask_suppressed = scene_mask_suppressed
+        visit.recurrence_suppressed = recurrence_suppressed
+        visit.backdrop_suppressed = backdrop_suppressed
+        visit.backdrop_scored = backdrop_scored
         db.commit()
         return 0
 
@@ -362,6 +384,9 @@ def process_visit(visit: Visit, db: Session) -> int:
     visit.ended_at = utcnow()
     visit.processing_error = None
     visit.scene_mask_suppressed = scene_mask_suppressed
+    visit.recurrence_suppressed = recurrence_suppressed
+    visit.backdrop_suppressed = backdrop_suppressed
+    visit.backdrop_scored = backdrop_scored
     db.commit()
     log.info("visit %d: %d tracks persisted (some may be Unidentified)", visit.id, len(detections))
 

@@ -88,6 +88,14 @@ class Visit(Base):
     # "real bird at the hummingbird feeder got silently filtered" failure
     # mode. Nullable for rows written before this column existed.
     scene_mask_suppressed: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Counted separately from the scene mask so each defence can be judged
+    # on its own: whether it earns its cost, and whether it is quietly
+    # eating birds. NULL on rows written before the column existed.
+    recurrence_suppressed: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    backdrop_suppressed: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Denominator for the backdrop rate. Zero means the model was not
+    # loaded for that hour, which is a different thing from finding nothing.
+    backdrop_scored: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     detections: Mapped[list["Detection"]] = relationship(back_populates="visit", cascade="all, delete-orphan")
 
@@ -233,6 +241,9 @@ class PipelineStatsDaily(Base):
     # is happening in NAB-clustered regions (sun glints, leaves, hummingbird
     # feeder) — and possibly real birds being filtered along with them.
     detections_scene_mask_suppressed: Mapped[int] = mapped_column(Integer, default=0)
+    detections_recurrence_suppressed: Mapped[int] = mapped_column(Integer, default=0)
+    detections_backdrop_suppressed: Mapped[int] = mapped_column(Integer, default=0)
+    detections_backdrop_scored: Mapped[int] = mapped_column(Integer, default=0)
 
     # Variable-shape extras: top species (list), per-species accuracy
     # (list), hour-of-day histogram, YOLO-confidence buckets.

@@ -142,6 +142,17 @@ def compute_daily_stats(db: Session, d: date) -> PipelineStatsDaily:
         or 0
     )
 
+    def _sum(col):
+        return int(visits_q.with_entities(func.coalesce(func.sum(col), 0)).scalar() or 0)
+
+    # The two defences added after the scene mask, counted separately so
+    # each can be judged on its own rather than hidden in a shared total.
+    detections_recurrence_suppressed = _sum(Visit.recurrence_suppressed)
+    detections_backdrop_suppressed = _sum(Visit.backdrop_suppressed)
+    # Denominator for the backdrop rate. Zero means no model was loaded for
+    # those hours, which reads identically to "found nothing" without it.
+    detections_backdrop_scored = _sum(Visit.backdrop_scored)
+
     # --- Correction-level metrics -------------------------------------------
     # User-corrected detections in this window.
     corrected_q = (
@@ -277,6 +288,9 @@ def compute_daily_stats(db: Session, d: date) -> PipelineStatsDaily:
         visits_with_processing_error=visits_with_processing_error,
         detections_audio_confirmed=detections_audio_confirmed,
         detections_scene_mask_suppressed=detections_scene_mask_suppressed,
+        detections_recurrence_suppressed=detections_recurrence_suppressed,
+        detections_backdrop_suppressed=detections_backdrop_suppressed,
+        detections_backdrop_scored=detections_backdrop_scored,
         payload=payload,
         computed_at=datetime.utcnow(),
     )
@@ -304,6 +318,9 @@ def upsert_daily_stats(db: Session, d: date) -> PipelineStatsDaily:
             "visits_with_processing_error",
             "detections_audio_confirmed",
             "detections_scene_mask_suppressed",
+            "detections_recurrence_suppressed",
+            "detections_backdrop_suppressed",
+            "detections_backdrop_scored",
             "payload",
             "computed_at",
         ):
@@ -566,6 +583,11 @@ def serialize_daily(row: PipelineStatsDaily) -> dict:
         if row.detections_total
         else None
     )
+    # The outcome metric the three spatial defences exist to move: of the
+    # detections that reached the feed and the user then reviewed, the share
+    # that turned out to be junk. Suppression counts say how hard each
+    # defence is firing; only this says whether the feed got cleaner. NULL
+    # until the user has reviewed some of the day.
     user_fp_rate = (
         row.corrections_nab / row.detections_user_corrected
         if row.detections_user_corrected
@@ -587,6 +609,10 @@ def serialize_daily(row: PipelineStatsDaily) -> dict:
         "visits_with_processing_error": row.visits_with_processing_error,
         "detections_audio_confirmed": row.detections_audio_confirmed,
         "detections_scene_mask_suppressed": row.detections_scene_mask_suppressed or 0,
+        "detections_recurrence_suppressed": row.detections_recurrence_suppressed or 0,
+        "detections_backdrop_suppressed": row.detections_backdrop_suppressed or 0,
+        "detections_backdrop_scored": row.detections_backdrop_scored or 0,
+
         # Derived rates (caller doesn't have to recompute).
         "yolo_bird_rate": yolo_bird_rate,
         "classifier_label_rate": classifier_label_rate,

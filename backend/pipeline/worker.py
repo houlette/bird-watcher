@@ -31,6 +31,7 @@ from ingest.haikubox import (
 )
 from db.models import PipelineStatsDaily
 from pipeline.daylight import is_daylight
+from pipeline.backdrop import rebuild_from_recent
 from pipeline.recurrence import WINDOW_DAYS as RECURRENCE_WINDOW_DAYS
 from pipeline.recurrence import relabel_fixtures
 from pipeline.stats import dates_with_visits, upsert_daily_stats
@@ -290,6 +291,22 @@ def _cleanup_old_frames() -> int:
     return deleted
 
 
+def _rebuild_backdrop() -> int:
+    """Nightly: re-median the per-hour backdrop from recent preserved frames.
+
+    Nightly rather than continuous because the thing being modeled barely
+    changes. It does drift — leaves fall, the feeder is refilled, the pots
+    move — and a stale backdrop makes real objects look like scenery, which
+    is the failure direction that costs birds. A day is well inside that.
+    """
+    try:
+        used = rebuild_from_recent()
+        return len(used)
+    except Exception:
+        log.exception("Backdrop rebuild failed; the previous model stays in place")
+        return 0
+
+
 def _relabel_recurring_fixtures() -> int:
     """Nightly: mark detections sitting on a recurring box as Not a bird.
 
@@ -436,6 +453,14 @@ def start_worker() -> BackgroundScheduler:
         next_run_time=datetime.now(timezone.utc),  # run once at startup
     )
     scheduler.add_job(
+        _rebuild_backdrop,
+        CronTrigger(hour=2, minute=40),
+        max_instances=1,
+        coalesce=True,
+        id="rebuild_backdrop",
+        next_run_time=datetime.now(timezone.utc),  # build one at startup
+    )
+    scheduler.add_job(
         _relabel_recurring_fixtures,
         CronTrigger(hour=3, minute=10),
         max_instances=1,
@@ -478,7 +503,7 @@ def start_worker() -> BackgroundScheduler:
     )
     scheduler.start()
     log.info(
-        "Workers started: pipeline every %ds, Haikubox poller every %ds, frame cleanup daily, clip cleanup hourly, recurrence sweep nightly 03:10 UTC",
+        "Workers started: pipeline every %ds, Haikubox poller every %ds, frame cleanup daily, clip cleanup hourly, backdrop rebuild nightly 02:40 UTC, recurrence sweep nightly 03:10 UTC",
         POLL_INTERVAL_SECONDS,
         HAIKUBOX_POLL_SECONDS,
     )
