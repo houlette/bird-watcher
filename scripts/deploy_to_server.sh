@@ -43,43 +43,45 @@ ssh "$TARGET" "mkdir -p ~/BirdWatcher"
 # stale build artifact disappeared between rsync's enumeration and copy
 # phases is a regular footgun.
 #
-# macOS now ships openrsync as /usr/bin/rsync. It does not send filter rules
-# to the remote side, so with --delete-after every --exclude below is ignored
-# when deleting. On 2026-09-14 a dry run listed all 48,453 files under
-# backend/data on the VM for deletion, birdwatcher.db included, and a real
-# deploy deleted that day's camera uploads from backend/data/clips. Only root
-# ownership of the other directories kept them. Anchored excludes and
-# --filter='P ...' made no difference. So: use GNU rsync when it is
-# installed, and otherwise sync without deleting, which leaves files removed
-# locally behind on the remote until someone clears them by hand.
-RSYNC=rsync
-for candidate in /opt/homebrew/bin/rsync /usr/local/bin/rsync; do
-  if [ -x "$candidate" ]; then RSYNC="$candidate"; break; fi
-done
-DELETE_FLAG="--delete-after"
-if "$RSYNC" --version 2>&1 | grep -qi openrsync; then
-  echo "WARNING: $RSYNC is openrsync, which ignores --exclude when deleting on the remote." >&2
-  echo "         Syncing without --delete-after. 'brew install rsync' restores deletion safely." >&2
-  DELETE_FLAG=""
+# The runtime paths are excluded without a trailing slash. A trailing slash
+# matches directories only, and backend/data on a dev Mac can be a symlink
+# (to backend/scripts/sweep/data, since 2026-05-29). With the slash, rsync
+# sent that symlink and the VM tried to replace its real backend/data with
+# it, deleting the contents first: a dry run on 2026-09-14 listed all 48,463
+# files, birdwatcher.db included. Root ownership saved everything except
+# backend/data/clips, whose uploads were deleted on at least one deploy.
+RSYNC_EXCLUDES=(
+  --exclude='.venv/'
+  --exclude='node_modules/'
+  --exclude='/backend/data'
+  --exclude='/backend/data.real-backup'
+  --exclude='/backend/models'
+  --exclude='/backend/secrets'
+  --exclude='backend/scripts/sweep/data/'
+  --exclude='backend/scripts/sweep/results/'
+  --exclude='backend/yolo*.pt'
+  --exclude='frontend/dist/'
+  --exclude='__pycache__/'
+  --exclude='.pytest_cache/'
+  --exclude='*.pyc'
+  --exclude='.DS_Store'
+  --exclude='/.env'
+)
+
+# Refuse to sync if a dry run would delete anything on the VM that holds
+# state: the database, crops, models or the VAPID key. Costs one extra
+# file-list pass.
+DOOMED="$(rsync -avzn --delete-after "${RSYNC_EXCLUDES[@]}" ./ "$TARGET:~/BirdWatcher/" 2>&1 \
+  | grep -E '^deleting (backend/(data|models|secrets)(/|$)|\.env$)' || true)"
+if [ -n "$DOOMED" ]; then
+  echo "Refusing to deploy: rsync would delete runtime state on $TARGET:" >&2
+  sed -n '1,10p' <<<"$DOOMED" >&2
+  echo "($(grep -c '' <<<"$DOOMED") paths in all)" >&2
+  exit 1
 fi
+
 RSYNC_RC=0
-# shellcheck disable=SC2086  # DELETE_FLAG is deliberately empty or one word
-"$RSYNC" -avz $DELETE_FLAG \
-  --exclude='.venv/' \
-  --exclude='node_modules/' \
-  --exclude='backend/data/' \
-  --exclude='backend/data.real-backup/' \
-  --exclude='backend/models/' \
-  --exclude='backend/secrets/' \
-  --exclude='backend/scripts/sweep/data/' \
-  --exclude='backend/scripts/sweep/results/' \
-  --exclude='backend/yolo*.pt' \
-  --exclude='frontend/dist/' \
-  --exclude='__pycache__/' \
-  --exclude='.pytest_cache/' \
-  --exclude='*.pyc' \
-  --exclude='.DS_Store' \
-  --exclude='/.env' \
+rsync -avz --delete-after "${RSYNC_EXCLUDES[@]}" \
   ./ "$TARGET:~/BirdWatcher/" || RSYNC_RC=$?
 # Treat "vanished files" (24) and "partial transfer" (23) as soft — the
 # subsequent bootstrap step is what matters; hard-fail on anything else.
