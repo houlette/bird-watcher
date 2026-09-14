@@ -225,13 +225,23 @@ def _nmm(dets: list[BirdDetection], iou_thresh: float) -> list[BirdDetection]:
     return keep
 
 
-def detect_birds(frame_image: np.ndarray, frame_index: int) -> list[BirdDetection]:
-    """Tiled YOLO bird detection on a single BGR frame."""
+def detect_birds(frame_image: np.ndarray, frame_index: int, stats: dict | None = None) -> list[BirdDetection]:
+    """Tiled YOLO bird detection on a single BGR frame.
+
+    If `stats` is given, `tiles` is incremented by the number of YOLO calls
+    made and `torch_threads` records the thread count in effect, which the
+    model load has been seen to reset."""
     model = _get_model()
     height, width = frame_image.shape[:2]
+    tiles = _tile_offsets(width, height)
+    if stats is not None:
+        import torch
+
+        stats["tiles"] = stats.get("tiles", 0) + len(tiles)
+        stats["torch_threads"] = torch.get_num_threads()
 
     raw: list[BirdDetection] = []
-    for tile_x, tile_y, tile_w, tile_h in _tile_offsets(width, height):
+    for tile_x, tile_y, tile_w, tile_h in tiles:
         tile = frame_image[tile_y : tile_y + tile_h, tile_x : tile_x + tile_w]
         results = model.predict(
             tile,

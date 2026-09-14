@@ -101,6 +101,9 @@ _ADDITIVE_COLUMNS = [
     ("pipeline_stats_daily", "detections_recurrence_suppressed", "INTEGER"),
     ("pipeline_stats_daily", "detections_backdrop_suppressed", "INTEGER"),
     ("pipeline_stats_daily", "detections_backdrop_scored", "INTEGER"),
+    # Per-stage wall-clock seconds for each processed visit; see
+    # pipeline/timing.py.
+    ("visits", "timings", "JSON"),
 ]
 
 

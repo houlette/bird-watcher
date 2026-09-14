@@ -56,12 +56,17 @@ class Frame:
     image: np.ndarray   # H x W x 3 BGR (OpenCV convention)
 
 
-def extract_frames(clip_path: Path, target_fps: float = 3.0) -> Iterator[Frame]:
+def extract_frames(clip_path: Path, target_fps: float = 3.0, stats: dict | None = None) -> Iterator[Frame]:
     """Yield Frames decoded from `clip_path`.
 
     Dispatches on file extension. Video files are sampled at ~`target_fps`;
     image files yield a single Frame. Raises ValueError if the file can't
     be decoded.
+
+    If `stats` is given it receives `source_frames_read`, `source_fps`,
+    `width` and `height`. `cap.read()` fully decodes every source frame,
+    including the ones sampling discards, so decode cost scales with
+    source_frames_read rather than with the frames yielded.
     """
     ext = clip_path.suffix.lower()
 
@@ -69,6 +74,8 @@ def extract_frames(clip_path: Path, target_fps: float = 3.0) -> Iterator[Frame]:
         image = cv2.imread(str(clip_path))
         if image is None:
             raise ValueError(f"Could not decode image: {clip_path}")
+        if stats is not None:
+            stats.update(source_frames_read=1, height=image.shape[0], width=image.shape[1])
         yield Frame(index=0, timestamp=0.0, image=image)
         return
 
@@ -87,6 +94,13 @@ def extract_frames(clip_path: Path, target_fps: float = 3.0) -> Iterator[Frame]:
     try:
         src_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
         step = max(1, int(round(src_fps / target_fps)))
+        if stats is not None:
+            stats.update(
+                source_frames_read=0,
+                source_fps=round(src_fps, 2),
+                width=int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                height=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+            )
 
         out_idx = 0
         src_idx = 0
@@ -94,6 +108,8 @@ def extract_frames(clip_path: Path, target_fps: float = 3.0) -> Iterator[Frame]:
             ok, frame = cap.read()
             if not ok:
                 break
+            if stats is not None:
+                stats["source_frames_read"] += 1
             timestamp = src_idx / src_fps
             if timestamp > MAX_PROCESS_DURATION_SECONDS:
                 break

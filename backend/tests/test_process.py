@@ -102,8 +102,16 @@ def test_classifier_rejection_still_creates_detection(db, tmp_path, monkeypatch)
         tracked_det = _FakeDetection()
 
         monkeypatch.setattr(process_module, "DATA_DIR", tmp_path)
-        monkeypatch.setattr(process_module, "extract_frames", lambda _p, target_fps=3.0: iter([_Frame(image=fake_frame_image)]))
-        monkeypatch.setattr(process_module, "detect_birds", lambda _img, _idx: [tracked_det])
+        def fake_extract(_p, target_fps=3.0, stats=None):
+            stats.update(source_frames_read=7, source_fps=20.0, width=100, height=100)
+            return iter([_Frame(image=fake_frame_image)])
+
+        def fake_detect(_img, _idx, stats=None):
+            stats["tiles"] = stats.get("tiles", 0) + 15
+            return [tracked_det]
+
+        monkeypatch.setattr(process_module, "extract_frames", fake_extract)
+        monkeypatch.setattr(process_module, "detect_birds", fake_detect)
         # Bypass the IoU tracker entirely — return the same det instance so
         # `det.crop` assigned in process_visit's loop is visible to ranking.
         monkeypatch.setattr(process_module, "Tracker", lambda: _FakeTracker([_FakeTrack(track_id=1, detections=[tracked_det])]))
@@ -130,6 +138,17 @@ def test_classifier_rejection_still_creates_detection(db, tmp_path, monkeypatch)
         assert d.confidence == 0.0
         assert d.crop_path == f"crops/v{visit.id}_t1.jpg"
         assert d.raw_predictions == []
+
+        # Every stage that ran is timed, the stages never exceed the total,
+        # and the frame, source-frame and tile counts reach the row.
+        t = session.get(Visit, visit.id).timings
+        assert {"decode", "detect", "scene_mask", "recurrence", "backdrop", "crop_extract", "track",
+                "rank", "save_crop", "fuse_crops", "classify", "crop_quality", "persist",
+                "source_frames", "push"} <= set(t["stages_s"])
+        assert all(v >= 0 for v in t["stages_s"].values())
+        assert t["unaccounted_s"] >= 0
+        assert t["counts"]["frames"] == 1 and t["counts"]["tiles"] == 15 and t["counts"]["tracks"] == 1
+        assert t["clip"]["source_frames_read"] == 7 and t["clip"]["ext"] == ".jpg"
     finally:
         session.close()
 

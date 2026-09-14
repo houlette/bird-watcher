@@ -31,6 +31,7 @@ from pipeline.notify import dispatch_for_detection
 from pipeline.backdrop import filter_detections as _backdrop_filter
 from pipeline.recurrence import filter_detections as _recurrence_filter
 from pipeline.scene_mask import filter_detections as _scene_mask_filter
+from pipeline.timing import StageTimer
 from pipeline.track import Track, Tracker
 
 log = logging.getLogger(__name__)
@@ -58,6 +59,13 @@ def process_visit(visit: Visit, db: Session) -> int:
         # Either way, it's not coming back; treat as a permanent skip so the
         # worker doesn't loop on this row forever.
         raise SkipFile(f"clip file missing on disk: {clip_path}")
+
+    # Every step below that can take real time runs inside exactly one
+    # timer.stage(), so the stages add up; see pipeline/timing.py.
+    timer = StageTimer()
+    timer.extra["clip"] = {"ext": clip_path.suffix.lower(), "bytes": clip_path.stat().st_size}
+    decode_stats: dict = {}
+    detect_stats: dict = {}
 
     # Idempotency guard. A visit only reaches here with processed_at NULL, but
     # that can mean "never run" OR "a prior attempt failed partway and left
@@ -117,35 +125,49 @@ def process_visit(visit: Visit, db: Session) -> int:
     # At 4K BGR a single frame is ~25 MB; a typical bird crop is ~120 KB.
     # Caching crops scales with bird-count, not frame-count, so we can raise
     # target_fps without OOM risk.
-    for frame in extract_frames(clip_path, target_fps=3.0):
+    frames = extract_frames(clip_path, target_fps=3.0, stats=decode_stats)
+    for frame in timer.iterate(frames, "decode"):
         any_frame_decoded = True
-        dets = detect_birds(frame.image, frame.index)
+        timer.count("frames")
+        with timer.stage("detect"):
+            dets = detect_birds(frame.image, frame.index, stats=detect_stats)
+        timer.count("boxes_detected", len(dets))
         # Scene-mask: drop YOLO detections in regions the user has
         # repeatedly labeled as Not-a-bird (hummingbird feeder, etc.).
         # Detections with strong YOLO confidence override the mask, so
         # an actual bird at the feeder still gets through.
-        dets, this_frame_suppressed = _scene_mask_filter(dets)
+        with timer.stage("scene_mask"):
+            dets, this_frame_suppressed = _scene_mask_filter(dets)
         scene_mask_suppressed += this_frame_suppressed
         # Second spatial pass, on exact boxes rather than coarse cells. The
         # scene mask needs the user to label; this one derives its own
         # fixtures from boxes that keep reappearing, so it keeps working
         # through a fortnight where nobody labels anything.
-        dets, this_frame_suppressed = _recurrence_filter(dets)
+        with timer.stage("recurrence"):
+            dets, this_frame_suppressed = _recurrence_filter(dets)
         recurrence_suppressed += this_frame_suppressed
         # Third pass, and the only one that needs neither a label nor a
         # repeat: the backdrop model knows what this yard looks like with
         # nothing in it, so a box that is pure wall, step or downspout is
         # rejected the first time it appears.
-        dets, this_frame_suppressed, this_frame_scored = _backdrop_filter(
-            dets, frame.image, visit.started_at or utcnow()
-        )
+        with timer.stage("backdrop"):
+            dets, this_frame_suppressed, this_frame_scored = _backdrop_filter(
+                dets, frame.image, visit.started_at or utcnow()
+            )
         backdrop_suppressed += this_frame_suppressed
         backdrop_scored += this_frame_scored
-        for d in dets:
-            d.crop = _extract_crop_from_image(d, frame.image)
-        tracker.update(frame.index, dets)
+        with timer.stage("crop_extract"):
+            for d in dets:
+                d.crop = _extract_crop_from_image(d, frame.image)
+        with timer.stage("track"):
+            tracker.update(frame.index, dets)
         # frame.image goes out of scope at the next iteration; the ~25 MB
         # allocation is freed before the next frame is decoded.
+
+    timer.extra["clip"].update(decode_stats)
+    timer.count("tiles", detect_stats.get("tiles", 0))
+    if "torch_threads" in detect_stats:
+        timer.extra["torch_threads"] = detect_stats["torch_threads"]
 
     if not any_frame_decoded:
         # Empty/corrupted clip — mark processed so we don't retry forever.
@@ -155,10 +177,13 @@ def process_visit(visit: Visit, db: Session) -> int:
         visit.recurrence_suppressed = recurrence_suppressed
         visit.backdrop_suppressed = backdrop_suppressed
         visit.backdrop_scored = backdrop_scored
+        visit.timings = timer.as_dict()
         db.commit()
         return 0
 
-    tracks = tracker.finalize()
+    with timer.stage("track"):
+        tracks = tracker.finalize()
+    timer.count("tracks", len(tracks))
     log.info("visit %d: %d tracks", visit.id, len(tracks))
 
     # ----------------------------------------------------------------------
@@ -194,7 +219,8 @@ def process_visit(visit: Visit, db: Session) -> int:
         # best-looking ones available across all frames. Motion blur and
         # mid-flight poses score low on the Laplacian-variance sharpness
         # term, letting in-focus perched frames win.
-        ranked = _rank_detections(track)
+        with timer.stage("rank"):
+            ranked = _rank_detections(track)
         if not ranked:
             continue
         best = ranked[0]
@@ -219,7 +245,8 @@ def process_visit(visit: Visit, db: Session) -> int:
         # bird"). These are the highest-value active-learning examples — YOLO
         # sees a bird shape but the classifier isn't confident, so an
         # explicit human label closes the loop.
-        crop_rel_path = _save_crop(best, visit_id=visit.id, track_id=track.track_id)
+        with timer.stage("save_crop"):
+            crop_rel_path = _save_crop(best, visit_id=visit.id, track_id=track.track_id)
 
         # Hand the classifier the top-K crops. Two behaviors switched by the
         # _USE_MULTI_FRAME_FUSION constant:
@@ -245,14 +272,18 @@ def process_visit(visit: Visit, db: Session) -> int:
         fused_crop_image: "cv2.Mat | None" = None
         fusion_stats: dict = {}
         if _USE_MULTI_FRAME_FUSION:
-            fused_crop_image = _fuse_crops(candidate_crops, stats=fusion_stats)
-            preds = classify_bird(fused_crop_image) if fused_crop_image is not None else []
+            with timer.stage("fuse_crops"):
+                fused_crop_image = _fuse_crops(candidate_crops, stats=fusion_stats)
+            with timer.stage("classify"):
+                preds = classify_bird(fused_crop_image) if fused_crop_image is not None else []
             per_crop_predictions = [preds] if preds else []
         else:
-            per_crop_predictions = [classify_bird(c) for c in candidate_crops]
+            with timer.stage("classify"):
+                per_crop_predictions = [classify_bird(c) for c in candidate_crops]
             per_crop_predictions = [p for p in per_crop_predictions if p]
 
-        area_px, brightness, sharpness = _crop_quality(best.crop, list(best.bbox))
+        with timer.stage("crop_quality"):
+            area_px, brightness, sharpness = _crop_quality(best.crop, list(best.bbox))
 
         if not per_crop_predictions:
             # Classifier rejected every crop. Persist with species_id=NULL;
@@ -283,12 +314,13 @@ def process_visit(visit: Visit, db: Session) -> int:
         # prior reads max(w, h) from it. When no size_priors.json is present
         # (fresh DB / haven't calibrated yet), the prior is a no-op. fuse()
         # issues DB *reads* only — no write lock.
-        fused = fuse(
-            [(p.species, p.probability) for p in averaged],
-            db=db,
-            when=visit.started_at,
-            bbox=tuple(best.bbox),
-        )
+        with timer.stage("priors"):
+            fused = fuse(
+                [(p.species, p.probability) for p in averaged],
+                db=db,
+                when=visit.started_at,
+                bbox=tuple(best.bbox),
+            )
         if not fused:
             continue
 
@@ -311,11 +343,13 @@ def process_visit(visit: Visit, db: Session) -> int:
         nab_p_single = nab_p_polished = None
         if binary_filter_enabled() and top.species != NOT_A_BIRD_LABEL:
             filter_crop = fused_crop_image if _USE_MULTI_FRAME_FUSION else best.crop
-            nab_p = nab_probability(filter_crop) if filter_crop is not None else None
+            with timer.stage("binary_filter"):
+                nab_p = nab_probability(filter_crop) if filter_crop is not None else None
             # Record the same detection scored two other ways. Costs two extra
             # model calls (~0.08 s each) and changes no decision: only `nab_p`
             # below is acted on. See Detection.nab_p_served for why.
-            nab_p_single, nab_p_polished = _score_crop_variants(best, filter_crop, nab_p)
+            with timer.stage("binary_filter_shadow"):
+                nab_p_single, nab_p_polished = _score_crop_variants(best, filter_crop, nab_p)
             if nab_p is not None and nab_p >= settings.bird_binary_nab_threshold:
                 log.info(
                     "track %d: binary filter override → NAB (was %s @ %.2f; NAB P=%.2f)",
@@ -374,30 +408,34 @@ def process_visit(visit: Visit, db: Session) -> int:
     # snapshot and could fail with SQLITE_BUSY_SNAPSHOT — which busy_timeout
     # does NOT retry — if the API committed a write meanwhile. Phase 1 wrote
     # nothing, so rollback discards only the read transaction.
-    db.rollback()
-    species_id_cache: dict[str, int] = {}
-    detections: list[Detection] = []
-    for rec in pending:
-        name = rec.pop("species_name")
-        if name is None:
-            species_id = None
-        else:
-            species_id = species_id_cache.get(name)
-            if species_id is None:
-                species_id = _resolve_species(db, name)
-                species_id_cache[name] = species_id
-        detection = Detection(visit_id=visit.id, species_id=species_id, **rec)
-        db.add(detection)
-        detections.append(detection)
+    with timer.stage("persist"):
+        db.rollback()
+        species_id_cache: dict[str, int] = {}
+        detections: list[Detection] = []
+        for rec in pending:
+            name = rec.pop("species_name")
+            if name is None:
+                species_id = None
+            else:
+                species_id = species_id_cache.get(name)
+                if species_id is None:
+                    species_id = _resolve_species(db, name)
+                    species_id_cache[name] = species_id
+            detection = Detection(visit_id=visit.id, species_id=species_id, **rec)
+            db.add(detection)
+            detections.append(detection)
 
-    visit.processed_at = utcnow()
-    visit.ended_at = utcnow()
-    visit.processing_error = None
-    visit.scene_mask_suppressed = scene_mask_suppressed
-    visit.recurrence_suppressed = recurrence_suppressed
-    visit.backdrop_suppressed = backdrop_suppressed
-    visit.backdrop_scored = backdrop_scored
-    db.commit()
+        visit.processed_at = utcnow()
+        visit.ended_at = utcnow()
+        visit.processing_error = None
+        visit.scene_mask_suppressed = scene_mask_suppressed
+        visit.recurrence_suppressed = recurrence_suppressed
+        visit.backdrop_suppressed = backdrop_suppressed
+        visit.backdrop_scored = backdrop_scored
+        # Provisional: rewritten below once the side effects have been timed,
+        # so a failure there still leaves the compute timings on the row.
+        visit.timings = timer.as_dict()
+        db.commit()
     log.info("visit %d: %d tracks persisted (some may be Unidentified)", visit.id, len(detections))
 
     # ---- Phase 3: side effects AFTER commit — no write lock held. ----
@@ -406,22 +444,34 @@ def process_visit(visit: Visit, db: Session) -> int:
     # false-positive fine-tune; combined with Detection.bbox and the
     # user-applied Correction.correct_species_id, they form the (image, bbox,
     # label) triples the fine-tune will need.
-    try:
-        _save_source_frames(clip_path, frames_to_save, visit_id=visit.id)
-    except Exception:  # noqa: BLE001
-        # Non-fatal: missing source frames just means this visit's tracks
-        # won't be available for YOLO fine-tune. Detection rows still land.
-        log.exception("Failed to save source frames for visit %d", visit.id)
+    with timer.stage("source_frames"):
+        try:
+            _save_source_frames(clip_path, frames_to_save, visit_id=visit.id)
+        except Exception:  # noqa: BLE001
+            # Non-fatal: missing source frames just means this visit's tracks
+            # won't be available for YOLO fine-tune. Detection rows still land.
+            log.exception("Failed to save source frames for visit %d", visit.id)
 
     # Notify subscribers of species not seen recently. Best-effort: failures
     # are non-fatal, and each dispatch runs its own tiny transaction (it may
     # prune dead subscriptions). Done after the main commit so the detections
     # are durable first and the write lock isn't held across push network I/O.
-    for detection in detections:
-        try:
-            dispatch_for_detection(db, detection)
-        except Exception:  # noqa: BLE001
-            log.exception("Push dispatch failed for detection %d", detection.id)
+    with timer.stage("push"):
+        for detection in detections:
+            try:
+                dispatch_for_detection(db, detection)
+            except Exception:  # noqa: BLE001
+                log.exception("Push dispatch failed for detection %d", detection.id)
+
+    # Second short write with the complete timings. Losing it costs only the
+    # side-effect stages, so a failure is logged and swallowed.
+    try:
+        visit.timings = timer.as_dict()
+        db.commit()
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        log.exception("Failed to record timings for visit %d", visit.id)
+    log.info("visit %d timing: %s", visit.id, timer.summary())
 
     return len(tracks)
 

@@ -851,6 +851,10 @@ local variables. For ML model loading, follow the singleton pattern in
 lazy-loaded, deferred heavy import) so tests can import the module
 without torch.
 
+Wrap the new stage in `with timer.stage("name"):` so its cost lands in
+`Visit.timings`. Stages must not nest inside another timed stage, or the
+times stop adding up; anything left untimed shows as `unaccounted_s`.
+
 ### Add a new persistent column
 
 1. Add the mapped column to the model in `db/models.py` (nullable).
@@ -996,6 +1000,25 @@ host's real `yard_priors.json` never pollutes test runs.
    day's 37 kills was a squirrel, a stone wall or sunlit foliage, so the
    filter was right and the yard was simply quiet. The Tavern and Art
    pages hide the same rows, so all three surfaces go empty together.
+
+### "The worker is falling behind"
+
+A fully processed daylight visit takes about three minutes on the VM, so
+at midday arrivals can outrun the worker by tenfold, and anything still
+pending after 24 hours loses its clip to retention. Each visit that ran
+through `process_visit` since 2026-09-14 carries `Visit.timings`: seconds
+per stage (`decode`, `detect`, `scene_mask`, `recurrence`, `backdrop`,
+`crop_extract`, `track`, then the per-track and persistence stages),
+`unaccounted_s`, and counts of sampled frames, source frames decoded and
+YOLO tiles. The worker also logs one line per visit:
+
+```bash
+docker compose logs --since 1h api | grep "timing:"
+```
+
+`decode` includes every source frame `cv2.VideoCapture.read()` decodes and
+sampling throws away, so compare it against `clip.source_frames_read`, not
+`counts.frames`.
 
 ### "Push notifications never arrive"
 

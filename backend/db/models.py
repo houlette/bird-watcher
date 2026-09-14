@@ -96,6 +96,11 @@ class Visit(Base):
     # Denominator for the backdrop rate. Zero means the model was not
     # loaded for that hour, which is a different thing from finding nothing.
     backdrop_scored: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Wall-clock seconds per processing stage, plus frame, source-frame and
+    # tile counts; see pipeline/timing.py for the shape. Written for visits
+    # that ran through process_visit, NULL for skips and for rows processed
+    # before 2026-09-14.
+    timings: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     detections: Mapped[list["Detection"]] = relationship(back_populates="visit", cascade="all, delete-orphan")
 
