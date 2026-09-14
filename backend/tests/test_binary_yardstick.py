@@ -26,6 +26,7 @@ from scripts.train import heldout
 
 BEFORE = datetime(2026, 5, 20, 12)
 AFTER = datetime(2026, 7, 1, 12)
+TZ = ZoneInfo("America/New_York")
 
 
 @pytest.fixture()
@@ -113,7 +114,9 @@ def test_cohort_rules(db, yard):
     yard.correct(sibling_of_trained, NOT_A_BIRD_LABEL)
     db.commit()
 
-    cohorts, excluded = heldout.select_cohorts(db, {trained}, yard.data_dir)
+    # Every row is captured on one day, and it holds an easy bird, so the
+    # day split keeps them all.
+    cohorts, excluded, days = heldout.select_cohorts(db, {trained}, TZ, yard.data_dir)
 
     assert cohorts == {
         heldout.HARD_BIRDS: [hard],
@@ -122,11 +125,58 @@ def test_cohort_rules(db, yard):
     }
     assert excluded[heldout.JUNK] == {"filter_fired": 1, "visit_in_deployed_training": 1}
     assert excluded[heldout.EASY_BIRDS] == {"crop_missing": 1}
+    assert days == ["2026-07-01"]
 
 
-def _yardstick(**cohorts) -> heldout.Yardstick:
+def test_recent_rows_are_split_by_whole_capture_day(db, yard):
+    def on(day, n_junk, n_hard=0, easy=False):
+        ids = []
+        for i in range(n_junk + n_hard):
+            det = yard.detection(yard.visit(started_at=datetime(2026, 7, day, 15, i)))
+            yard.correct(det, NOT_A_BIRD_LABEL if i < n_junk else "Northern Cardinal")
+            ids.append(det)
+        if easy:
+            ids.append(yard.detection(yard.visit(started_at=datetime(2026, 7, day, 16)), audio_confirmed=1))
+        return ids
+
+    by_day = {1: on(1, 2, 1, easy=True), 2: on(2, 6), 3: on(3, 5), 4: on(4, 3, 2), 5: on(5, 1, 1)}
+    # Captured in the deployed model's training period, labelled later.
+    old = yard.detection(yard.visit(started_at=BEFORE))
+    yard.correct(old, NOT_A_BIRD_LABEL)
+    db.commit()
+
+    cohorts, excluded, days = heldout.select_cohorts(db, set(), TZ, yard.data_dir)
+    kept = {i for ids in cohorts.values() for i in ids}
+
+    assert "2026-07-01" in days
+    assert old in kept
+    for day, ids in by_day.items():
+        in_yardstick = f"2026-07-{day:02d}" in days
+        assert all((i in kept) == in_yardstick for i in ids)
+    n_junk = len(cohorts[heldout.JUNK]) - 1  # less the old row
+    assert 7 <= n_junk <= 10  # half of 17, give or take one day's worth
+    trainable = sum(e.get("capture_day_trainable", 0) for e in excluded.values())
+    assert trainable == len({i for ids in by_day.values() for i in ids} - kept) > 0
+
+
+def test_split_days_balances_each_cohort_and_honours_forced_days():
+    counts = {
+        "a": Counter(junk=50), "b": Counter(junk=40, hard_birds=1), "c": Counter(junk=30, hard_birds=6),
+        "d": Counter(junk=20, hard_birds=5), "e": Counter(junk=10), "f": Counter(hard_birds=8),
+        "g": Counter(junk=5, hard_birds=2), "forced": Counter(hard_birds=3),
+    }
+    held = heldout.split_days(counts, {"forced", "only-easy"}, random.Random(0))
+
+    assert {"forced", "only-easy"} <= held
+    for cohort, total in (("junk", 155), ("hard_birds", 25)):
+        in_held = sum(c[cohort] for d, c in counts.items() if d in held)
+        assert abs(in_held - total / 2) <= 0.15 * total
+
+
+def _yardstick(heldout_days=(), **cohorts) -> heldout.Yardstick:
     return heldout.Yardstick("2026-09-14T00:00:00+00:00",
-                             {c: tuple(cohorts.get(c, ())) for c in heldout.COHORTS})
+                             {c: tuple(cohorts.get(c, ())) for c in heldout.COHORTS},
+                             frozenset(heldout_days))
 
 
 def test_export_withholds_yardstick_visits_and_poor_quality(db, yard):
@@ -146,13 +196,20 @@ def test_export_withholds_yardstick_visits_and_poor_quality(db, yard):
     yard.correct(bird, "Northern Cardinal", source="llm-claude")
     junk = yard.detection(yard.visit())
     yard.correct(junk, NOT_A_BIRD_LABEL)
+
+    # 02:30 UTC on 9 July is still 8 July at the camera.
+    reserved_day = yard.detection(yard.visit(started_at=datetime(2026, 7, 9, 2, 30)))
+    yard.correct(reserved_day, NOT_A_BIRD_LABEL)
     db.commit()
 
-    samples, dropped = export.collect(db, _yardstick(junk=[held]), yard.data_dir)
+    samples, dropped = export.collect(
+        db, _yardstick(junk=[held], heldout_days=["2026-07-08"]), TZ, yard.data_dir
+    )
 
     assert {(s.detection_id, s.cls) for s in samples} == {(bird, "bird"), (junk, "not_a_bird")}
     assert dropped["held out: yardstick row"] == 1
     assert dropped["held out: same visit as a yardstick row"] == 1
+    assert dropped["held out: capture day reserved for the yardstick"] == 1
     assert dropped[f"label {POOR_QUALITY_LABEL}"] == 1
     assert dropped["source scene-mask-backfill"] == 1
 

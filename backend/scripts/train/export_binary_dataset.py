@@ -25,9 +25,10 @@ Filters:
     than the species export since bird/not-bird is augmentation-robust.
   - Drops "Unknown bird" (uninformative as supervision) and "Poor
     quality" (db/models.py: the user is saying the crop is noise).
-  - Refuses the held-out yardstick in scripts/train/heldout.py and every
-    other detection from the same visits, so no retrain can absorb the
-    rows it will be judged on.
+  - Refuses the held-out yardstick in scripts/train/heldout.py, every
+    other detection from the same visits, and every detection captured on
+    a capture day reserved for the yardstick, so no retrain can absorb the
+    rows it will be judged on or their near-copies.
 
 Train/val is split by group, not by detection. Crops from one visit share
 the second, the light and usually the object, and 72.6% of labelled
@@ -50,7 +51,7 @@ import shutil
 import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -111,7 +112,9 @@ def _crop_ok(path: Path) -> bool:
     return True
 
 
-def collect(db, yardstick: heldout.Yardstick, data_dir: Path = DATA_DIR) -> tuple[list[Sample], Counter]:
+def collect(
+    db, yardstick: heldout.Yardstick, tz: ZoneInfo, data_dir: Path = DATA_DIR
+) -> tuple[list[Sample], Counter]:
     """Every exportable sample, and a Counter of rows left out by reason."""
     labels = heldout.latest_labels(db)
     frozen, siblings = heldout.withheld_detection_ids(db, yardstick)
@@ -137,6 +140,9 @@ def collect(db, yardstick: heldout.Yardstick, data_dir: Path = DATA_DIR) -> tupl
             dropped["held out: same visit as a yardstick row"] += 1
             continue
         det, started_at = dets[det_id]
+        if heldout.local_day(started_at, tz) in yardstick.heldout_days:
+            dropped["held out: capture day reserved for the yardstick"] += 1
+            continue
         crop = data_dir / det.crop_path
         if not _crop_ok(crop):
             dropped["crop missing, tiny or extreme aspect"] += 1
@@ -149,7 +155,7 @@ def collect(db, yardstick: heldout.Yardstick, data_dir: Path = DATA_DIR) -> tupl
 def group_key(sample: Sample, by: str, tz: ZoneInfo):
     if by == "visit":
         return sample.visit_id
-    return sample.captured_at.replace(tzinfo=timezone.utc).astimezone(tz).date().isoformat()
+    return heldout.local_day(sample.captured_at, tz)
 
 
 def split_by_group(samples: list[Sample], key, val_frac: float, rng: random.Random):
@@ -195,13 +201,13 @@ def main() -> int:
     args = ap.parse_args()
 
     yardstick = heldout.load_yardstick()
+    tz = ZoneInfo(settings.camera_timezone)
     db = SessionLocal()
     try:
-        samples, dropped = collect(db, yardstick)
+        samples, dropped = collect(db, yardstick, tz)
     finally:
         db.close()
 
-    tz = ZoneInfo(settings.camera_timezone)
     train, val, n_groups, n_val_groups = split_by_group(
         samples, lambda s: group_key(s, args.group_by, tz), args.val_frac, random.Random(args.seed)
     )
@@ -233,11 +239,16 @@ def main() -> int:
         total = len(split)
         print(f"  {split_name:<6} {counts['bird']:>7} {counts['not_a_bird']:>11} {total:>7}  "
               f"{counts['bird'] / max(total, 1):.1%}")
+    recent = Counter(s.cls for s in samples if heldout.local_day(s.captured_at, tz) >= heldout.DAY_SPLIT_FROM)
+    print(f"  captured on or after {heldout.DAY_SPLIT_FROM}: {recent['bird']} bird, "
+          f"{recent['not_a_bird']} not_a_bird")
     print()
-    held = dropped["held out: yardstick row"] + dropped["held out: same visit as a yardstick row"]
+    held = sum(n for reason, n in dropped.items() if reason.startswith("held out"))
     print(f"Withheld {held} labelled crops for the held-out yardstick frozen {yardstick.frozen_at}:")
     print(f"  {dropped['held out: yardstick row']} yardstick rows, "
-          f"{dropped['held out: same visit as a yardstick row']} from the same visits")
+          f"{dropped['held out: same visit as a yardstick row']} from the same visits, "
+          f"{dropped['held out: capture day reserved for the yardstick']} from "
+          f"{len(yardstick.heldout_days)} reserved capture days")
     print("Other rows left out:")
     for reason, n in sorted(dropped.items()):
         if not reason.startswith("held out"):
