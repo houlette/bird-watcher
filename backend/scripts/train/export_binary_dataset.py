@@ -23,7 +23,18 @@ species export, which is GOLD-only):
 Filters:
   - Crop file exists, ≥48×48 px, aspect ∈ [0.4, 2.5]. Wider tolerance
     than the species export since bird/not-bird is augmentation-robust.
-  - Drops "Unknown bird" (uninformative as supervision).
+  - Drops "Unknown bird" (uninformative as supervision) and "Poor
+    quality" (db/models.py: the user is saying the crop is noise).
+  - Refuses the held-out yardstick in scripts/train/heldout.py and every
+    other detection from the same visits, so no retrain can absorb the
+    rows it will be judged on.
+
+Train/val is split by group, not by detection. Crops from one visit share
+the second, the light and usually the object, and 72.6% of labelled
+crops had a sibling in the same visit, so a random split put near-copies
+on both sides and flattered val accuracy. The default group is the local
+capture day, which also keeps a recurring glint or leaf from one
+afternoon out of both sides; `--group-by visit` is the weaker option.
 
 Usage:
     cd backend
@@ -37,22 +48,26 @@ import logging
 import random
 import shutil
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from PIL import Image, UnidentifiedImageError
-from sqlalchemy import func
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from db.models import (  # noqa: E402
     NOT_A_BIRD_LABEL,
-    Correction,
-    Detection,
-    Species,
+    POOR_QUALITY_LABEL,
     UNKNOWN_BIRD_LABEL,
+    Detection,
+    Visit,
 )
 from db.session import SessionLocal  # noqa: E402
+from scripts.train import heldout  # noqa: E402
+from settings import settings  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("export_binary_dataset")
@@ -67,6 +82,17 @@ ACCEPTED_SOURCES = (None, "user-confirmed", "llm-claude-confirmed",
 MIN_DIM = 48
 MIN_ASPECT = 0.4
 MAX_ASPECT = 2.5
+
+CLASSES = ("bird", "not_a_bird")
+
+
+@dataclass(frozen=True)
+class Sample:
+    detection_id: int
+    crop: Path
+    cls: str
+    visit_id: int
+    captured_at: datetime
 
 
 def _crop_ok(path: Path) -> bool:
@@ -85,92 +111,140 @@ def _crop_ok(path: Path) -> bool:
     return True
 
 
+def collect(db, yardstick: heldout.Yardstick, data_dir: Path = DATA_DIR) -> tuple[list[Sample], Counter]:
+    """Every exportable sample, and a Counter of rows left out by reason."""
+    labels = heldout.latest_labels(db)
+    frozen, siblings = heldout.withheld_detection_ids(db, yardstick)
+    dets = {
+        det.id: (det, started_at)
+        for det, started_at in db.query(Detection, Visit.started_at)
+        .join(Visit, Visit.id == Detection.visit_id)
+        .filter(Detection.id.in_(list(labels)))
+    }
+    samples: list[Sample] = []
+    dropped: Counter[str] = Counter()
+    for det_id, (source, _, label) in sorted(labels.items()):
+        if label in (UNKNOWN_BIRD_LABEL, POOR_QUALITY_LABEL):
+            dropped[f"label {label}"] += 1
+            continue
+        if source not in ACCEPTED_SOURCES:
+            dropped[f"source {source}"] += 1
+            continue
+        if det_id in frozen:
+            dropped["held out: yardstick row"] += 1
+            continue
+        if det_id in siblings:
+            dropped["held out: same visit as a yardstick row"] += 1
+            continue
+        det, started_at = dets[det_id]
+        crop = data_dir / det.crop_path
+        if not _crop_ok(crop):
+            dropped["crop missing, tiny or extreme aspect"] += 1
+            continue
+        cls = "not_a_bird" if label == NOT_A_BIRD_LABEL else "bird"
+        samples.append(Sample(det_id, crop, cls, det.visit_id, started_at))
+    return samples, dropped
+
+
+def group_key(sample: Sample, by: str, tz: ZoneInfo):
+    if by == "visit":
+        return sample.visit_id
+    return sample.captured_at.replace(tzinfo=timezone.utc).astimezone(tz).date().isoformat()
+
+
+def split_by_group(samples: list[Sample], key, val_frac: float, rng: random.Random):
+    """Walk the groups in seeded random order and put each in val if val
+    still holds at most `val_frac` of each class with it added. No group
+    lands on both sides.
+
+    Both limits matter on this data. On 2026-09-13 one day, 2026-05-25, held
+    28% of the exportable crops, and stopping at the first group to cross
+    the target put 30.5% of crops in val. A single limit on the total
+    instead filled val with the small bird-only days from June, giving 512
+    birds and 85 junk crops against a train set that was half junk."""
+    groups: dict = defaultdict(list)
+    for s in samples:
+        groups[key(s)].append(s)
+    if len(groups) < 2:
+        raise SystemExit(f"Only {len(groups)} group(s); cannot split train from val.")
+    caps = {cls: val_frac * n for cls, n in Counter(s.cls for s in samples).items()}
+    order = sorted(groups, key=str)
+    rng.shuffle(order)
+    val_keys = set()
+    in_val: Counter[str] = Counter()
+    for k in order:
+        adds = Counter(s.cls for s in groups[k])
+        if all(in_val[cls] + n <= caps[cls] for cls, n in adds.items()):
+            val_keys.add(k)
+            in_val += adds
+    if not val_keys:
+        val_keys.add(min(order, key=lambda k: len(groups[k])))
+    train = [s for k in order if k not in val_keys for s in groups[k]]
+    val = [s for k in order if k in val_keys for s in groups[k]]
+    return train, val, len(groups), len(val_keys)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--val-frac", type=float, default=0.10)
+    ap.add_argument("--group-by", choices=("day", "visit"), default="day",
+                    help="Unit that train and val may not share (default: local capture day).")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--symlink", action="store_true")
     args = ap.parse_args()
 
-    random.seed(args.seed)
+    yardstick = heldout.load_yardstick()
     db = SessionLocal()
     try:
-        # Latest correction per detection (so a user override of a
-        # Claude label wins).
-        sub = (
-            db.query(Correction.detection_id, func.max(Correction.id).label("latest"))
-            .group_by(Correction.detection_id)
-            .subquery()
-        )
-        rows = (
-            db.query(Detection, Species.common_name, Correction.source)
-            .join(sub, sub.c.detection_id == Detection.id)
-            .join(Correction, Correction.id == sub.c.latest)
-            .join(Species, Species.id == Correction.correct_species_id)
-            .all()
-        )
-
-        # Bucket into bird/not_a_bird, drop Unknown bird.
-        buckets: dict[str, list[tuple[int, Path]]] = defaultdict(list)
-        n_dropped_bad_crop = 0
-        for det, name, source in rows:
-            if name == UNKNOWN_BIRD_LABEL:
-                continue
-            if source not in ACCEPTED_SOURCES:
-                continue
-            crop_abs = DATA_DIR / det.crop_path
-            if not _crop_ok(crop_abs):
-                n_dropped_bad_crop += 1
-                continue
-            cls = "not_a_bird" if name == NOT_A_BIRD_LABEL else "bird"
-            buckets[cls].append((det.id, crop_abs))
-
-        log.info("Dropped %d crops (missing/tiny/extreme-aspect)", n_dropped_bad_crop)
-        for cls, items in buckets.items():
-            log.info("  %s: %d", cls, len(items))
-
-        # Wipe and recreate output tree.
-        out = args.out.resolve()
-        if out.exists():
-            log.info("Removing existing %s …", out)
-            shutil.rmtree(out)
-        (out / "train").mkdir(parents=True)
-        (out / "val").mkdir(parents=True)
-
-        total_train = 0
-        total_val = 0
-        for cls in ("bird", "not_a_bird"):
-            samples = buckets[cls]
-            random.shuffle(samples)
-            n_val = max(1, int(len(samples) * args.val_frac))
-            val, train = samples[:n_val], samples[n_val:]
-            (out / "train" / cls).mkdir()
-            (out / "val" / cls).mkdir()
-            for det_id, crop_abs in train:
-                dst = out / "train" / cls / f"det_{det_id}.jpg"
-                if args.symlink:
-                    dst.symlink_to(crop_abs)
-                else:
-                    shutil.copy(crop_abs, dst)
-            for det_id, crop_abs in val:
-                dst = out / "val" / cls / f"det_{det_id}.jpg"
-                if args.symlink:
-                    dst.symlink_to(crop_abs)
-                else:
-                    shutil.copy(crop_abs, dst)
-            total_train += len(train)
-            total_val += len(val)
-
-        print()
-        print(f"Wrote {total_train} train + {total_val} val crops to {out}")
-        print(f"  bird:        {len(buckets['bird'])} total")
-        print(f"  not_a_bird:  {len(buckets['not_a_bird'])} total")
-        print()
-        print("Next: python scripts/train/finetune_binary.py "
-              f"--data {out} --out {out.parent / 'binary_filter'}")
+        samples, dropped = collect(db, yardstick)
     finally:
         db.close()
+
+    tz = ZoneInfo(settings.camera_timezone)
+    train, val, n_groups, n_val_groups = split_by_group(
+        samples, lambda s: group_key(s, args.group_by, tz), args.val_frac, random.Random(args.seed)
+    )
+
+    # Wipe and recreate output tree.
+    out = args.out.resolve()
+    if out.exists():
+        log.info("Removing existing %s …", out)
+        shutil.rmtree(out)
+    for split_name, split in (("train", train), ("val", val)):
+        for cls in CLASSES:
+            (out / split_name / cls).mkdir(parents=True)
+        for s in split:
+            dst = out / split_name / s.cls / f"det_{s.detection_id}.jpg"
+            if args.symlink:
+                dst.symlink_to(s.crop)
+            else:
+                shutil.copy(s.crop, dst)
+
+    key_desc = f"local capture day ({settings.camera_timezone})" if args.group_by == "day" else "visit_id"
+    print()
+    print(f"Wrote {len(train)} train + {len(val)} val crops to {out}")
+    print(f"Split grouped by {key_desc}: {n_groups} groups, {n_val_groups} in val "
+          f"({len(val) / max(len(samples), 1):.1%} of crops)")
+    print()
+    print(f"  {'':<6} {'bird':>7} {'not_a_bird':>11} {'total':>7}  bird share")
+    for split_name, split in (("train", train), ("val", val)):
+        counts = Counter(s.cls for s in split)
+        total = len(split)
+        print(f"  {split_name:<6} {counts['bird']:>7} {counts['not_a_bird']:>11} {total:>7}  "
+              f"{counts['bird'] / max(total, 1):.1%}")
+    print()
+    held = dropped["held out: yardstick row"] + dropped["held out: same visit as a yardstick row"]
+    print(f"Withheld {held} labelled crops for the held-out yardstick frozen {yardstick.frozen_at}:")
+    print(f"  {dropped['held out: yardstick row']} yardstick rows, "
+          f"{dropped['held out: same visit as a yardstick row']} from the same visits")
+    print("Other rows left out:")
+    for reason, n in sorted(dropped.items()):
+        if not reason.startswith("held out"):
+            print(f"  {n:>6}  {reason}")
+    print()
+    print("Next: python scripts/train/finetune_binary.py "
+          f"--data {out} --out {out.parent / 'binary_filter'}")
     return 0
 
 
