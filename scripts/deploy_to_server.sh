@@ -42,8 +42,29 @@ ssh "$TARGET" "mkdir -p ~/BirdWatcher"
 # frontend and the API image is the important part — losing it because a
 # stale build artifact disappeared between rsync's enumeration and copy
 # phases is a regular footgun.
+#
+# macOS now ships openrsync as /usr/bin/rsync. It does not send filter rules
+# to the remote side, so with --delete-after every --exclude below is ignored
+# when deleting. On 2026-09-14 a dry run listed all 48,453 files under
+# backend/data on the VM for deletion, birdwatcher.db included, and a real
+# deploy deleted that day's camera uploads from backend/data/clips. Only root
+# ownership of the other directories kept them. Anchored excludes and
+# --filter='P ...' made no difference. So: use GNU rsync when it is
+# installed, and otherwise sync without deleting, which leaves files removed
+# locally behind on the remote until someone clears them by hand.
+RSYNC=rsync
+for candidate in /opt/homebrew/bin/rsync /usr/local/bin/rsync; do
+  if [ -x "$candidate" ]; then RSYNC="$candidate"; break; fi
+done
+DELETE_FLAG="--delete-after"
+if "$RSYNC" --version 2>&1 | grep -qi openrsync; then
+  echo "WARNING: $RSYNC is openrsync, which ignores --exclude when deleting on the remote." >&2
+  echo "         Syncing without --delete-after. 'brew install rsync' restores deletion safely." >&2
+  DELETE_FLAG=""
+fi
 RSYNC_RC=0
-rsync -avz --delete-after \
+# shellcheck disable=SC2086  # DELETE_FLAG is deliberately empty or one word
+"$RSYNC" -avz $DELETE_FLAG \
   --exclude='.venv/' \
   --exclude='node_modules/' \
   --exclude='backend/data/' \
