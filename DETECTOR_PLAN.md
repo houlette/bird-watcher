@@ -244,7 +244,7 @@ boxes.
 
 | Step | Status | Gate result | Date, commit |
 |---|---|---|---|
-| 1 | in progress: gate 1.2 running on FP32 | 1.1: FP32 PASS (lost 0 of 261 PyTorch-found birds, 95% CI 0-1.5%; junk found 44% vs 44%; confidence change 0.000; identical box counts). INT8 FAIL (lost 5 of 261, 1.9%, CI 0.8-4.4%; 14.5% of boxes cross 0.65; gained 19 birds). Nano FAIL (lost 108 of 261, 41.4%). Continue with FP32. | 2026-09-15 |
+| 1 | in progress: waiting on gate 1.4 (Ryan) | 1.3: PASS for every FP32 configuration. Peak process memory 983 MB for PyTorch, 1,876 MB for 4 tiles at 1 thread each (+0.89 GB), 1,390 MB for 2 tiles at 2 threads (+0.41 GB), 1,624 MB for 3 tiles at 1 thread (+0.64 GB); worst projection 1.98 + 0.89 = 2.87 GB against the 3.4 GB limit. Same paused session: 0.231, 0.229 and 0.259 s per tile against a PyTorch anchor of 0.345 (−33%, −34%, −25%); the morning session had 4 tiles at 0.199 (−43%), so the 4-core gain is somewhere between. 1.2: PASS but thin: 12 of 12 PyTorch boxes matched on 60 decoded frames from 30 clips, identical counts; only 12 boxes because first and middle frames rarely held a bird. Later parity checks should sample frames at detected indices, at least 100 boxes. 1.1: FP32 PASS (lost 0 of 261 PyTorch-found birds, 95% CI 0-1.5%; junk found 44% vs 44%; confidence change 0.000; identical box counts). INT8 FAIL (lost 5 of 261, 1.9%, CI 0.8-4.4%; 14.5% of boxes cross 0.65; gained 19 birds). Nano FAIL (lost 108 of 261, 41.4%). Continue with FP32. | 2026-09-15 |
 | 2 | not started | | |
 | 3 | not started | | |
 | 4 | not started | | |
