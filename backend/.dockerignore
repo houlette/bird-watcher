@@ -4,3 +4,8 @@ __pycache__
 data
 models
 .env
+# Local experiment output synced to the VM by the deploy; 1.7 GB of npz files
+# that were being baked into every image on a root disk that runs near full.
+scripts/sweep/cache
+scripts/sweep/data
+scripts/sweep/results
