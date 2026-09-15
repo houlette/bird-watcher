@@ -22,7 +22,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
 
-from db.models import Correction, Detection, Visit
+from db.models import NOT_A_BIRD_LABEL, POOR_QUALITY_LABEL, Correction, Detection, Species, Visit
 from db.session import SessionLocal
 from db.utils import utcnow
 from ingest.haikubox import POLL_INTERVAL_SECONDS as HAIKUBOX_POLL_SECONDS
@@ -207,9 +207,9 @@ def _process_pending() -> None:
 
 
 # Source frames are saved per persisted track for a future YOLO fine-tune.
-# We retain them long enough for the user's labeling to catch up to fresh
-# detections (median lag is hours, occasional outliers run days). 14 days is
-# generous without unbounded disk growth — ~1.5–2 GB/day in steady state.
+# Frames the retention pass does not keep indefinitely (see
+# _preserved_detection_keys) are held long enough for labelling to catch up
+# with fresh detections: median lag is hours, occasional outliers run days.
 FRAME_RETENTION_DAYS = 14
 FRAME_CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60
 
@@ -253,43 +253,60 @@ VISIT_REAP_BATCH = 500
 _FRAME_FILENAME_RE = re.compile(r"^v(\d+)_t(\d+)\.jpg$")
 
 
-def _labeled_detection_keys() -> set[tuple[int, int]]:
-    """All (visit_id, track_id) pairs whose Detection has a user Correction.
+def _preserved_detection_keys() -> set[tuple[int, int]] | None:
+    """(visit_id, track_id) for every Detection whose frame is kept past
+    FRAME_RETENTION_DAYS, or None if the database could not be read.
 
-    Used by the retention pass to preserve labeled-detection frames
-    indefinitely — those are the training data for a future YOLO
-    fine-tune. Empty set on DB error so we fail safe (no deletions) rather
-    than wipe labeled data because of a transient DB hiccup.
+    Two groups are kept, as training data for the detector fine-tune in
+    DETECTOR_PLAN.md:
+      - detections with any Correction;
+      - detections the feed shows as a bird, meaning a species that is not
+        Not a bird or Poor quality, even with no Correction. Ryan reviews the
+        whole feed and corrects obvious mistakes, so a bird he leaves alone is
+        a bird for the detector, even when the species is uncertain. Until
+        2026-09-15 these frames were deleted after 14 days, which lost 4,463
+        of them captured from July to mid-September. Keeping them costs about
+        90 MB a day (38 frames at 2.4 MB) on the frames volume.
+
+    Returns None on a database error, and the caller then deletes nothing.
+    It used to return an empty set, which made every stale frame look
+    unlabelled and deleted the labelled ones too.
     """
     db = SessionLocal()
     try:
-        rows = (
+        corrected = (
             db.query(Detection.visit_id, Detection.track_id)
             .join(Correction, Correction.detection_id == Detection.id)
             .all()
         )
-        return {(int(vid), int(tid)) for vid, tid in rows}
+        shown_birds = (
+            db.query(Detection.visit_id, Detection.track_id)
+            .join(Species, Species.id == Detection.species_id)
+            .filter(Species.common_name.notin_([NOT_A_BIRD_LABEL, POOR_QUALITY_LABEL]))
+            .all()
+        )
+        return {(int(vid), int(tid)) for vid, tid in (*corrected, *shown_birds)}
     except Exception:
-        log.exception("Frame retention: failed to load labeled detections; preserving everything this pass")
-        return set()
+        log.exception("Frame retention: failed to load preserved detections; deleting nothing this pass")
+        return None
     finally:
         db.close()
 
 
 def _cleanup_old_frames() -> int:
-    """Delete unlabeled source-frame archive files older than
-    FRAME_RETENTION_DAYS. Labeled-detection frames are preserved indefinitely
-    so they're available when we eventually run a YOLO false-positive head
-    fine-tune on them.
+    """Delete source-frame archive files older than FRAME_RETENTION_DAYS,
+    except those _preserved_detection_keys keeps indefinitely for the
+    detector fine-tune.
 
-    "Labeled" means a Correction row exists for the Detection that produced
-    the frame — we identify the link via the filename's encoded
-    (visit_id, track_id). Frames whose filename doesn't parse fall through
-    to the unlabeled bucket (subject to the time cutoff)."""
+    A frame is linked to its Detection through the (visit_id, track_id)
+    encoded in its file name. Frames whose file name doesn't parse fall
+    through to the time cutoff."""
     if not FRAMES_DIR.exists():
         return 0
     cutoff = time.time() - FRAME_RETENTION_DAYS * 86400
-    labeled = _labeled_detection_keys()
+    labeled = _preserved_detection_keys()
+    if labeled is None:
+        return 0
     deleted = 0
     preserved_labeled = 0
     for path in FRAMES_DIR.glob("v*_t*.jpg"):
@@ -299,7 +316,7 @@ def _cleanup_old_frames() -> int:
                 key = (int(m.group(1)), int(m.group(2)))
                 if key in labeled:
                     preserved_labeled += 1
-                    continue   # never delete frames for labeled detections
+                    continue   # never delete frames for kept detections
             if path.stat().st_mtime < cutoff:
                 path.unlink()
                 deleted += 1
@@ -308,7 +325,7 @@ def _cleanup_old_frames() -> int:
             continue
     if deleted or preserved_labeled:
         log.info(
-            "Frame retention: deleted %d unlabeled frame(s) older than %d days; preserved %d labeled-detection frame(s) indefinitely",
+            "Frame retention: deleted %d frame(s) older than %d days; preserved %d corrected or feed-bird frame(s) indefinitely",
             deleted, FRAME_RETENTION_DAYS, preserved_labeled,
         )
     return deleted

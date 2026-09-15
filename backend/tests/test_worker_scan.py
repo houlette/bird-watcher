@@ -327,6 +327,74 @@ def test_cleanup_old_frames_preserves_labeled_indefinitely(db, tmp_path, monkeyp
     assert unlabeled_fresh.exists(), "fresh unlabeled frame must be kept"
 
 
+def test_cleanup_old_frames_keeps_uncorrected_feed_birds_but_not_pipeline_junk(db, tmp_path, monkeypatch):
+    """A bird the feed shows and the user left uncorrected is an implicit
+    bird label, so its frame is kept. A detection the pipeline called Not a
+    bird, which the feed hides, still expires."""
+    from db.models import NOT_A_BIRD_LABEL, POOR_QUALITY_LABEL, Detection, Species, Visit
+    monkeypatch.setattr(worker, "SessionLocal", db)
+
+    session = db()
+    try:
+        names = {}
+        for name in ("Gray Catbird", NOT_A_BIRD_LABEL, POOR_QUALITY_LABEL):
+            sp = Species(common_name=name, scientific_name="", is_rare=False)
+            session.add(sp); session.flush()
+            names[name] = sp.id
+        keys = {}
+        for label, species_id in (("bird", names["Gray Catbird"]), ("nab", names[NOT_A_BIRD_LABEL]),
+                                  ("poor", names[POOR_QUALITY_LABEL]), ("unidentified", None)):
+            v = Visit(clip_path=f"clips/{label}.mp4")
+            session.add(v); session.flush()
+            session.add(Detection(
+                visit_id=v.id, species_id=species_id, confidence=0.9, raw_predictions=[],
+                audio_confirmed=False, crop_path="crops/x.jpg", bbox=[0, 0, 10, 10], track_id=2,
+            ))
+            keys[label] = v.id
+        session.commit()
+    finally:
+        session.close()
+
+    frames_dir = tmp_path / "frames"
+    frames_dir.mkdir()
+    long_ago = time.time() - (worker.FRAME_RETENTION_DAYS + 1) * 86400
+    paths = {}
+    for label, visit_id in keys.items():
+        paths[label] = frames_dir / f"v{visit_id:08d}_t0002.jpg"
+        paths[label].write_bytes(b"x")
+        os.utime(paths[label], (long_ago, long_ago))
+
+    monkeypatch.setattr(worker, "FRAMES_DIR", frames_dir)
+    assert worker._cleanup_old_frames() == 3
+    assert paths["bird"].exists()
+    assert not paths["nab"].exists()
+    assert not paths["poor"].exists()
+    assert not paths["unidentified"].exists()
+
+
+def test_cleanup_old_frames_deletes_nothing_when_the_database_fails(tmp_path, monkeypatch):
+    """If the kept set cannot be read, every stale frame would look
+    unlabelled. The pass must stop instead of deleting labelled frames."""
+    class Broken:
+        def query(self, *a, **kw):
+            raise RuntimeError("database is locked")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(worker, "SessionLocal", Broken)
+    frames_dir = tmp_path / "frames"
+    frames_dir.mkdir()
+    stale = frames_dir / "v00000001_t0001.jpg"
+    stale.write_bytes(b"x")
+    long_ago = time.time() - (worker.FRAME_RETENTION_DAYS + 1) * 86400
+    os.utime(stale, (long_ago, long_ago))
+
+    monkeypatch.setattr(worker, "FRAMES_DIR", frames_dir)
+    assert worker._cleanup_old_frames() == 0
+    assert stale.exists()
+
+
 def test_cleanup_old_frames_handles_unparseable_filenames(db, tmp_path, monkeypatch):
     """A stray frame file that doesn't match the v*_t*.jpg pattern shouldn't
     crash retention — it falls through to the time-cutoff path."""
