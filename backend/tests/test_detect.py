@@ -85,3 +85,91 @@ def test_nmm_keeps_genuinely_separate_birds():
 
 def test_nmm_empty_input():
     assert _nmm([], iou_thresh=0.50) == []
+
+
+# ---- detect_birds on both backends, with the models faked ----
+
+import numpy as np  # noqa: E402
+
+from pipeline import detect  # noqa: E402
+
+FRAME = np.zeros((2160, 3840, 3), dtype=np.uint8)
+
+
+class _FakeOpenVino:
+    """Returns raw YOLO output, shape (1, 84, 1): cx, cy, w, h in the padded
+    input's pixels, then 80 class scores. `boxes` maps tile index to one box."""
+
+    def __init__(self, boxes):
+        self.boxes = boxes
+        self.shapes = []
+
+    def infer(self, inputs):
+        outs = []
+        for i, x in enumerate(inputs):
+            self.shapes.append(x.shape)
+            raw = np.zeros((1, 84, 1), dtype=np.float32)
+            if i in self.boxes:
+                raw[0, :4, 0] = self.boxes[i]
+                raw[0, 4 + detect.COCO_BIRD_CLASS, 0] = 0.9
+            outs.append(raw)
+        return outs
+
+
+def test_openvino_boxes_land_in_full_frame_coordinates_including_padded_edge_tiles(monkeypatch):
+    tiles = detect._tile_offsets(3840, 2160)
+    right, bottom, corner = 4, 10, len(tiles) - 1
+    assert tiles[right] == (3280, 0, 560, 1024)
+    assert tiles[bottom] == (0, 1640, 1024, 520)
+    # Edge tiles are padded, centred, to a multiple of 32: 560 wide becomes 576
+    # (8 px on the left), 520 tall becomes 544 (12 px on top).
+    fake = _FakeOpenVino({
+        0: (100, 100, 40, 40),
+        right: (8 + 50, 100, 40, 40),
+        bottom: (100, 12 + 60, 40, 30),
+    })
+    monkeypatch.setattr(detect, "_get_openvino", lambda: fake)
+    stats = {}
+
+    dets = detect.detect_birds(FRAME, 7, stats=stats, backend="openvino")
+
+    assert fake.shapes[0] == (1, 3, 1024, 1024)
+    assert fake.shapes[right] == (1, 3, 1024, 576)
+    assert fake.shapes[bottom] == (1, 3, 544, 1024)
+    # The small corner tile is scaled up to 1024 on its long side first, as
+    # Ultralytics' PyTorch predictor also does, then padded to 960 tall.
+    assert fake.shapes[corner] == (1, 3, 960, 1024)
+    assert sorted(d.bbox for d in dets) == [(80, 80, 40, 40), (80, 1685, 40, 30), (3310, 80, 40, 40)]
+    assert all(d.frame_index == 7 and abs(d.confidence - 0.9) < 1e-6 for d in dets)
+    assert stats == {"tiles": 15, "backend": "openvino"}
+
+
+class _FakeTorchModel:
+    def __init__(self):
+        self.calls = 0
+
+    def predict(self, tile, **kw):
+        from types import SimpleNamespace
+
+        self.calls += 1
+        return [SimpleNamespace(boxes=None)]
+
+
+def test_openvino_unavailable_falls_back_to_torch(monkeypatch):
+    model = _FakeTorchModel()
+    monkeypatch.setattr(detect, "_get_openvino", lambda: None)
+    monkeypatch.setattr(detect, "_get_model", lambda: model)
+    stats = {}
+
+    assert detect.detect_birds(FRAME, 0, stats=stats, backend="openvino") == []
+    assert model.calls == 15
+    assert stats["backend"] == "torch" and stats["tiles"] == 15
+
+
+def test_torch_backend_never_loads_openvino(monkeypatch):
+    def boom():
+        raise AssertionError("OpenVINO loaded on the torch backend")
+
+    monkeypatch.setattr(detect, "_get_openvino", boom)
+    monkeypatch.setattr(detect, "_get_model", lambda: _FakeTorchModel())
+    assert detect.detect_birds(FRAME, 0, backend="torch") == []

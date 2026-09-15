@@ -16,6 +16,10 @@ ENV HF_HUB_DISABLE_TELEMETRY=1
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Separate layer: see requirements-inference.txt.
+COPY requirements-inference.txt ./
+RUN pip install --no-cache-dir -r requirements-inference.txt
+
 COPY . .
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

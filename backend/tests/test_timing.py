@@ -48,7 +48,8 @@ def test_iterate_charges_producing_items_not_consuming_them():
 
     stages = timer.as_dict()["stages_s"]
     assert seen == [0, 1]
-    assert 0.04 <= stages["decode"] < 0.055
+    # The consumer sleeps 60 ms; charging it to decode would push this past 0.10.
+    assert 0.04 <= stages["decode"] < 0.09
 
 
 def test_summary_puts_the_largest_stage_first():

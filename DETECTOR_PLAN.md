@@ -100,14 +100,26 @@ view. The recommendation is 4 tiles in flight at 1 thread each, because a web
 request that takes a core then delays one tile instead of stalling a
 multi-thread operation.
 
-**Gate 1.5, production, 48 hours after deploy.** Shipped behind a
-`YOLO_BACKEND` flag, with the PyTorch path kept.
-- Pass: median `detect` per tile in `Visit.timings` within 15% of the
-  benchmark for the chosen configuration.
-- Pass: detections per fully processed daylight visit within 15% of the
-  previous 7 days, and the binary filter's override share within 5 points.
-- Pass: no out-of-memory kill and no new worker errors.
-- If any fails, set the flag back to PyTorch and investigate before retrying.
+**Gate 1.5, production.** Shipped behind a `YOLO_BACKEND` setting, with the
+PyTorch path kept. Revised on 2026-09-15, before any result: the original
+criterion compared detections per visit and the binary filter's override share
+over 48 hours with the previous 7 days, but in those 7 days detections per
+fully processed visit ranged 0.111 to 0.599 by day (0.326 overall, 1,144 over
+3,506 visits) and the override share 81% to 97% (91.4% overall), so bird
+activity alone moves both far past any threshold a 48-hour window could test.
+The revision tests the shipped code directly instead.
+- **1.5a, integration parity.** Deploy with the setting at `torch`. From the
+  deployed image, run the shipped `detect_birds` with both backends
+  (`backend/scripts/detector/parity_integration.py`) on frames of recent clips
+  where production's tracks held a box. Pass: at least 100 PyTorch boxes, at
+  least 98% matched at IoU 0.5, counts within 2%. This also makes up for gate
+  1.2's thin sample.
+- **1.5b, 48 hours on OpenVINO.** Pass: median `detect` per tile in
+  `Visit.timings` at most 0.266 s (the slower benchmark session's 0.231 plus
+  15%); no out-of-memory kill; no new worker errors. Detections per visit and
+  the override share are reported against the ranges above, not gated.
+- If either fails, return to PyTorch (`YOLO_BACKEND=torch docker compose up -d
+  api` on the server) and investigate before retrying.
 
 ## Step 2: freeze the detector yardstick
 
@@ -244,7 +256,7 @@ boxes.
 
 | Step | Status | Gate result | Date, commit |
 |---|---|---|---|
-| 1 | in progress: waiting on gate 1.4 (Ryan) | 1.3: PASS for every FP32 configuration. Peak process memory 983 MB for PyTorch, 1,876 MB for 4 tiles at 1 thread each (+0.89 GB), 1,390 MB for 2 tiles at 2 threads (+0.41 GB), 1,624 MB for 3 tiles at 1 thread (+0.64 GB); worst projection 1.98 + 0.89 = 2.87 GB against the 3.4 GB limit. Same paused session: 0.231, 0.229 and 0.259 s per tile against a PyTorch anchor of 0.345 (−33%, −34%, −25%); the morning session had 4 tiles at 0.199 (−43%), so the 4-core gain is somewhere between. 1.2: PASS but thin: 12 of 12 PyTorch boxes matched on 60 decoded frames from 30 clips, identical counts; only 12 boxes because first and middle frames rarely held a bird. Later parity checks should sample frames at detected indices, at least 100 boxes. 1.1: FP32 PASS (lost 0 of 261 PyTorch-found birds, 95% CI 0-1.5%; junk found 44% vs 44%; confidence change 0.000; identical box counts). INT8 FAIL (lost 5 of 261, 1.9%, CI 0.8-4.4%; 14.5% of boxes cross 0.65; gained 19 birds). Nano FAIL (lost 108 of 261, 41.4%). Continue with FP32. | 2026-09-15 |
+| 1 | in progress: shipping with the setting at torch for gate 1.5a | 1.4: Ryan chose 4 tiles in flight, 1 thread each. 1.3: PASS for every FP32 configuration. Peak process memory 983 MB for PyTorch, 1,876 MB for 4 tiles at 1 thread each (+0.89 GB), 1,390 MB for 2 tiles at 2 threads (+0.41 GB), 1,624 MB for 3 tiles at 1 thread (+0.64 GB); worst projection 1.98 + 0.89 = 2.87 GB against the 3.4 GB limit. Same paused session: 0.231, 0.229 and 0.259 s per tile against a PyTorch anchor of 0.345 (−33%, −34%, −25%); the morning session had 4 tiles at 0.199 (−43%), so the 4-core gain is somewhere between. 1.2: PASS but thin: 12 of 12 PyTorch boxes matched on 60 decoded frames from 30 clips, identical counts; only 12 boxes because first and middle frames rarely held a bird. Later parity checks should sample frames at detected indices, at least 100 boxes. 1.1: FP32 PASS (lost 0 of 261 PyTorch-found birds, 95% CI 0-1.5%; junk found 44% vs 44%; confidence change 0.000; identical box counts). INT8 FAIL (lost 5 of 261, 1.9%, CI 0.8-4.4%; 14.5% of boxes cross 0.65; gained 19 birds). Nano FAIL (lost 108 of 261, 41.4%). Continue with FP32. | 2026-09-15 |
 | 2 | not started | | |
 | 3 | not started | | |
 | 4 | not started | | |

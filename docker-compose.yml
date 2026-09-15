@@ -9,6 +9,10 @@ services:
     restart: unless-stopped
     environment:
       - PYTHONUNBUFFERED=1
+      # Detector inference backend (pipeline/detect.py). To go back to PyTorch
+      # on the server without a deploy:
+      #   YOLO_BACKEND=torch docker compose up -d api
+      - YOLO_BACKEND=${YOLO_BACKEND:-torch}
     volumes:
       - ./backend/data:/app/data
       # Preserved source frames are cold: written once per labeled

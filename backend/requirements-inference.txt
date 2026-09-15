@@ -1,0 +1,4 @@
+# Installed in its own image layer after requirements.txt (see Dockerfile), so
+# changing these pins rebuilds a few hundred MB instead of the torch layer,
+# which is most of the 14 GB image on a VM root disk that runs close to full.
+openvino==2026.3.1         # YOLO_BACKEND=openvino; see pipeline/detect.py and DETECTOR_PLAN.md

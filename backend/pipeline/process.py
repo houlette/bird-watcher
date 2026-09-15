@@ -132,9 +132,12 @@ def process_visit(visit: Visit, db: Session) -> int:
         timer.count("frames")
         with timer.stage("detect"):
             # Voluntary context switches across the process while YOLO runs.
-            # About one per tile is healthy; about 2,000 means torch's worker
-            # threads are sleeping between operations because a second thread
-            # has called torch (see PIPELINE_EXECUTOR in pipeline/worker.py).
+            # On the PyTorch backend about one per tile is healthy; about 2,000
+            # means torch's worker threads are sleeping between operations
+            # because a second thread has called torch (see PIPELINE_EXECUTOR
+            # in pipeline/worker.py). The OpenVINO backend's pool sleeps
+            # between tiles by design, so its baseline is higher; compare it
+            # only with itself (Visit.timings.detect_backend).
             switches_before = resource.getrusage(resource.RUSAGE_SELF).ru_nvcsw
             dets = detect_birds(frame.image, frame.index, stats=detect_stats)
             timer.count(
@@ -178,6 +181,8 @@ def process_visit(visit: Visit, db: Session) -> int:
     timer.count("tiles", detect_stats.get("tiles", 0))
     if "torch_threads" in detect_stats:
         timer.extra["torch_threads"] = detect_stats["torch_threads"]
+    if "backend" in detect_stats:
+        timer.extra["detect_backend"] = detect_stats["backend"]
 
     if not any_frame_decoded:
         # Empty/corrupted clip — mark processed so we don't retry forever.

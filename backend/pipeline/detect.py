@@ -68,6 +68,24 @@ import os
 YOLO_WEIGHTS_FILE = os.getenv("YOLO_WEIGHTS", "yolo11s.pt")
 DEFAULT_WEIGHTS_PATH = Path(__file__).parent.parent / "models" / YOLO_WEIGHTS_FILE
 
+# Inference backend for the same YOLO11s weights: "torch" (Ultralytics'
+# PyTorch predictor, one tile at a time) or "openvino" (the model exported to
+# an OpenVINO IR with dynamic input shape, several tiles in flight at once).
+# Measured 2026-09-15 on the VM with the API paused: OpenVINO FP32 at 4 tiles
+# in flight, 1 thread each, was 33-43% faster per tile than PyTorch at 3
+# threads, and on 400 labelled saved frames returned the same boxes and
+# confidences to three decimals (DETECTOR_PLAN.md, gates 1.1-1.3). If the
+# runtime or the model file is missing, detection falls back to PyTorch.
+YOLO_BACKEND = os.getenv("YOLO_BACKEND", "torch")
+OPENVINO_MODEL_PATH = Path(os.getenv(
+    "YOLO_OPENVINO_MODEL",
+    str(Path(__file__).parent.parent / "models" / "yolo11s_openvino_fp32_dynamic" / "yolo11s_ov_dynamic.xml"),
+))
+OPENVINO_STREAMS = int(os.getenv("YOLO_OPENVINO_STREAMS", "4"))
+OPENVINO_THREADS = int(os.getenv("YOLO_OPENVINO_THREADS", "4"))
+# Ultralytics' predictor default, used identically by both backends.
+TILE_NMS_IOU = 0.7
+
 
 @dataclass
 class BirdDetection:
@@ -89,6 +107,59 @@ class BirdDetection:
 
 _model_lock = Lock()
 _model: "YOLO | None" = None
+_openvino: "_OpenVinoTiles | None" = None
+_openvino_failed = False
+
+
+class _OpenVinoTiles:
+    """Runs a batch of tiles through the OpenVINO IR concurrently.
+
+    Tiles keep their own size (dynamic input shape), so the 7 edge tiles of a
+    4K frame cost what their pixels cost instead of a padded 1024 square. A
+    square-padded static model changed boxes on edge tiles and ran slower.
+    """
+
+    def __init__(self, xml: Path, streams: int, threads: int) -> None:
+        import openvino as ov
+
+        core = ov.Core()
+        model = core.read_model(xml)
+        model.reshape({model.inputs[0].get_any_name(): ov.PartialShape([1, 3, -1, -1])})
+        compiled = core.compile_model(model, "CPU", {
+            "PERFORMANCE_HINT": "THROUGHPUT",
+            "NUM_STREAMS": streams,
+            "INFERENCE_NUM_THREADS": threads,
+        })
+        self._queue = ov.AsyncInferQueue(compiled, streams)
+        self._outputs: dict[int, np.ndarray] = {}
+        self._queue.set_callback(self._store)
+
+    def _store(self, request, index: int) -> None:
+        self._outputs[index] = request.get_output_tensor(0).data.copy()
+
+    def infer(self, inputs: list[np.ndarray]) -> list[np.ndarray]:
+        self._outputs = {}
+        for i, x in enumerate(inputs):
+            self._queue.start_async(x, userdata=i)
+        self._queue.wait_all()
+        return [self._outputs[i] for i in range(len(inputs))]
+
+
+def _get_openvino() -> "_OpenVinoTiles | None":
+    """Lazy-load the OpenVINO runner; None (logged once) if it cannot load."""
+    global _openvino, _openvino_failed
+    if _openvino is not None or _openvino_failed:
+        return _openvino
+    with _model_lock:
+        if _openvino is None and not _openvino_failed:
+            try:
+                _openvino = _OpenVinoTiles(OPENVINO_MODEL_PATH, OPENVINO_STREAMS, OPENVINO_THREADS)
+                log.info("YOLO backend: OpenVINO %s, %d streams, %d threads",
+                         OPENVINO_MODEL_PATH, OPENVINO_STREAMS, OPENVINO_THREADS)
+            except Exception:  # noqa: BLE001
+                _openvino_failed = True
+                log.exception("OpenVINO backend unavailable (%s); falling back to PyTorch", OPENVINO_MODEL_PATH)
+    return _openvino
 
 
 def _get_model(weights_path: Path = DEFAULT_WEIGHTS_PATH) -> "YOLO":
@@ -225,22 +296,10 @@ def _nmm(dets: list[BirdDetection], iou_thresh: float) -> list[BirdDetection]:
     return keep
 
 
-def detect_birds(frame_image: np.ndarray, frame_index: int, stats: dict | None = None) -> list[BirdDetection]:
-    """Tiled YOLO bird detection on a single BGR frame.
-
-    If `stats` is given, `tiles` is incremented by the number of YOLO calls
-    made and `torch_threads` records the thread count in effect, which the
-    model load has been seen to reset."""
+def _tile_boxes_torch(frame_image: np.ndarray, tiles) -> list[list[tuple[float, float, float, float, float]]]:
+    """Per tile, [(x1, y1, x2, y2, conf)] in tile coordinates, via PyTorch."""
     model = _get_model()
-    height, width = frame_image.shape[:2]
-    tiles = _tile_offsets(width, height)
-    if stats is not None:
-        import torch
-
-        stats["tiles"] = stats.get("tiles", 0) + len(tiles)
-        stats["torch_threads"] = torch.get_num_threads()
-
-    raw: list[BirdDetection] = []
+    out = []
     for tile_x, tile_y, tile_w, tile_h in tiles:
         tile = frame_image[tile_y : tile_y + tile_h, tile_x : tile_x + tile_w]
         results = model.predict(
@@ -250,24 +309,76 @@ def detect_birds(frame_image: np.ndarray, frame_index: int, stats: dict | None =
             imgsz=TILE_PX,  # tiles are already tile-sized; no waste downsample
             verbose=False,
         )
-        if not results:
+        boxes = results[0].boxes if results else None
+        if boxes is None or len(boxes) == 0:
+            out.append([])
             continue
-        result = results[0]
-        if result.boxes is None or len(result.boxes) == 0:
-            continue
-        xyxy = result.boxes.xyxy.cpu().numpy()
-        confs = result.boxes.conf.cpu().numpy()
-        for (x1, y1, x2, y2), conf in zip(xyxy, confs, strict=True):
+        out.append([
+            (*xyxy, conf)
+            for xyxy, conf in zip(boxes.xyxy.cpu().numpy().tolist(), boxes.conf.cpu().numpy().tolist(), strict=True)
+        ])
+    return out
+
+
+def _tile_boxes_openvino(runner: _OpenVinoTiles, frame_image: np.ndarray, tiles) -> list[list[tuple[float, float, float, float, float]]]:
+    """Same contract as _tile_boxes_torch. Pre- and post-processing are
+    Ultralytics' own (rect letterbox padded to a multiple of 32, NMS at the
+    predictor's defaults), which is what made the outputs match PyTorch."""
+    import torch
+    from ultralytics.data.augment import LetterBox
+    from ultralytics.utils import ops
+
+    letterbox = LetterBox(new_shape=(TILE_PX, TILE_PX), auto=True, stride=32)
+    crops = [frame_image[y : y + h, x : x + w] for x, y, w, h in tiles]
+    padded = [letterbox(image=c) for c in crops]
+    inputs = [np.ascontiguousarray(p[..., ::-1].transpose(2, 0, 1))[None].astype(np.float32) / 255.0 for p in padded]
+    out = []
+    for crop, pad, raw in zip(crops, padded, runner.infer(inputs), strict=True):
+        det = ops.non_max_suppression(
+            torch.from_numpy(raw), BIRD_CONFIDENCE_THRESHOLD, TILE_NMS_IOU, classes=[COCO_BIRD_CLASS]
+        )[0]
+        if len(det):
+            det[:, :4] = ops.scale_boxes(pad.shape[:2], det[:, :4], crop.shape)
+        out.append([tuple(row) for row in det[:, :5].tolist()])
+    return out
+
+
+def detect_birds(
+    frame_image: np.ndarray, frame_index: int, stats: dict | None = None, backend: str | None = None
+) -> list[BirdDetection]:
+    """Tiled YOLO bird detection on a single BGR frame.
+
+    `backend` overrides YOLO_BACKEND for this call (used by parity checks).
+    If `stats` is given, `tiles` is incremented by the number of tiles run,
+    `backend` records the backend that actually ran, and for PyTorch
+    `torch_threads` records the thread count in effect, which the first
+    predict call sets."""
+    height, width = frame_image.shape[:2]
+    tiles = _tile_offsets(width, height)
+    runner = _get_openvino() if (backend or YOLO_BACKEND) == "openvino" else None
+    if runner is not None:
+        per_tile = _tile_boxes_openvino(runner, frame_image, tiles)
+    else:
+        per_tile = _tile_boxes_torch(frame_image, tiles)
+    if stats is not None:
+        stats["tiles"] = stats.get("tiles", 0) + len(tiles)
+        stats["backend"] = "openvino" if runner is not None else "torch"
+        if runner is None:
+            import torch
+
+            stats["torch_threads"] = torch.get_num_threads()
+
+    raw: list[BirdDetection] = []
+    for (tile_x, tile_y, _, _), boxes in zip(tiles, per_tile, strict=True):
+        for x1, y1, x2, y2, conf in boxes:
             # Translate tile-local coords back to full-frame coords.
-            x = int(x1) + tile_x
-            y = int(y1) + tile_y
             w = int(x2 - x1)
             h = int(y2 - y1)
             if w <= 0 or h <= 0:
                 continue
             raw.append(
                 BirdDetection(
-                    bbox=(x, y, w, h),
+                    bbox=(int(x1) + tile_x, int(y1) + tile_y, w, h),
                     confidence=float(conf),
                     frame_index=frame_index,
                 )
