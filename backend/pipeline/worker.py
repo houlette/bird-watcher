@@ -17,6 +17,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from apscheduler.executors.pool import ThreadPoolExecutor
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
@@ -476,8 +477,23 @@ def _compute_nightly_stats() -> int:
     return written
 
 
-def start_worker() -> BackgroundScheduler:
-    scheduler = BackgroundScheduler(daemon=True)
+# The pipeline job runs on a pool of exactly one thread, so one thread calls
+# torch for the life of the process. torch's CPU threads come from libgomp,
+# which gives every calling thread its own team of workers, and once the
+# teams add up to more threads than cores it stops letting idle workers spin
+# and puts them to sleep after every operation. On the shared 10-thread pool
+# the job wandered across six threads, left six teams (18 threads on 4
+# cores), and YOLO ran at 0.416 s per tile with about 2,000 sleeps per tile.
+# One team measured 0.336-0.356 s with about one (2026-09-15). Anything else
+# that calls torch belongs on this executor too.
+PIPELINE_EXECUTOR = "pipeline"
+
+
+def _build_scheduler() -> BackgroundScheduler:
+    scheduler = BackgroundScheduler(
+        daemon=True,
+        executors={"default": ThreadPoolExecutor(10), PIPELINE_EXECUTOR: ThreadPoolExecutor(1)},
+    )
     scheduler.add_job(
         _process_pending,
         "interval",
@@ -485,6 +501,7 @@ def start_worker() -> BackgroundScheduler:
         max_instances=1,
         coalesce=True,
         id="process_pending_visits",
+        executor=PIPELINE_EXECUTOR,
     )
     scheduler.add_job(
         poll_haikubox,
@@ -570,6 +587,11 @@ def start_worker() -> BackgroundScheduler:
         coalesce=True,
         id="haikubox_backfill",
     )
+    return scheduler
+
+
+def start_worker() -> BackgroundScheduler:
+    scheduler = _build_scheduler()
     scheduler.start()
     log.info(
         "Workers started: pipeline every %ds, Haikubox poller every %ds, frame cleanup daily, clip cleanup hourly, visit reap hourly, backdrop rebuild nightly 02:40 UTC, recurrence sweep nightly 03:10 UTC",

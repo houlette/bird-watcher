@@ -148,6 +148,7 @@ def test_classifier_rejection_still_creates_detection(db, tmp_path, monkeypatch)
         assert all(v >= 0 for v in t["stages_s"].values())
         assert t["unaccounted_s"] >= 0
         assert t["counts"]["frames"] == 1 and t["counts"]["tiles"] == 15 and t["counts"]["tracks"] == 1
+        assert t["counts"]["detect_voluntary_switches"] >= 0
         assert t["clip"]["source_frames_read"] == 7 and t["clip"]["ext"] == ".jpg"
     finally:
         session.close()

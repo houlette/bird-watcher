@@ -9,6 +9,7 @@ are the highest-value examples for the eventual classifier fine-tune.
 from __future__ import annotations
 
 import logging
+import resource
 from pathlib import Path
 
 import cv2
@@ -130,7 +131,16 @@ def process_visit(visit: Visit, db: Session) -> int:
         any_frame_decoded = True
         timer.count("frames")
         with timer.stage("detect"):
+            # Voluntary context switches across the process while YOLO runs.
+            # About one per tile is healthy; about 2,000 means torch's worker
+            # threads are sleeping between operations because a second thread
+            # has called torch (see PIPELINE_EXECUTOR in pipeline/worker.py).
+            switches_before = resource.getrusage(resource.RUSAGE_SELF).ru_nvcsw
             dets = detect_birds(frame.image, frame.index, stats=detect_stats)
+            timer.count(
+                "detect_voluntary_switches",
+                resource.getrusage(resource.RUSAGE_SELF).ru_nvcsw - switches_before,
+            )
         timer.count("boxes_detected", len(dets))
         # Scene-mask: drop YOLO detections in regions the user has
         # repeatedly labeled as Not-a-bird (hummingbird feeder, etc.).

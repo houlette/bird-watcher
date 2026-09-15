@@ -1020,6 +1020,15 @@ docker compose logs --since 1h api | grep "timing:"
 sampling throws away, so compare it against `clip.source_frames_read`, not
 `counts.frames`.
 
+If `detect` divided by `counts.tiles` climbs well past about 0.34 s, check
+`counts.detect_voluntary_switches` per tile. About one is healthy. About
+2,000 means torch's worker threads are sleeping between operations, which
+happens when more than one thread in the process has called torch: libgomp
+gives each calling thread its own team and throttles spinning once the teams
+outnumber the cores. The pipeline job has its own one-thread executor for
+this reason (`PIPELINE_EXECUTOR` in `pipeline/worker.py`); on the shared pool
+it cost about a fifth of YOLO time.
+
 ### "Push notifications never arrive"
 
 - `VAPID_PUBLIC_KEY` in `.env` doesn't match the key the browser
