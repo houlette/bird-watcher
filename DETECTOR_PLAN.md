@@ -200,8 +200,8 @@ boxes.
 
 - Clips are deleted after 24 hours, so first keep a replay sample: one in ten
   daylight clips for five days, stored on the frames volume if the root disk
-  cannot take it. TODO: check free space on `/mnt/HC_Volume_106850884` before
-  starting.
+  cannot take it. On 2026-09-15 that volume had 29 GB free and the root disk
+  6.5 GB.
 - Replay both pipelines on the sample. Ryan's normal review of those days
   labels the current feed; he also reviews items only the candidate produces.
 
@@ -244,7 +244,7 @@ boxes.
 
 | Step | Status | Gate result | Date, commit |
 |---|---|---|---|
-| 1 | in progress: models built, gate 1.1 running | | |
+| 1 | in progress: gate 1.2 running on FP32 | 1.1: FP32 PASS (lost 0 of 261 PyTorch-found birds, 95% CI 0-1.5%; junk found 44% vs 44%; confidence change 0.000; identical box counts). INT8 FAIL (lost 5 of 261, 1.9%, CI 0.8-4.4%; 14.5% of boxes cross 0.65; gained 19 birds). Nano FAIL (lost 108 of 261, 41.4%). Continue with FP32. | 2026-09-15 |
 | 2 | not started | | |
 | 3 | not started | | |
 | 4 | not started | | |
