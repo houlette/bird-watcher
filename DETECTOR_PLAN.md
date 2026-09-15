@@ -205,10 +205,13 @@ species alone when unsure between look-alikes such as catbird and mockingbird.
   every box in it, and match the labelled track's stored box at IoU 0.5. A
   saved frame whose labelled box is not found is dropped and counted.
 - A box whose detection's latest user label is a species or Unknown bird is a
-  positive; Not a bird is background. From the reviewed-from date (TODO: Ryan
-  to give it), a box whose detection the feed showed as a species with no
-  correction is an implicit positive, used for training only, never for
-  evaluation. Implicit labels are derived at export and never written as
+  positive; Not a bird is background. From the reviewed-from date, a box whose
+  detection the feed showed as a species with no correction is an implicit
+  positive, used for training only, never for evaluation. Ryan gave the date on
+  2026-09-15: the start of 2026-09-01, camera local time. Earlier uncorrected
+  birds say nothing, since he had not reviewed them all. Detections captured in
+  the 24 hours before an export are left out, since the newest items may not be
+  reviewed yet. Implicit labels are derived at export and never written as
   Correction rows.
 - Cut tiles as production does. Keep a tile only if every box in it has a
   label, explicit or implicit, and none is Poor quality; count the tiles and
@@ -218,7 +221,10 @@ species alone when unsure between look-alikes such as catbird and mockingbird.
   base-weight hashes beside the dataset.
 
 **Gate 4.**
-- Pass: at least 1,500 bird boxes from at least 25 capture days.
+- Pass: at least 1,500 bird boxes from at least 25 capture days. Counted on
+  2026-09-15, before the tile rule drops any: 1,638 explicit bird boxes on 50
+  training days, plus 524 implicit ones on training days from 2026-09-01
+  (537 in all, 13 of them on held-out days).
 - Pass: Ryan audits a contact sheet of 100 random bird boxes and 100 random
   junk boxes, and finds at most 3 wrong in each. Explicit and implicit bird
   labels are audited as separate sheets of 100; if the implicit sheet has more
