@@ -132,12 +132,35 @@ Before any other model is compared, fix the frames it is judged on.
 - Freeze the frame ids and days in a committed file, and make every detector
   training export refuse them, as `heldout.py` does for the binary filter.
 
+Definitions, written on 2026-09-15 before anything was counted. Ryan approved
+starting this step during gate 1.5b's watch, since it only reads the database
+and its result does not depend on the runtime.
+- A frame is a saved source frame, `v{visit}_t{track}.jpg`, the best frame of
+  one track. It counts if the file exists at freeze time and its detection's
+  latest user label (`Correction.source` NULL or `user-confirmed`) is a species
+  or Unknown bird (a bird frame) or Not a bird (a junk frame). Poor quality and
+  unlabelled frames are left out.
+- A capture day is the camera's local date (America/New_York) of
+  `Visit.started_at`.
+- The pre-June pool is every capture day before 2026-06-07 holding at least one
+  bird or junk frame. The quarter is `round(0.25 * n)` days drawn with
+  `random.Random(0).sample` from the sorted pool.
+- Training boxes for the gate are bird frames on the other days, one box each
+  (the frame's own track). That is a lower bound, since step 4 also counts
+  other tracks' boxes at the same frame index.
+- Distinct visits are reported beside frame counts, not gated, since frames of
+  one visit share the light and usually the bird.
+- Every labelled frame on a held-out day is frozen by detection id. Frames
+  labelled later on those days are neither scored nor trained on.
+
 **Gate 2.**
 - Pass: at least 300 confirmed-bird frames and 150 junk frames on held-out
   days, from at least 15 distinct days, and at least 1,500 confirmed-bird boxes
   left on training days.
-- If short, raise the pre-June share and recount before freezing. Refreezing
-  after step 3 has started is not allowed.
+- If the held-out side is short, raise the pre-June share in steps of 0.1, up
+  to 0.5, and recount before freezing. If training boxes fall below 1,500 at
+  the share that fills the held-out side, the gate fails, since step 4 could
+  not pass either. Refreezing after step 3 has started is not allowed.
 
 ## Step 3: generic YOLO26 against YOLO11s
 
@@ -245,9 +268,9 @@ boxes.
 ## Step 8: follow-ons
 
 - Retrain the binary filter on the new detector's crops. The yardstick stays
-  valid for a paired comparison. TODO: Ryan to confirm pausing the binary
-  filter retrain until gate 7, since its training crops and the junk it must
-  catch both change with the detector.
+  valid for a paired comparison. Ryan agreed on 2026-09-15 to pause the
+  binary filter retrain until gate 7, since its training crops and the junk it
+  must catch both change with the detector.
 - Update `DEVELOPING.md`, `LESSONS.md` and the computer-vision skill's
   `birdwatcher-state.md`.
 - Remove the PyTorch detection path 30 days after gate 7.
@@ -257,7 +280,7 @@ boxes.
 | Step | Status | Gate result | Date, commit |
 |---|---|---|---|
 | 1 | in progress: OpenVINO is the production default, 48-hour watch for gate 1.5b | 1.5a: PASS. 101 of 101 PyTorch boxes matched at IoU 0.5 on 87 frames from 41 clips, sampled at frames where production's tracks held a box; OpenVINO found 101 (+0.0%). The PyTorch side ran in the CUDA-build image; the CPU-only torch build that replaced it (ab6caaf) gave identical boxes on 3 frames and binary filter scores equal to 6 decimal places on 40 crops. 1.5b baseline, measured with the same script before the switch: 3,509 visits processed from 2026-09-08 16:00 to 2026-09-15 16:05 UTC, 1,147 detections (0.327 per visit), 3 processing errors; PyTorch detect per tile had a median of 0.322 s in the clean hour 11:00-12:00 UTC on 2026-09-15 and 0.354 s from 16:05 to 17:25 while the parity run shared the CPU; no out-of-memory kill of the api container. 1.4: Ryan chose 4 tiles in flight, 1 thread each. 1.3: PASS for every FP32 configuration. Peak process memory 983 MB for PyTorch, 1,876 MB for 4 tiles at 1 thread each (+0.89 GB), 1,390 MB for 2 tiles at 2 threads (+0.41 GB), 1,624 MB for 3 tiles at 1 thread (+0.64 GB); worst projection 1.98 + 0.89 = 2.87 GB against the 3.4 GB limit. Same paused session: 0.231, 0.229 and 0.259 s per tile against a PyTorch anchor of 0.345 (−33%, −34%, −25%); the morning session had 4 tiles at 0.199 (−43%), so the 4-core gain is somewhere between. 1.2: PASS but thin: 12 of 12 PyTorch boxes matched on 60 decoded frames from 30 clips, identical counts; only 12 boxes because first and middle frames rarely held a bird. Later parity checks should sample frames at detected indices, at least 100 boxes. 1.1: FP32 PASS (lost 0 of 261 PyTorch-found birds, 95% CI 0-1.5%; junk found 44% vs 44%; confidence change 0.000; identical box counts). INT8 FAIL (lost 5 of 261, 1.9%, CI 0.8-4.4%; 14.5% of boxes cross 0.65; gained 19 birds). Nano FAIL (lost 108 of 261, 41.4%). Continue with FP32. | 2026-09-15 |
-| 2 | not started | | |
+| 2 | in progress: started during gate 1.5b's watch with Ryan's approval; definitions written before counting | | 2026-09-15 |
 | 3 | not started | | |
 | 4 | not started | | |
 | 5 | not started | | |
