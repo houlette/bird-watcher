@@ -152,6 +152,12 @@ and its result does not depend on the runtime.
   one visit share the light and usually the bird.
 - Every labelled frame on a held-out day is frozen by detection id. Frames
   labelled later on those days are neither scored nor trained on.
+- Caveat found after the freeze: all 1,234 held-out junk frames were visible
+  in the feed, and 834 of them come from the 3 pre-June days, when the feed
+  showed nearly everything; the rest are junk that escaped the binary filter.
+  The junk side mixes those two selection routes and holds none of the junk
+  the pipeline hid, so it supports paired old-versus-new comparison, not an
+  absolute rate for all of the detector's junk.
 
 **Gate 2.**
 - Pass: at least 300 confirmed-bird frames and 150 junk frames on held-out
@@ -185,21 +191,39 @@ Only the architecture changes: COCO weights, class 14, the step 1 runtime path.
 
 No new labels at this step.
 
-- For each saved frame (visit, sampled frame index), collect every track in
-  that visit with a box at that index, from `track_bboxes` and `track_frames`.
-- A box whose detection is user-confirmed as a bird is a positive; user-
-  rejected junk is background. Exclude a frame if any box in it is unlabelled
-  or Poor quality, since it can be neither positive nor background. Count what
-  that exclusion costs.
-- Cut tiles as production does; keep every tile holding a labelled box, plus
-  an equal number of tiles with no box from the same frames.
+Revised on 2026-09-15, before step 4 started, after two findings. First,
+`Detection.track_frames` only exists from 2026-09-11 16:19 UTC (880 rows), so
+the other tracks' boxes at a saved frame's moment cannot be read from the
+database for nearly every labelled frame. Second, Ryan labels by correction:
+since July the feed hides the 67% of detections the pipeline calls Not a bird,
+his junk labels are the junk that escaped into the feed (539 from July to
+September), and his bird labels are almost all implicit (8 explicit). He
+reviews every bird in the feed and corrects obvious mistakes, but leaves a
+species alone when unsure between look-alikes such as catbird and mockingbird.
+
+- Run YOLO11s through production's tiled path on each saved frame to find
+  every box in it, and match the labelled track's stored box at IoU 0.5. A
+  saved frame whose labelled box is not found is dropped and counted.
+- A box whose detection's latest user label is a species or Unknown bird is a
+  positive; Not a bird is background. From the reviewed-from date (TODO: Ryan
+  to give it), a box whose detection the feed showed as a species with no
+  correction is an implicit positive, used for training only, never for
+  evaluation. Implicit labels are derived at export and never written as
+  Correction rows.
+- Cut tiles as production does. Keep a tile only if every box in it has a
+  label, explicit or implicit, and none is Poor quality; count the tiles and
+  labelled boxes this drops. Add an equal number of tiles with no box from the
+  same frames.
 - Refuse step 2's held-out days. Write a manifest of frame ids, days, seed and
   base-weight hashes beside the dataset.
 
 **Gate 4.**
 - Pass: at least 1,500 bird boxes from at least 25 capture days.
 - Pass: Ryan audits a contact sheet of 100 random bird boxes and 100 random
-  junk boxes, and finds at most 3 wrong in each.
+  junk boxes, and finds at most 3 wrong in each. Explicit and implicit bird
+  labels are audited as separate sheets of 100; if the implicit sheet has more
+  than 3 wrong, implicit labels are dropped and the count is rerun without
+  them.
 - If short: add labels from `llm-claude` and `llm-claude-confirmed` to training
   only, never to evaluation, and audit again. If still short, size a targeted
   labelling pass with `eval_stats.py n-for-margin` before asking for labels.
