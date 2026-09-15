@@ -89,7 +89,11 @@ def test_nmm_empty_input():
 
 # ---- detect_birds on both backends, with the models faked ----
 
+import sys  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
 import numpy as np  # noqa: E402
+import pytest  # noqa: E402
 
 from pipeline import detect  # noqa: E402
 
@@ -117,6 +121,10 @@ class _FakeOpenVino:
 
 
 def test_openvino_boxes_land_in_full_frame_coordinates_including_padded_edge_tiles(monkeypatch):
+    # The path under test is Ultralytics' own letterbox and NMS, so it needs
+    # Ultralytics and torch. CI installs neither and skips this; it runs
+    # wherever the backend's full requirements are installed.
+    pytest.importorskip("ultralytics")
     tiles = detect._tile_offsets(3840, 2160)
     right, bottom, corner = 4, 10, len(tiles) - 1
     assert tiles[right] == (3280, 0, 560, 1024)
@@ -159,11 +167,14 @@ def test_openvino_unavailable_falls_back_to_torch(monkeypatch):
     model = _FakeTorchModel()
     monkeypatch.setattr(detect, "_get_openvino", lambda: None)
     monkeypatch.setattr(detect, "_get_model", lambda: model)
+    # The torch path imports torch only to record its thread count; CI has no
+    # torch, so stand one in.
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(get_num_threads=lambda: 3))
     stats = {}
 
     assert detect.detect_birds(FRAME, 0, stats=stats, backend="openvino") == []
     assert model.calls == 15
-    assert stats["backend"] == "torch" and stats["tiles"] == 15
+    assert stats == {"tiles": 15, "backend": "torch", "torch_threads": 3}
 
 
 def test_torch_backend_never_loads_openvino(monkeypatch):
