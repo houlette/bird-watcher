@@ -211,8 +211,12 @@ def test_scan_recurses_into_subdirectories(db, clips_dir, monkeypatch):
         session.close()
 
 
-def test_cleanup_old_frames_deletes_only_stale(tmp_path, monkeypatch):
+def test_cleanup_old_frames_deletes_only_stale(db, tmp_path, monkeypatch):
     """Files older than FRAME_RETENTION_DAYS are deleted; newer ones survive."""
+    # An empty database, not the real one: without it the kept-set query
+    # fails wherever no database exists (as in CI), and the pass then
+    # correctly deletes nothing.
+    monkeypatch.setattr(worker, "SessionLocal", db)
     frames_dir = tmp_path / "frames"
     frames_dir.mkdir()
     fresh = frames_dir / "v00000001_t0001.jpg"
