@@ -81,11 +81,12 @@ OPENVINO_MODEL_PATH = Path(os.getenv(
     "YOLO_OPENVINO_MODEL",
     str(Path(__file__).parent.parent / "models" / "yolo11s_openvino_fp32_dynamic" / "yolo11s_ov_dynamic.xml"),
 ))
-# Tiles in flight, and the inference thread pool they share. 2 over 2 measured
-# level with 4 over 4 in the gate 1.3 benchmark and holds 0.49 GB less; see
-# docker-compose.yml, which sets both.
-OPENVINO_STREAMS = int(os.getenv("YOLO_OPENVINO_STREAMS", "2"))
-OPENVINO_THREADS = int(os.getenv("YOLO_OPENVINO_THREADS", "2"))
+# Tiles in flight, and the inference thread pool they share. The gate 1.3
+# benchmark measured 2 over 2 level with 4 over 4, but that session ran with
+# the api container paused; in production 2 over 2 cost 73% (0.364 against
+# 0.210 s per tile). See docker-compose.yml, which sets both.
+OPENVINO_STREAMS = int(os.getenv("YOLO_OPENVINO_STREAMS", "4"))
+OPENVINO_THREADS = int(os.getenv("YOLO_OPENVINO_THREADS", "4"))
 # Ultralytics' predictor default, used identically by both backends.
 TILE_NMS_IOU = 0.7
 

@@ -118,18 +118,34 @@ The revision tests the shipped code directly instead.
   `Visit.timings` at most 0.266 s (the slower benchmark session's 0.231 plus
   15%); no out-of-memory kill; no new worker errors. Detections per visit and
   the override share are reported against the ranges above, not gated.
-- The watch restarted at 2026-09-16 00:47 UTC, when a deploy recreated the
-  container, on the configuration Ryan approved that evening, so it runs on
-  what production will keep, and it ends 2026-09-18 00:47 UTC. Night hours
-  contribute nothing, since only daylight clips are processed. At 4 tiles in
-  flight over 4 threads the container held 2.9 GB of process memory, its 4 GiB
-  limit 4,488 times in 75 minutes and had the kernel evict cached data each
-  time, with no kill and 0.206 s per tile over 119 visits. It now runs 2 tiles
-  over 2 threads, level in the gate 1.3 benchmark and 0.49 GB lighter, with
-  the container limit at 5 GiB. Also watch the process high-water mark: it
-  must not climb across the 48 hours.
-- If either fails, return to PyTorch (`YOLO_BACKEND=torch docker compose up -d
-  api` on the server) and investigate before retrying.
+- The watch runs 2026-09-16 11:50 UTC to 2026-09-18 11:50 UTC, from the deploy
+  that recreated the container on 4 tiles in flight over 4 threads. Night
+  hours contribute nothing, since only daylight clips are processed. The
+  counters it reads, memory peak and limit events, are per container, so any
+  further deploy restarts the window. Also watch the process high-water mark:
+  it must not climb across the 48 hours.
+- Two earlier attempts were abandoned, both on configuration rather than on
+  anything about OpenVINO itself. The first ran 4 tiles over 4 threads on
+  2026-09-15 and was stopped for memory: it held 2.9 GB of process memory,
+  pressed the container's 4 GiB limit 4,488 times in 75 minutes and had the
+  kernel evict cached data each time, with no kill and 0.206 s per tile over
+  119 visits. The second, from 2026-09-16 00:47 UTC, ran 2 tiles over 2
+  threads, which Ryan approved that evening to hold 0.49 GB less, and was
+  stopped after 11 hours on speed: 0.364 s per tile over 298 visits, against
+  the gate's 0.266 s limit and against 0.210 s over 333 visits for 4 over 4
+  the day before, so the cut cost 73% and left OpenVINO slower than the
+  PyTorch path it replaced, which held 0.322 s in a clean hour. Hourly medians
+  ran 0.363 to 0.367 with a p90 of 0.369, including the hours before dawn when
+  the worker had the machine to itself, which is what ruled out contention.
+- The gate 1.3 benchmark had put 2 over 2 level with 4 over 1, 0.229 against
+  0.231 s per tile, but it ran with the api container paused, so it did not
+  predict production: benchmark a configuration the way it will run, or do not
+  trust the comparison across configurations. The memory headroom that
+  motivated the cut is no longer needed, since the commit that made it also
+  lifted the container limit to 5 GiB, where 4 over 4 now sits near 41%.
+- If the gate fails on the shipped configuration, return to PyTorch
+  (`YOLO_BACKEND=torch docker compose up -d api` on the server) and
+  investigate before retrying.
 
 ## Step 2: freeze the detector yardstick
 
@@ -319,7 +335,7 @@ boxes.
 
 | Step | Status | Gate result | Date, commit |
 |---|---|---|---|
-| 1 | in progress: OpenVINO is the production default, 48-hour watch for gate 1.5b | 1.5a: PASS. 101 of 101 PyTorch boxes matched at IoU 0.5 on 87 frames from 41 clips, sampled at frames where production's tracks held a box; OpenVINO found 101 (+0.0%). The PyTorch side ran in the CUDA-build image; the CPU-only torch build that replaced it (ab6caaf) gave identical boxes on 3 frames and binary filter scores equal to 6 decimal places on 40 crops. 1.5b baseline, measured with the same script before the switch: 3,509 visits processed from 2026-09-08 16:00 to 2026-09-15 16:05 UTC, 1,147 detections (0.327 per visit), 3 processing errors; PyTorch detect per tile had a median of 0.322 s in the clean hour 11:00-12:00 UTC on 2026-09-15 and 0.354 s from 16:05 to 17:25 while the parity run shared the CPU; no out-of-memory kill of the api container. 1.4: Ryan chose 4 tiles in flight, 1 thread each. 1.3: PASS for every FP32 configuration. Peak process memory 983 MB for PyTorch, 1,876 MB for 4 tiles at 1 thread each (+0.89 GB), 1,390 MB for 2 tiles at 2 threads (+0.41 GB), 1,624 MB for 3 tiles at 1 thread (+0.64 GB); worst projection 1.98 + 0.89 = 2.87 GB against the 3.4 GB limit. Same paused session: 0.231, 0.229 and 0.259 s per tile against a PyTorch anchor of 0.345 (−33%, −34%, −25%); the morning session had 4 tiles at 0.199 (−43%), so the 4-core gain is somewhere between. 1.2: PASS but thin: 12 of 12 PyTorch boxes matched on 60 decoded frames from 30 clips, identical counts; only 12 boxes because first and middle frames rarely held a bird. Later parity checks should sample frames at detected indices, at least 100 boxes. 1.1: FP32 PASS (lost 0 of 261 PyTorch-found birds, 95% CI 0-1.5%; junk found 44% vs 44%; confidence change 0.000; identical box counts). INT8 FAIL (lost 5 of 261, 1.9%, CI 0.8-4.4%; 14.5% of boxes cross 0.65; gained 19 birds). Nano FAIL (lost 108 of 261, 41.4%). Continue with FP32. | 2026-09-15 |
+| 1 | in progress: OpenVINO is the production default, gate 1.5b's watch restarted 2026-09-16 11:50 UTC on 4 tiles over 4 threads, ends 2026-09-18 11:50 UTC | 1.5b attempt 2: FAIL on speed, stopped after 11 hours. At 2 tiles over 2 threads the median detect per tile was 0.364 s over 298 visits, against a 0.266 s limit, with a p90 of 0.369 and hourly medians of 0.363 to 0.367 including the hours before dawn; 4 over 4 held 0.210 s over 333 visits on 2026-09-15 and PyTorch 0.322 s in a clean hour, so the paused-container benchmark that called the two configurations level did not carry to production. Clean on the rest: 0 processing errors, no out-of-memory kill, 2.66 GiB of the 5 GiB limit. Detections per visit ran 1.440 in the window against a 0.327 baseline, not gated, and the climb started before the switch (0.406 on 09-14, 0.879 on 09-15), so it reads as bird activity rather than a detector artifact; unconfirmed until Ryan reviews the feed for those days. 1.5a: PASS. 101 of 101 PyTorch boxes matched at IoU 0.5 on 87 frames from 41 clips, sampled at frames where production's tracks held a box; OpenVINO found 101 (+0.0%). The PyTorch side ran in the CUDA-build image; the CPU-only torch build that replaced it (ab6caaf) gave identical boxes on 3 frames and binary filter scores equal to 6 decimal places on 40 crops. 1.5b baseline, measured with the same script before the switch: 3,509 visits processed from 2026-09-08 16:00 to 2026-09-15 16:05 UTC, 1,147 detections (0.327 per visit), 3 processing errors; PyTorch detect per tile had a median of 0.322 s in the clean hour 11:00-12:00 UTC on 2026-09-15 and 0.354 s from 16:05 to 17:25 while the parity run shared the CPU; no out-of-memory kill of the api container. 1.4: Ryan chose 4 tiles in flight, 1 thread each. 1.3: PASS for every FP32 configuration. Peak process memory 983 MB for PyTorch, 1,876 MB for 4 tiles at 1 thread each (+0.89 GB), 1,390 MB for 2 tiles at 2 threads (+0.41 GB), 1,624 MB for 3 tiles at 1 thread (+0.64 GB); worst projection 1.98 + 0.89 = 2.87 GB against the 3.4 GB limit. Same paused session: 0.231, 0.229 and 0.259 s per tile against a PyTorch anchor of 0.345 (−33%, −34%, −25%); the morning session had 4 tiles at 0.199 (−43%), so the 4-core gain is somewhere between. 1.2: PASS but thin: 12 of 12 PyTorch boxes matched on 60 decoded frames from 30 clips, identical counts; only 12 boxes because first and middle frames rarely held a bird. Later parity checks should sample frames at detected indices, at least 100 boxes. 1.1: FP32 PASS (lost 0 of 261 PyTorch-found birds, 95% CI 0-1.5%; junk found 44% vs 44%; confidence change 0.000; identical box counts). INT8 FAIL (lost 5 of 261, 1.9%, CI 0.8-4.4%; 14.5% of boxes cross 0.65; gained 19 birds). Nano FAIL (lost 108 of 261, 41.4%). Continue with FP32. | 2026-09-15 |
 | 2 | done: yardstick frozen in `backend/scripts/detector/heldout_frames.json` at 2026-09-15 18:32 UTC; started during gate 1.5b's watch with Ryan's approval | PASS at the pre-registered share of 0.25, definitions committed first in d5b932a. Held-out days: the binary yardstick's 36 plus 3 of 11 pre-June days (2026-05-27, 06-02, 06-06), 39 in all, 38 holding frames. Held out: 534 bird frames from 340 visits, 1,234 junk frames from 721 visits. Training side: 1,638 bird boxes (lower bound) and 1,902 junk frames on 50 days. The totals, 2,172 bird and 3,136 junk frames, match the inventory at the top of this plan. Left out: 82 Poor quality, and 935 labelled detections whose frame file is missing (396 bird, 539 junk), all captured in May (756) or June (179), none since July; the cause is not known. Risk for gate 4: training has 138 bird boxes above its 1,500 minimum before step 4 drops frames holding an unlabelled or Poor quality box, and labels since July are sparse (547 labelled frames from July to September against 4,761 in May and June). | 2026-09-15 |
 | 3 | not started | | |
 | 4 | not started | | |
