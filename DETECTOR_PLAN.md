@@ -118,9 +118,11 @@ The revision tests the shipped code directly instead.
   `Visit.timings` at most 0.266 s (the slower benchmark session's 0.231 plus
   15%); no out-of-memory kill; no new worker errors. Detections per visit and
   the override share are reported against the ranges above, not gated.
-- The watch restarted on 2026-09-16 after a configuration change Ryan
-  approved, so it runs on what production will keep. At 4 tiles in flight over
-  4 threads the container held 2.9 GB of process memory, pressed its 4 GiB
+- The watch restarted at 2026-09-16 00:47 UTC, when a deploy recreated the
+  container, on the configuration Ryan approved that evening, so it runs on
+  what production will keep, and it ends 2026-09-18 00:47 UTC. Night hours
+  contribute nothing, since only daylight clips are processed. At 4 tiles in
+  flight over 4 threads the container held 2.9 GB of process memory, its 4 GiB
   limit 4,488 times in 75 minutes and had the kernel evict cached data each
   time, with no kill and 0.206 s per tile over 119 visits. It now runs 2 tiles
   over 2 threads, level in the gate 1.3 benchmark and 0.49 GB lighter, with
