@@ -14,6 +14,12 @@ services:
       # a deploy:
       #   YOLO_BACKEND=torch docker compose up -d api
       - YOLO_BACKEND=${YOLO_BACKEND:-openvino}
+      # 2 tiles in flight over 2 inference threads. The gate 1.3 benchmark put
+      # it level with 4 over 4 (0.229 against 0.231 s per tile) for 0.49 GB
+      # less memory, and 4 over 4 pressed the container against its limit
+      # 4,488 times in 75 minutes. Ryan approved the change on 2026-09-15.
+      - YOLO_OPENVINO_STREAMS=${YOLO_OPENVINO_STREAMS:-2}
+      - YOLO_OPENVINO_THREADS=${YOLO_OPENVINO_THREADS:-2}
     volumes:
       - ./backend/data:/app/data
       # Preserved source frames are cold: written once per labeled
@@ -31,12 +37,19 @@ services:
     env_file:
       - path: ./backend/.env
         required: false
-    # Cap memory at half the host's ~8 GB so a runaway worker (large MP4
+    # Cap memory below the host's ~7.6 GB so a runaway worker (large MP4
     # decode + model weights + ffmpeg buffers) gets OOM-killed inside the
     # container without taking down the whole VM. Pair this with the
     # MAX_VIDEO_BYTES cap in pipeline/frames.py so we don't loop on the
     # same problematic file.
-    mem_limit: 4g
+    #
+    # Raised from 4g on 2026-09-15: with the OpenVINO detector the container
+    # held 2.9 GB of process memory and spent the rest on file cache, so it
+    # hit the 4 GiB ceiling 4,488 times in 75 minutes and the kernel evicted
+    # cached data each time. The other containers hold 570 MB between them and
+    # the host reports about 3.8 GB available, so 5g still leaves roughly
+    # 2.8 GB outside this container.
+    mem_limit: 5g
     networks:
       - web
 

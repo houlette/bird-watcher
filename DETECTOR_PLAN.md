@@ -118,6 +118,14 @@ The revision tests the shipped code directly instead.
   `Visit.timings` at most 0.266 s (the slower benchmark session's 0.231 plus
   15%); no out-of-memory kill; no new worker errors. Detections per visit and
   the override share are reported against the ranges above, not gated.
+- The watch restarted on 2026-09-16 after a configuration change Ryan
+  approved, so it runs on what production will keep. At 4 tiles in flight over
+  4 threads the container held 2.9 GB of process memory, pressed its 4 GiB
+  limit 4,488 times in 75 minutes and had the kernel evict cached data each
+  time, with no kill and 0.206 s per tile over 119 visits. It now runs 2 tiles
+  over 2 threads, level in the gate 1.3 benchmark and 0.49 GB lighter, with
+  the container limit at 5 GiB. Also watch the process high-water mark: it
+  must not climb across the 48 hours.
 - If either fails, return to PyTorch (`YOLO_BACKEND=torch docker compose up -d
   api` on the server) and investigate before retrying.
 
