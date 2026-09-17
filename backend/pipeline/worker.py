@@ -146,6 +146,39 @@ def _scan_clips_dir() -> int:
     return new_count
 
 
+def check_and_trim_memory(threshold_gib: float = 2.5) -> None:
+    """Trigger Python GC and request glibc release free arenas to OS if RSS exceeds threshold."""
+    rss_gib = 0.0
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        rss_gib = float(parts[1]) / (1024.0 * 1024.0)
+                    break
+    except Exception:
+        pass
+
+    if rss_gib >= threshold_gib:
+        log.info("Process RSS is %.2f GiB (>= %.2f GiB threshold); purging glibc arenas", rss_gib, threshold_gib)
+        import gc
+        gc.collect()
+        try:
+            import ctypes
+            libc = None
+            for name in (None, "libc.so.6", "libc.so"):
+                try:
+                    libc = ctypes.CDLL(name)
+                    break
+                except Exception:
+                    continue
+            if libc and hasattr(libc, "malloc_trim"):
+                libc.malloc_trim(0)
+        except Exception as e:
+            log.debug("malloc_trim call failed: %s", e)
+
+
 def _process_pending() -> None:
     # Step 1: discover any clips that arrived via SFTP and have no Visit row.
     _scan_clips_dir()
@@ -202,6 +235,8 @@ def _process_pending() -> None:
                 log.exception("Visit %d failed", visit.id)
                 visit.processing_error = str(exc)[:500]
                 db.commit()
+            finally:
+                check_and_trim_memory()
     finally:
         db.close()
 

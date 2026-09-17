@@ -252,3 +252,50 @@ def test_variant_scoring_tolerates_a_missing_crop():
         crop = None
 
     assert process._score_crop_variants(_Best(), None, 0.5) == (None, None)
+
+
+def test_process_visit_with_motion_gated_tiles_enabled(db, tmp_path, monkeypatch):
+    """process_visit passes selected_tiles to detect_birds when motion_gated_tiles_enabled is True."""
+    from settings import settings
+    monkeypatch.setattr(settings, "motion_gated_tiles_enabled", True)
+
+    visit, session = _make_visit(db, tmp_path)
+    try:
+        fake_frame_image = np.zeros((100, 100, 3), dtype=np.uint8)
+
+        @dataclass
+        class _Frame:
+            index: int = 0
+            timestamp: float = 0.0
+            image: np.ndarray = None
+
+        tracked_det = _FakeDetection()
+        detected_tiles = []
+
+        monkeypatch.setattr(process_module, "DATA_DIR", tmp_path)
+
+        def fake_extract(_p, target_fps=3.0, stats=None):
+            stats.update(source_frames_read=1, source_fps=20.0, width=100, height=100)
+            return iter([_Frame(image=fake_frame_image)])
+
+        def fake_detect(_img, _idx, stats=None, backend=None, tiles=None):
+            detected_tiles.append(tiles)
+            return [tracked_det]
+
+        monkeypatch.setattr(process_module, "extract_frames", fake_extract)
+        monkeypatch.setattr(process_module, "detect_birds", fake_detect)
+        monkeypatch.setattr(process_module, "Tracker", lambda: _FakeTracker([_FakeTrack(track_id=1, detections=[tracked_det])]))
+        monkeypatch.setattr(process_module, "classify_bird", lambda _img: [])
+        monkeypatch.setattr(process_module, "_save_crop", lambda _d, *, visit_id, track_id: Path(f"crops/v{visit_id}_t{track_id}.jpg"))
+        monkeypatch.setattr(process_module, "_rank_detections", lambda track: list(track.detections))
+        monkeypatch.setattr(process_module, "_extract_crop_from_image", lambda _d, _img, padding=0.15: fake_frame_image)
+        monkeypatch.setattr(process_module, "_save_source_frames", lambda *_a, **_k: None)
+        monkeypatch.setattr(process_module, "dispatch_for_detection", lambda *_a, **_k: 0)
+
+        process_module.process_visit(visit, session)
+
+        assert len(detected_tiles) == 1
+        # On frame 0 (keyframe), all tiles for 100x100 frame are evaluated
+        assert detected_tiles[0] == [(0, 0, 100, 100)]
+    finally:
+        session.close()

@@ -74,6 +74,11 @@ class Tracker:
         self._tracks: list[Track] = []
         self._next_track_id = 1
 
+    @property
+    def active_tracks(self) -> list[Track]:
+        """Currently open (non-closed) tracks."""
+        return [t for t in self._tracks if not t.closed]
+
     def update(self, frame_index: int, detections: Iterable[BirdDetection]) -> None:
         """Associate this frame's detections with existing tracks."""
         dets = list(detections)

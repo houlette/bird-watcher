@@ -184,3 +184,24 @@ def test_torch_backend_never_loads_openvino(monkeypatch):
     monkeypatch.setattr(detect, "_get_openvino", boom)
     monkeypatch.setattr(detect, "_get_model", lambda: _FakeTorchModel())
     assert detect.detect_birds(FRAME, 0, backend="torch") == []
+
+
+def test_detect_birds_with_tile_subset(monkeypatch):
+    model = _FakeTorchModel()
+    monkeypatch.setattr(detect, "_get_openvino", lambda: None)
+    monkeypatch.setattr(detect, "_get_model", lambda: model)
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(get_num_threads=lambda: 1))
+    stats = {}
+    subset = [(0, 0, 1024, 1024), (819, 0, 1024, 1024)]
+
+    dets = detect.detect_birds(FRAME, 0, stats=stats, backend="torch", tiles=subset)
+    assert dets == []
+    assert model.calls == 2
+    assert stats["tiles"] == 2
+
+
+def test_detect_birds_with_empty_tiles_short_circuits(monkeypatch):
+    stats = {}
+    dets = detect.detect_birds(FRAME, 0, stats=stats, tiles=[])
+    assert dets == []
+    assert stats["tiles"] == 0

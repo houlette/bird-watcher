@@ -22,7 +22,11 @@ from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING, Any
 
+import cv2
 import numpy as np
+
+# Restrict OpenCV to 1 thread so it does not contend with OpenVINO inference threads.
+cv2.setNumThreads(1)
 
 if TYPE_CHECKING:
     from ultralytics import YOLO  # type: ignore
@@ -348,17 +352,28 @@ def _tile_boxes_openvino(runner: _OpenVinoTiles, frame_image: np.ndarray, tiles)
 
 
 def detect_birds(
-    frame_image: np.ndarray, frame_index: int, stats: dict | None = None, backend: str | None = None
+    frame_image: np.ndarray,
+    frame_index: int,
+    stats: dict | None = None,
+    backend: str | None = None,
+    tiles: list[tuple[int, int, int, int]] | None = None,
 ) -> list[BirdDetection]:
     """Tiled YOLO bird detection on a single BGR frame.
 
     `backend` overrides YOLO_BACKEND for this call (used by parity checks).
+    `tiles` overrides the full grid with a subset of active tiles (used by motion gating).
     If `stats` is given, `tiles` is incremented by the number of tiles run,
     `backend` records the backend that actually ran, and for PyTorch
     `torch_threads` records the thread count in effect, which the first
     predict call sets."""
+    if tiles is not None and not tiles:
+        if stats is not None:
+            stats["tiles"] = stats.get("tiles", 0)
+        return []
+
     height, width = frame_image.shape[:2]
-    tiles = _tile_offsets(width, height)
+    if tiles is None:
+        tiles = _tile_offsets(width, height)
     runner = _get_openvino() if (backend or YOLO_BACKEND) == "openvino" else None
     if runner is not None:
         per_tile = _tile_boxes_openvino(runner, frame_image, tiles)

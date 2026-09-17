@@ -56,6 +56,13 @@ class Settings(BaseSettings):
     # itself changes. Set BACKDROP_FILTER_ENABLED=1 to put it back.
     backdrop_filter_enabled: bool = os.getenv("BACKDROP_FILTER_ENABLED", "") not in ("", "0", "false", "False")
 
+    # Phase 0 motion-gated spatial tiling engine. When enabled, non-keyframe frames
+    # only evaluate tiles exhibiting motion, active tracks, or recent perch memory.
+    # Keyframes (every 1.0s / 3rd frame) evaluate all 15 tiles. Default is off until
+    # Stage 1 and Stage 2 validation gates pass. Set MOTION_GATED_TILES_ENABLED=1
+    # to enable.
+    motion_gated_tiles_enabled: bool = os.getenv("MOTION_GATED_TILES_ENABLED", "0") in ("1", "true", "True", "yes")
+
     # Web Push (VAPID). The public key is sent to the browser at subscription
     # time; the private key signs the JWT in each push request. Generate both
     # via scripts/generate_vapid_keys.py.

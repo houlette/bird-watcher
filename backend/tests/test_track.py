@@ -94,3 +94,16 @@ def test_greedy_match_picks_higher_iou_pair():
     assert len(tracks) == 2
     second_track = next(t for t in tracks if t.detections[0].bbox == (140, 100, 50, 50))
     assert len(second_track.detections) == 2
+
+
+def test_active_tracks_property():
+    tracker = Tracker()
+    assert tracker.active_tracks == []
+    tracker.update(0, [det((100, 100, 50, 50), 0)])
+    assert len(tracker.active_tracks) == 1
+    assert tracker.active_tracks[0].track_id == 1
+
+    # Miss frames until track closes
+    for i in range(1, 1 + MAX_MISSED_FRAMES + 1):
+        tracker.update(i, [])
+    assert tracker.active_tracks == []

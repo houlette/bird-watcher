@@ -16,6 +16,8 @@ import cv2
 import numpy as np
 from sqlalchemy.orm import Session
 
+cv2.setNumThreads(1)
+
 from db.models import NOT_A_BIRD_LABEL, Detection, Species, Visit
 from db.utils import utcnow
 from pipeline.binary_filter import (
@@ -24,10 +26,11 @@ from pipeline.binary_filter import (
 )
 from settings import settings
 from pipeline.classify import SpeciesPrediction, classify_bird
-from pipeline.detect import detect_birds
+from pipeline.detect import _tile_offsets, detect_birds
 from pipeline.exceptions import SkipFile
 from pipeline.frames import extract_frames
 from pipeline.fuse import FusedPrediction, fuse
+from pipeline.motion_tiles import select_active_tiles_hardened
 from pipeline.notify import dispatch_for_detection
 from pipeline.backdrop import filter_detections as _backdrop_filter
 from pipeline.recurrence import filter_detections as _recurrence_filter
@@ -114,6 +117,11 @@ def process_visit(visit: Visit, db: Session) -> int:
     # was never loaded for that hour.
     backdrop_scored = 0
 
+    # Phase 0 motion-gated spatial tiling state
+    prev_gray: np.ndarray | None = None
+    perch_memory: dict[tuple[int, int, int, int], int] = {}
+    all_tiles: list[tuple[int, int, int, int]] | None = None
+
     # We sample at 3 fps (vs the source's 20 fps) — every ~7th frame.
     # Combined with the 10 s clip-duration cap in frames.py, this gives the
     # sharpness ranker ~30 candidates per visit total, and bounds per-visit
@@ -139,7 +147,24 @@ def process_visit(visit: Visit, db: Session) -> int:
             # between tiles by design, so its baseline is higher; compare it
             # only with itself (Visit.timings.detect_backend).
             switches_before = resource.getrusage(resource.RUSAGE_SELF).ru_nvcsw
-            dets = detect_birds(frame.image, frame.index, stats=detect_stats)
+            if settings.motion_gated_tiles_enabled:
+                h_full, w_full = frame.image.shape[:2]
+                if all_tiles is None:
+                    all_tiles = _tile_offsets(w_full, h_full)
+                active_trks = tracker.active_tracks if hasattr(tracker, "active_tracks") else []
+                selected_tiles, prev_gray = select_active_tiles_hardened(
+                    prev_gray=prev_gray,
+                    curr_bgr=frame.image,
+                    frame_index=frame.index,
+                    active_tracks=active_trks,
+                    perch_memory=perch_memory,
+                    all_tiles=all_tiles,
+                    frame_shape=(h_full, w_full),
+                    keyframe_interval=3,
+                )
+                dets = detect_birds(frame.image, frame.index, stats=detect_stats, tiles=selected_tiles)
+            else:
+                dets = detect_birds(frame.image, frame.index, stats=detect_stats)
             timer.count(
                 "detect_voluntary_switches",
                 resource.getrusage(resource.RUSAGE_SELF).ru_nvcsw - switches_before,
