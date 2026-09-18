@@ -87,14 +87,15 @@ def select_active_tiles_hardened(
 
     # Keyframe refresh (every 1.0s / 3rd frame) or missing history: run all 15 tiles
     if frame_index % keyframe_interval == 0 or prev_gray is None:
-        # If there are active validated tracks, refresh their perch memory on keyframes too
+        # If there are active validated bird tracks, refresh their perch memory on keyframes
         for t in active_tracks:
             if not t.closed and hasattr(t, "detections") and len(t.detections) >= 3:
-                bx, by, bw, bh = t.last_bbox
-                tbox = (bx, by, bw, bh)
-                for tile in all_tiles:
-                    if _box_intersects(tile, tbox):
-                        perch_memory[tile] = frame_index + PERCH_MEMORY_FRAMES
+                if any(d.confidence >= 0.50 for d in t.detections):
+                    bx, by, bw, bh = t.last_bbox
+                    tbox = (bx, by, bw, bh)
+                    for tile in all_tiles:
+                        if _box_intersects(tile, tbox):
+                            perch_memory[tile] = frame_index + PERCH_MEMORY_FRAMES
         return list(all_tiles), curr_low
 
     scale_x = curr_low.shape[1] / float(w_full)
@@ -107,6 +108,11 @@ def select_active_tiles_hardened(
         if not t.closed or (hasattr(t, "missed_frames") and t.missed_frames <= 3):
             if not getattr(t, "detections", None):
                 continue
+            max_c = max(d.confidence for d in t.detections)
+            # Filter single-frame low-confidence blips (< 0.50) from ballooning tiles
+            if len(t.detections) < 2 and max_c < 0.50:
+                continue
+
             bx, by, bw, bh = t.last_bbox
             v_margin = 300
             if len(t.detections) >= 2:
@@ -129,7 +135,7 @@ def select_active_tiles_hardened(
             for tile in all_tiles:
                 if _box_intersects(tile, expanded_box):
                     selected_tiles.add(tile)
-                    if len(t.detections) >= 3:
+                    if len(t.detections) >= 3 and max_c >= 0.50:
                         perch_memory[tile] = frame_index + PERCH_MEMORY_FRAMES
 
     # 3. RECENT PERCH MEMORY (Protect motionless perched birds across extended YOLO drops)
@@ -148,43 +154,48 @@ def select_active_tiles_hardened(
     diff = cv2.absdiff(curr_low, prev_adjusted)
     _, thresh = cv2.threshold(diff, DIFF_THRESHOLD, 255, cv2.THRESH_BINARY)
 
-    # 5. PRECISE TILE-ZONE & SEAM-PROXIMITY EVALUATION (Evaluates ALL tiles to avoid blind spots)
+    # 3x3 morphological opening to suppress isolated pixel jitter / leaf edges
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    opened = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+
+    # 5. PRECISE TILE-ZONE & SEAM-PROXIMITY EVALUATION (Per-blob seam checking)
     seam_margin_low = int(TILE_OVERLAP_MARGIN_FULL * scale_x)
     for tile in all_tiles:
         x, y, w, h = tile
         tx, ty = int(x * scale_x), int(y * scale_y)
         tw, th = int(w * scale_x), int(h * scale_y)
-        tile_diff = thresh[ty : min(curr_low.shape[0], ty + th), tx : min(curr_low.shape[1], tx + tw)]
+        tile_diff = opened[ty : min(curr_low.shape[0], ty + th), tx : min(curr_low.shape[1], tx + tw)]
 
-        pts = cv2.findNonZero(tile_diff)
-        if pts is not None and len(pts) >= min_motion_area:
-            selected_tiles.add(tile)
-            # Find bounding box of actual motion inside tile
-            mbx, mby, mbw, mbh = cv2.boundingRect(pts)
-            th_actual, tw_actual = tile_diff.shape[:2]
+        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(tile_diff)
+        th_actual, tw_actual = tile_diff.shape[:2]
 
-            # Check if motion touches the tile overlap seam boundary
-            touches_left = mbx <= seam_margin_low
-            touches_right = (mbx + mbw) >= (tw_actual - seam_margin_low)
-            touches_top = mby <= seam_margin_low
-            touches_bottom = (mby + mbh) >= (th_actual - seam_margin_low)
+        for s in stats[1:]:
+            if s[cv2.CC_STAT_AREA] >= min_motion_area:
+                selected_tiles.add(tile)
+                mbx, mby, mbw, mbh = s[cv2.CC_STAT_LEFT], s[cv2.CC_STAT_TOP], s[cv2.CC_STAT_WIDTH], s[cv2.CC_STAT_HEIGHT]
 
-            if touches_left or touches_right or touches_top or touches_bottom:
-                # Convert motion bbox to full-frame coords
-                full_mbx = x + int(mbx / scale_x)
-                full_mby = y + int(mby / scale_y)
-                full_mbw = int(mbw / scale_x)
-                full_mbh = int(mbh / scale_y)
+                # Check if this specific motion blob touches the tile overlap seam boundary
+                touches_left = mbx <= seam_margin_low
+                touches_right = (mbx + mbw) >= (tw_actual - seam_margin_low)
+                touches_top = mby <= seam_margin_low
+                touches_bottom = (mby + mbh) >= (th_actual - seam_margin_low)
 
-                # Expand only the motion box by seam margin using correct Cartesian math
-                sx1 = max(0, full_mbx - TILE_OVERLAP_MARGIN_FULL)
-                sy1 = max(0, full_mby - TILE_OVERLAP_MARGIN_FULL)
-                sx2 = min(w_full, full_mbx + full_mbw + TILE_OVERLAP_MARGIN_FULL)
-                sy2 = min(h_full, full_mby + full_mbh + TILE_OVERLAP_MARGIN_FULL)
-                motion_envelope = (sx1, sy1, sx2 - sx1, sy2 - sy1)
+                if touches_left or touches_right or touches_top or touches_bottom:
+                    # Convert motion bbox to full-frame coords
+                    full_mbx = x + int(mbx / scale_x)
+                    full_mby = y + int(mby / scale_y)
+                    full_mbw = int(mbw / scale_x)
+                    full_mbh = int(mbh / scale_y)
 
-                for adj_tile in all_tiles:
-                    if adj_tile not in selected_tiles and _box_intersects(adj_tile, motion_envelope):
-                        selected_tiles.add(adj_tile)
+                    # Expand only the specific motion blob by seam margin
+                    sx1 = max(0, full_mbx - TILE_OVERLAP_MARGIN_FULL)
+                    sy1 = max(0, full_mby - TILE_OVERLAP_MARGIN_FULL)
+                    sx2 = min(w_full, full_mbx + full_mbw + TILE_OVERLAP_MARGIN_FULL)
+                    sy2 = min(h_full, full_mby + full_mbh + TILE_OVERLAP_MARGIN_FULL)
+                    motion_envelope = (sx1, sy1, sx2 - sx1, sy2 - sy1)
+
+                    for adj_tile in all_tiles:
+                        if adj_tile not in selected_tiles and _box_intersects(adj_tile, motion_envelope):
+                            selected_tiles.add(adj_tile)
 
     return sorted(selected_tiles, key=lambda t: (t[1], t[0])), curr_low
