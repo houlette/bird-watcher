@@ -53,6 +53,8 @@ backend/data.real-backup/
 
 # YOLO weights are auto-downloaded by ultralytics on first call.
 backend/yolo*.pt
+*.pt
+*_openvino_model/
 
 # Local-only experiment / scratch scripts that live under tracked paths
 # (so we can't gitignore the whole parent dir). CLAUDE.md lists these
