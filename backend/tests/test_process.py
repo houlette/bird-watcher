@@ -106,8 +106,9 @@ def test_classifier_rejection_still_creates_detection(db, tmp_path, monkeypatch)
             stats.update(source_frames_read=7, source_fps=20.0, width=100, height=100)
             return iter([_Frame(image=fake_frame_image)])
 
-        def fake_detect(_img, _idx, stats=None):
-            stats["tiles"] = stats.get("tiles", 0) + 15
+        def fake_detect(_img, _idx, stats=None, **_kwargs):
+            if stats is not None:
+                stats["tiles"] = stats.get("tiles", 0) + 15
             return [tracked_det]
 
         monkeypatch.setattr(process_module, "extract_frames", fake_extract)
