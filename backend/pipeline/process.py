@@ -1006,14 +1006,75 @@ def _score_crop_variants(best, served_crop, served_p):
     return single, polished
 
 
-def _polish_for_display(bgr: np.ndarray) -> np.ndarray:
-    """Lighting-normalize (CLAHE) and adaptively sharpen the user-visible feed crop.
+# Chroma-guided filter parameters for 4:2:0 subsampling restoration and color denoising.
+_CHROMA_FILTER_RADIUS = 2
+_CHROMA_FILTER_EPS = 1e-4
 
-    Operates on the L channel of LAB to preserve exact chroma. For crops with
-    soft focus or motion blur (Laplacian variance < _SHARPEN_CUTOFF_VAR), an
-    edge-preserving bilateral unsharp mask brings out fine feather plumage
-    without creating harsh halos or boosting sensor noise.
+
+def _chroma_guided_filter(
+    bgr: np.ndarray,
+    r: int = _CHROMA_FILTER_RADIUS,
+    eps: float = _CHROMA_FILTER_EPS,
+) -> np.ndarray:
+    """Restore 4:2:0 chroma subsampling artifacts and denoise color channels.
+
+    Surveillance cameras encode video in YUV 4:2:0 where Cr and Cb chroma channels
+    are subsampled to half resolution in both dimensions. Bilinear upsampling during
+    video decode causes color bleeding across sharp plumage boundaries and blotchy
+    chroma noise in dim/shaded plumage.
+
+    This applies a guided filter (He et al., ECCV 2010) using the full-resolution
+    Y (luma) channel as the edge guide to filter Cr and Cb. Color boundaries snap
+    tightly to physical luma edges while sensor chroma noise is smoothed in flat areas.
     """
+    if bgr is None or bgr.size == 0 or bgr.shape[0] < (2 * r + 1) or bgr.shape[1] < (2 * r + 1):
+        return bgr
+
+    if bgr.dtype != np.uint8:
+        bgr = np.clip(bgr, 0, 255).astype(np.uint8)
+
+    # Convert to YCrCb space (native representation of 4:2:0 video)
+    ycrcb = cv2.cvtColor(bgr, cv2.COLOR_BGR2YCrCb).astype(np.float32) * (1.0 / 255.0)
+    y = ycrcb[:, :, 0]
+    ksize = (2 * r + 1, 2 * r + 1)
+
+    mean_y = cv2.boxFilter(y, cv2.CV_32F, ksize)
+    corr_y = cv2.boxFilter(y * y, cv2.CV_32F, ksize)
+    var_y = corr_y - mean_y * mean_y
+    inv_denom = 1.0 / (var_y + eps)
+
+    for c_idx in (1, 2):
+        c = ycrcb[:, :, c_idx]
+        mean_c = cv2.boxFilter(c, cv2.CV_32F, ksize)
+        corr_yc = cv2.boxFilter(y * c, cv2.CV_32F, ksize)
+        cov_yc = corr_yc - mean_y * mean_c
+
+        a = cov_yc * inv_denom
+        b = mean_c - a * mean_y
+
+        mean_a = cv2.boxFilter(a, cv2.CV_32F, ksize)
+        mean_b = cv2.boxFilter(b, cv2.CV_32F, ksize)
+
+        ycrcb[:, :, c_idx] = mean_a * y + mean_b
+
+    np.clip(np.rint(ycrcb * 255.0), 0, 255, out=ycrcb)
+    return cv2.cvtColor(ycrcb.astype(np.uint8), cv2.COLOR_YCrCb2BGR)
+
+
+def _polish_for_display(bgr: np.ndarray) -> np.ndarray:
+    """Lighting-normalize (CLAHE), chroma-denoise, and adaptively sharpen the feed crop.
+
+    First applies a chroma-guided filter (He et al.) in YCrCb to reconstruct 4:2:0
+    subsampling color bleed and remove blotchy sensor noise in color channels.
+    Then performs CLAHE and an edge-preserving bilateral unsharp mask on the L
+    channel of LAB to bring out feather texture without halos or noise amplification.
+    """
+    if bgr is None or bgr.size == 0:
+        return bgr
+
+    if getattr(settings, "chroma_filter_enabled", True):
+        bgr = _chroma_guided_filter(bgr)
+
     lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
     l_channel, a_channel, b_channel = cv2.split(lab)
     l_eq = _DISPLAY_CLAHE.apply(l_channel)

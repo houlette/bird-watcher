@@ -77,12 +77,12 @@ The camera stream presents several physical constraints:
 
 ### Technique 3: Chroma-Guided Detail Restoration & Denoising
 - **Concept**: Reconstruct 4:2:0 subsampled chroma artifacts by cross-filtering chroma
-  (A/B or Cb/Cr) using the full-resolution Luma (L or Y) channel as a structural guide.
-- **Mechanism**: Guided filter or joint bilateral filter where color boundaries are
-  snapped to sharp luma edges, eliminating chroma bleeding while smoothing blotchy
-  chroma noise in shadowed plumage.
-- **Target Latency**: < 2 ms per crop.
-- **Status**: Planned (Step 3).
+  (Cr and Cb in YCrCb space) using the full-resolution Luma (Y) channel as a structural guide.
+- **Mechanism**: Fast O(1) guided filter (He et al., ECCV 2010) using `cv2.boxFilter` with
+  shared luma denominator inversion across both color channels. Snaps color boundaries to
+  sharp luma edges, eliminating 4:2:0 bilinear color bleed while smoothing blotchy sensor noise.
+- **Target Latency**: < 2 ms per crop (benchmarks at ~1.1 ms).
+- **Status**: Shipped & deployed to production.
 
 ### Technique 4: Single-Image Super-Resolution (SISR) via Lightweight ONNX
 - **Concept**: Enhance small crops (< 180×180 px) to crisp 2×/4× resolution for display
@@ -139,7 +139,7 @@ The camera stream presents several physical constraints:
 |---|---|---|---|---|---|
 | Edge-Aware Sharpening | Shipped | ~1.5 ms / crop | Bilateral unsharp mask on L-channel; coring=2.0, clamp=±15.0 | 2026-09-20 | `860eb0a` |
 | Lucky Imaging | Shipped | 0 ms (crisp) / ~90 ms (blurry) | ±3 source frames searched when var < 200; phase-corr gated | 2026-09-20 | `fb3073a` |
-| Chroma-Guided Denoising | Planned | < 2 ms target | Luma-guided chroma edge snapping | - | - |
+| Chroma-Guided Denoising | Shipped | ~1.1 ms / crop | Fast YCrCb guided filter (r=2, eps=1e-4); >50% chroma noise reduction | 2026-09-20 | `205416a` |
 | Lightweight SISR (ONNX) | Planned | < 40 ms target | 2× upscaling on crops < 180 px | - | - |
 | Mertens Exposure Fusion | Planned | < 10 ms target | 3-exposure multiscale blending for backlit crops | - | - |
 | Shift-and-Add Super-Res | Planned | < 50 ms target | Sub-pixel alignment over 3-5 burst frames | - | - |

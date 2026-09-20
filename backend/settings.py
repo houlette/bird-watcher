@@ -73,6 +73,10 @@ class Settings(BaseSettings):
     lucky_imaging_enabled: bool = os.getenv("LUCKY_IMAGING_ENABLED", "1") in ("1", "true", "True", "yes")
     lucky_imaging_threshold: float = float(os.getenv("LUCKY_IMAGING_THRESHOLD", "200.0"))
 
+    # Chroma-guided filter: reconstruct 4:2:0 subsampled chroma channels
+    # using full-resolution luma as guide to eliminate color bleed and chroma noise.
+    chroma_filter_enabled: bool = os.getenv("CHROMA_FILTER_ENABLED", "1") in ("1", "true", "True", "yes")
+
     # Web Push (VAPID). The public key is sent to the browser at subscription
     # time; the private key signs the JWT in each push request. Generate both
     # via scripts/generate_vapid_keys.py.

@@ -77,3 +77,56 @@ def test_polish_skips_sharpening_on_already_crisp_input(monkeypatch):
     gated = _polish_for_display(sharp)
 
     np.testing.assert_array_equal(clahe_only, gated)
+
+
+def test_chroma_guided_filter_edge_cases():
+    from pipeline.process import _chroma_guided_filter
+
+    # Empty
+    empty = np.zeros((0, 0, 3), dtype=np.uint8)
+    assert _chroma_guided_filter(empty).size == 0
+    # None
+    assert _chroma_guided_filter(None) is None
+    # Tiny (smaller than filter window)
+    tiny = np.ones((3, 3, 3), dtype=np.uint8) * 100
+    assert _chroma_guided_filter(tiny).shape == (3, 3, 3)
+    # Uniform solid color is preserved within color space roundtrip precision (<= 1 LSB)
+    solid = (np.ones((40, 40, 3), dtype=np.uint8) * [40, 80, 200]).astype(np.uint8)
+    out_solid = _chroma_guided_filter(solid)
+    np.testing.assert_allclose(solid, out_solid, atol=1)
+
+
+def test_chroma_guided_filter_denoises_color_channels():
+    """Chroma noise on a flat region should be significantly smoothed."""
+    from pipeline.process import _chroma_guided_filter
+
+    img = np.full((80, 80, 3), 128, dtype=np.uint8)
+    ycrcb = cv2.cvtColor(img, cv2.COLOR_BGR2YCrCb).astype(np.float32)
+    np.random.seed(123)
+    ycrcb[:, :, 1] += np.random.normal(0, 15, (80, 80))  # Cr noise
+    ycrcb[:, :, 2] += np.random.normal(0, 15, (80, 80))  # Cb noise
+    noisy_bgr = cv2.cvtColor(np.clip(ycrcb, 0, 255).astype(np.uint8), cv2.COLOR_YCrCb2BGR)
+
+    noisy_cr_std = cv2.cvtColor(noisy_bgr, cv2.COLOR_BGR2YCrCb)[:, :, 1].std()
+    filtered_bgr = _chroma_guided_filter(noisy_bgr)
+    filtered_cr_std = cv2.cvtColor(filtered_bgr, cv2.COLOR_BGR2YCrCb)[:, :, 1].std()
+
+    # Noise std should be reduced by more than 50%
+    assert filtered_cr_std < noisy_cr_std * 0.5
+
+
+def test_chroma_filter_toggled_by_settings(monkeypatch):
+    """When chroma_filter_enabled is False, _polish_for_display skips chroma filtering."""
+    from settings import settings
+
+    img = np.full((50, 50, 3), 128, dtype=np.uint8)
+    img[25, 25] = [200, 50, 50]
+
+    monkeypatch.setattr(settings, "chroma_filter_enabled", False)
+    out_disabled = _polish_for_display(img)
+
+    monkeypatch.setattr(settings, "chroma_filter_enabled", True)
+    out_enabled = _polish_for_display(img)
+
+    # Output with filter enabled should differ from disabled due to smoothing the isolated chroma spike
+    assert not np.array_equal(out_disabled, out_enabled)
