@@ -130,6 +130,15 @@ The camera stream presents several physical constraints:
    display crop written to `crops/` and the anchor fed to the species classifier.
 4. **Reversibility**: Every enhancement must be configurable via `backend/settings.py`
    environment variables.
+5. **Comparative Diagnostics & Variant Inspection**:
+   To systematically evaluate which combination of computational photography techniques yields
+   the cleanest plumage detail without artifacts, raw crops and pre-lucky crops are preserved
+   alongside production polished crops (`crops/v..._raw.jpg` and `crops/v..._initial_raw.jpg`).
+   The backend provides dynamic variant endpoints (`/api/detections/{id}/crop` and
+   `/api/detections/{id}/crop-variants`), while the frontend provides an interactive inspection
+   studio in `ImageZoom` with real-time technique toggling (Chroma, CLAHE, Sharpen, Lucky),
+   preset buttons (`Full Polish`, `Raw`, `Chroma Only`, `CLAHE Only`, `Sharpen Only`),
+   instant hold-to-compare (Spacebar), and 1x/2x/4x nearest-neighbor pixel magnification.
 
 ---
 

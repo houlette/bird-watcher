@@ -307,6 +307,7 @@ def process_visit(visit: Visit, db: Session) -> int:
                             lucky_src_idx,
                             found_src_idx,
                         )
+                        best.initial_crop = best.crop.copy()
                         best.crop = improved_crop
                         if improved_bbox is not None:
                             best.bbox = improved_bbox
@@ -1061,57 +1062,68 @@ def _chroma_guided_filter(
     return cv2.cvtColor(ycrcb.astype(np.uint8), cv2.COLOR_YCrCb2BGR)
 
 
-def _polish_for_display(bgr: np.ndarray) -> np.ndarray:
-    """Lighting-normalize (CLAHE), chroma-denoise, and adaptively sharpen the feed crop.
+def render_crop_variant(
+    bgr: np.ndarray,
+    *,
+    chroma: bool = True,
+    clahe: bool = True,
+    sharpen: bool = True,
+) -> np.ndarray:
+    """Apply an arbitrary combination of computational photography techniques to a crop.
 
-    First applies a chroma-guided filter (He et al.) in YCrCb to reconstruct 4:2:0
-    subsampling color bleed and remove blotchy sensor noise in color channels.
-    Then performs CLAHE and an edge-preserving bilateral unsharp mask on the L
-    channel of LAB to bring out feather texture without halos or noise amplification.
+    - chroma: Chroma-guided filtering in YCrCb (He et al., ECCV 2010) to remove
+      4:2:0 subsampling bleed and smooth chroma sensor noise.
+    - clahe: Dynamic range normalization via CLAHE on the L channel of LAB.
+    - sharpen: Edge-preserving bilateral unsharp masking on the L channel of LAB.
     """
     if bgr is None or bgr.size == 0:
         return bgr
 
-    if getattr(settings, "chroma_filter_enabled", True):
-        bgr = _chroma_guided_filter(bgr)
+    if bgr.dtype != np.uint8:
+        bgr = np.clip(bgr, 0, 255).astype(np.uint8)
 
-    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+    out = bgr.copy()
+    if chroma:
+        out = _chroma_guided_filter(out)
+
+    if not clahe and not sharpen:
+        return out
+
+    lab = cv2.cvtColor(out, cv2.COLOR_BGR2LAB)
     l_channel, a_channel, b_channel = cv2.split(lab)
-    l_eq = _DISPLAY_CLAHE.apply(l_channel)
 
-    if _SHARPEN_MAX_AMOUNT <= 0:
-        return cv2.cvtColor(cv2.merge((l_eq, a_channel, b_channel)), cv2.COLOR_LAB2BGR)
+    if clahe:
+        l_channel = _DISPLAY_CLAHE.apply(l_channel)
 
-    # Sharpness gating: already-crisp crops need no sharpening
-    var = cv2.Laplacian(l_eq, cv2.CV_64F).var()
-    if var >= _SHARPEN_CUTOFF_VAR:
-        return cv2.cvtColor(cv2.merge((l_eq, a_channel, b_channel)), cv2.COLOR_LAB2BGR)
+    if sharpen and _SHARPEN_MAX_AMOUNT > 0:
+        var = cv2.Laplacian(l_channel, cv2.CV_64F).var()
+        if var < _SHARPEN_CUTOFF_VAR:
+            amount = _SHARPEN_MAX_AMOUNT * (1.0 - var / _SHARPEN_CUTOFF_VAR)
+            bilat = cv2.bilateralFilter(l_channel, d=5, sigmaColor=25, sigmaSpace=3)
+            diff = l_channel.astype(np.float32) - bilat.astype(np.float32)
+            diff = np.where(np.abs(diff) < _SHARPEN_CORING_THRESHOLD, 0.0, diff)
+            diff = np.clip(diff, -_SHARPEN_MAX_BOOST, _SHARPEN_MAX_BOOST)
+            l_channel = np.clip(l_channel.astype(np.float32) + amount * diff, 0, 255).astype(np.uint8)
 
-    # Scale sharpening amount inversely with sharpness (blurrier gets more)
-    amount = _SHARPEN_MAX_AMOUNT * (1.0 - var / _SHARPEN_CUTOFF_VAR)
+    return cv2.cvtColor(cv2.merge((l_channel, a_channel, b_channel)), cv2.COLOR_LAB2BGR)
 
-    # Bilateral filter preserves sharp silhouette edges while smoothing texture/noise
-    bilat = cv2.bilateralFilter(l_eq, d=5, sigmaColor=25, sigmaSpace=3)
-    diff = l_eq.astype(np.float32) - bilat.astype(np.float32)
 
-    # Coring: ignore low-amplitude sensor noise in flat regions
-    diff = np.where(np.abs(diff) < _SHARPEN_CORING_THRESHOLD, 0.0, diff)
-    # Clamp extreme spikes to avoid haloing on high-contrast edges
-    diff = np.clip(diff, -_SHARPEN_MAX_BOOST, _SHARPEN_MAX_BOOST)
+def _polish_for_display(bgr: np.ndarray) -> np.ndarray:
+    """Lighting-normalize (CLAHE), chroma-denoise, and adaptively sharpen the feed crop.
 
-    l_sharp = np.clip(l_eq.astype(np.float32) + amount * diff, 0, 255).astype(np.uint8)
-    return cv2.cvtColor(cv2.merge((l_sharp, a_channel, b_channel)), cv2.COLOR_LAB2BGR)
+    Convenience wrapper applying production pipeline defaults.
+    """
+    return render_crop_variant(
+        bgr,
+        chroma=getattr(settings, "chroma_filter_enabled", True),
+        clahe=True,
+        sharpen=True,
+    )
 
 
 def _save_crop(det, *, visit_id: int, track_id: int) -> Path:
-    """Write a display-polished `det.crop` to disk and return the path
-    relative to DATA_DIR.
-
-    The polish (CLAHE + unsharp mask) is applied here, on the way to disk
-    — the un-polished `det.crop` ndarray is what the classifier still
-    receives (via its own preprocessing path in pipeline.classify). This
-    keeps the user-facing image quality lever independent from the
-    classifier's input distribution.
+    """Write a display-polished `det.crop` to disk, as well as the raw crop
+    and any pre-lucky crop, and return the display crop path relative to DATA_DIR.
     """
     crop = det.crop
     assert crop is not None and crop.size > 0, "crop must be populated at detection time"
@@ -1119,6 +1131,17 @@ def _save_crop(det, *, visit_id: int, track_id: int) -> Path:
     filename = f"v{visit_id:08d}_t{track_id:04d}.jpg"
     out_path = CROPS_DIR / filename
     cv2.imwrite(str(out_path), polished, [cv2.IMWRITE_JPEG_QUALITY, 90])
+
+    # Save raw crop so variants can be rendered on demand or compared against
+    raw_path = CROPS_DIR / f"v{visit_id:08d}_t{track_id:04d}_raw.jpg"
+    cv2.imwrite(str(raw_path), crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
+
+    # If lucky imaging found a superior adjacent frame, also preserve the initial 3fps crop
+    initial_crop = getattr(det, "initial_crop", None)
+    if initial_crop is not None and initial_crop.size > 0:
+        init_raw_path = CROPS_DIR / f"v{visit_id:08d}_t{track_id:04d}_initial_raw.jpg"
+        cv2.imwrite(str(init_raw_path), initial_crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
+
     return out_path.relative_to(DATA_DIR)
 
 

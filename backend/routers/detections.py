@@ -2,6 +2,7 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from sqlalchemy import and_, desc, or_, select
 from sqlalchemy.orm import Session, joinedload
 
@@ -295,3 +296,146 @@ async def get_visit(visit_id: int, db: Session = Depends(get_db)) -> dict:
             for d in visit.detections
         ],
     }
+
+
+@router.get("/{detection_id}/crop")
+async def get_detection_crop(
+    detection_id: int,
+    chroma: bool | None = Query(None, description="Apply chroma-guided filtering (4:2:0 subsampling restoration)"),
+    clahe: bool | None = Query(None, description="Apply CLAHE dynamic range normalization"),
+    sharpen: bool | None = Query(None, description="Apply edge-preserving bilateral unsharp masking"),
+    preset: str | None = Query(None, description="Convenience preset: 'raw', 'polish', 'chroma_only', 'clahe_only', 'sharpen_only'"),
+    source: str = Query("lucky", description="'lucky' (default) or 'initial' (pre-lucky 3fps frame)"),
+    db: Session = Depends(get_db),
+):
+    """Serve a dynamically rendered computational photography variant of a detection's crop."""
+    import cv2
+    from pipeline.process import (
+        CROPS_DIR,
+        DATA_DIR,
+        FRAMES_DIR,
+        _extract_crop_from_image,
+        render_crop_variant,
+    )
+
+    detection = db.query(Detection).filter(Detection.id == detection_id).one_or_none()
+    if not detection:
+        raise HTTPException(status_code=404, detail="Detection not found")
+
+    # Map presets
+    if preset == "raw":
+        use_chroma, use_clahe, use_sharpen = False, False, False
+    elif preset == "polish":
+        use_chroma, use_clahe, use_sharpen = True, True, True
+    elif preset == "chroma_only":
+        use_chroma, use_clahe, use_sharpen = True, False, False
+    elif preset == "clahe_only":
+        use_chroma, use_clahe, use_sharpen = False, True, False
+    elif preset == "sharpen_only":
+        use_chroma, use_clahe, use_sharpen = False, False, True
+    else:
+        use_chroma = chroma if chroma is not None else True
+        use_clahe = clahe if clahe is not None else True
+        use_sharpen = sharpen if sharpen is not None else True
+
+    raw_crop = None
+    vid = detection.visit_id
+    tid = detection.track_id
+
+    # 1. If source == "initial", check if pre-lucky initial raw crop exists
+    if source == "initial":
+        init_path = CROPS_DIR / f"v{vid:08d}_t{tid:04d}_initial_raw.jpg"
+        if init_path.exists():
+            raw_crop = cv2.imread(str(init_path))
+
+    # 2. Check standard raw crop file on disk
+    if raw_crop is None:
+        raw_path = CROPS_DIR / f"v{vid:08d}_t{tid:04d}_raw.jpg"
+        if raw_path.exists():
+            raw_crop = cv2.imread(str(raw_path))
+
+    # 3. Check source frame to extract raw crop on-demand
+    if raw_crop is None:
+        frame_path = FRAMES_DIR / f"v{vid:08d}_t{tid:04d}.jpg"
+        if frame_path.exists() and detection.bbox:
+            frame = cv2.imread(str(frame_path))
+            if frame is not None:
+                class _BboxHolder:
+                    def __init__(self, b):
+                        self.bbox = b
+
+                raw_crop = _extract_crop_from_image(_BboxHolder(detection.bbox), frame)
+                if raw_crop is not None and raw_crop.size > 0:
+                    # Cache to crops/ so future variant requests never re-decode 4K frames
+                    cv2.imwrite(str(CROPS_DIR / f"v{vid:08d}_t{tid:04d}_raw.jpg"), raw_crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
+
+    # 4. Fallback to existing saved crop
+    if raw_crop is None and detection.crop_path:
+        saved_crop_path = DATA_DIR / detection.crop_path
+        if saved_crop_path.exists():
+            raw_crop = cv2.imread(str(saved_crop_path))
+
+    if raw_crop is None or raw_crop.size == 0:
+        raise HTTPException(status_code=404, detail="Crop image file not found")
+
+    # If raw is all False and we are serving the raw image, check if we read a pre-processed crop
+    rendered = render_crop_variant(
+        raw_crop,
+        chroma=use_chroma,
+        clahe=use_clahe,
+        sharpen=use_sharpen,
+    )
+
+    ok, buf = cv2.imencode(".jpg", rendered, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to encode crop variant")
+
+    return Response(
+        content=buf.tobytes(),
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400, immutable"},
+    )
+
+
+@router.get("/{detection_id}/crop-variants")
+async def get_detection_crop_variants(
+    detection_id: int,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Return metadata and quick URLs for all available crop variants of a detection."""
+    from pipeline.process import CROPS_DIR, FRAMES_DIR
+
+    detection = db.query(Detection).filter(Detection.id == detection_id).one_or_none()
+    if not detection:
+        raise HTTPException(status_code=404, detail="Detection not found")
+
+    vid = detection.visit_id
+    tid = detection.track_id
+    has_initial = (CROPS_DIR / f"v{vid:08d}_t{tid:04d}_initial_raw.jpg").exists()
+    has_raw = (
+        (CROPS_DIR / f"v{vid:08d}_t{tid:04d}_raw.jpg").exists()
+        or (FRAMES_DIR / f"v{vid:08d}_t{tid:04d}.jpg").exists()
+    )
+
+    base = f"/api/detections/{detection_id}/crop"
+    variants = {
+        "polish": f"{base}?preset=polish",
+        "raw": f"{base}?preset=raw",
+        "chroma_only": f"{base}?preset=chroma_only",
+        "clahe_only": f"{base}?preset=clahe_only",
+        "sharpen_only": f"{base}?preset=sharpen_only",
+    }
+    if has_initial:
+        variants["initial_raw"] = f"{base}?preset=raw&source=initial"
+        variants["initial_polish"] = f"{base}?preset=polish&source=initial"
+
+    return {
+        "detection_id": detection_id,
+        "has_raw": has_raw,
+        "has_initial": has_initial,
+        "sharpness": detection.sharpness,
+        "crop_area_px": detection.crop_area_px,
+        "brightness": detection.brightness,
+        "variants": variants,
+    }
+

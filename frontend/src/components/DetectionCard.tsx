@@ -147,6 +147,7 @@ export default function DetectionCard({
         className={`group relative w-full aspect-[4/3] overflow-hidden bg-panel ${
           selectable ? "cursor-pointer" : "cursor-zoom-in"
         }`}
+        title={selectable ? undefined : "Click to inspect & compare processing variants (Raw, Chroma, CLAHE, Sharpen)"}
         onClick={selectable ? onToggleSelect : () => setZoomOpen(true)}
       >
         <img
@@ -417,6 +418,11 @@ export default function DetectionCard({
         <ImageZoom
           src={detection.crop_url}
           alt={detection.species ?? "bird"}
+          detectionId={detection.id}
+          species={detection.species}
+          initialSharpness={detection.sharpness}
+          cropAreaPx={detection.crop_area_px}
+          brightness={detection.brightness}
           onClose={() => setZoomOpen(false)}
         />
       )}

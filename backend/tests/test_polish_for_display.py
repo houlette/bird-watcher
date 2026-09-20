@@ -130,3 +130,29 @@ def test_chroma_filter_toggled_by_settings(monkeypatch):
 
     # Output with filter enabled should differ from disabled due to smoothing the isolated chroma spike
     assert not np.array_equal(out_disabled, out_enabled)
+
+
+def test_render_crop_variant_combinations():
+    """Verify render_crop_variant correctly handles raw passthrough and flags."""
+    from pipeline.process import render_crop_variant, _polish_for_display
+
+    img = np.random.randint(40, 200, (60, 60, 3), dtype=np.uint8)
+
+    # All false: returns unchanged raw pixels
+    raw = render_crop_variant(img, chroma=False, clahe=False, sharpen=False)
+    np.testing.assert_array_equal(img, raw)
+
+    # All true matches _polish_for_display
+    full = render_crop_variant(img, chroma=True, clahe=True, sharpen=True)
+    polish = _polish_for_display(img)
+    np.testing.assert_array_equal(full, polish)
+
+    # Individual flags produce differing images
+    chroma_only = render_crop_variant(img, chroma=True, clahe=False, sharpen=False)
+    clahe_only = render_crop_variant(img, chroma=False, clahe=True, sharpen=False)
+    sharpen_only = render_crop_variant(img, chroma=False, clahe=False, sharpen=True)
+
+    assert not np.array_equal(chroma_only, img)
+    assert not np.array_equal(clahe_only, img)
+    assert not np.array_equal(chroma_only, clahe_only)
+

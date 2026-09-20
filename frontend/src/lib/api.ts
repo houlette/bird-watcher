@@ -41,6 +41,47 @@ export type Detection = {
   nab_override_p: number | null;
 };
 
+export type CropVariantsMeta = {
+  detection_id: number;
+  has_raw: boolean;
+  has_initial: boolean;
+  sharpness: number | null;
+  crop_area_px: number | null;
+  brightness: number | null;
+  variants: Record<string, string>;
+};
+
+export async function fetchCropVariantsMeta(detectionId: number): Promise<CropVariantsMeta> {
+  const r = await fetch(`/api/detections/${detectionId}/crop-variants`);
+  if (!r.ok) throw new Error(`fetchCropVariantsMeta: ${r.status}`);
+  return (await r.json()) as CropVariantsMeta;
+}
+
+export function getCropVariantUrl(
+  detectionId: number,
+  options: {
+    chroma?: boolean;
+    clahe?: boolean;
+    sharpen?: boolean;
+    preset?: string;
+    source?: "lucky" | "initial";
+  } = {},
+): string {
+  const params = new URLSearchParams();
+  if (options.preset) {
+    params.set("preset", options.preset);
+  } else {
+    if (options.chroma !== undefined) params.set("chroma", options.chroma ? "1" : "0");
+    if (options.clahe !== undefined) params.set("clahe", options.clahe ? "1" : "0");
+    if (options.sharpen !== undefined) params.set("sharpen", options.sharpen ? "1" : "0");
+  }
+  if (options.source && options.source !== "lucky") {
+    params.set("source", options.source);
+  }
+  const qs = params.toString();
+  return `/api/detections/${detectionId}/crop${qs ? `?${qs}` : ""}`;
+}
+
 export async function fetchDetections(params: {
   limit?: number;
   species_id?: number;
