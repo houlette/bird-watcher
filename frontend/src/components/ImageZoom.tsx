@@ -19,6 +19,8 @@ type PresetId =
   | "polish"
   | "mertens_hdr"
   | "raw"
+  | "super_res"
+  | "super_res_only"
   | "mertens_only"
   | "chroma_only"
   | "clahe_only"
@@ -31,6 +33,7 @@ type ZoomMode = "fit" | "1x" | "2x" | "4x";
  * Full-screen computational photography inspection studio for crops.
  *
  * Allows toggling between combinations of techniques:
+ *   - Multi-frame shift-and-add super-resolution: sub-pixel burst alignment for true 2x detail
  *   - Chroma-guided filter (He et al.) in YCrCb: removes 4:2:0 subsampling bleed & color noise
  *   - Mertens multiscale exposure fusion: natural dynamic range recovery without halos
  *   - CLAHE: dynamic range lighting normalization on L channel
@@ -45,10 +48,12 @@ export default function ImageZoom({
   detectionId,
   species,
   initialSharpness,
+  cropAreaPx,
   brightness,
   onClose,
 }: Props) {
   // Technique toggle states
+  const [sr, setSr] = useState(false);
   const [chroma, setChroma] = useState(true);
   const [mertens, setMertens] = useState(true);
   const [clahe, setClahe] = useState(true);
@@ -66,13 +71,15 @@ export default function ImageZoom({
 
   // Determine active preset
   let activePreset: PresetId = "custom";
-  if (chroma && mertens && clahe && sharpen) activePreset = "polish";
-  else if (chroma && mertens && !clahe && sharpen) activePreset = "mertens_hdr";
-  else if (!chroma && !mertens && !clahe && !sharpen) activePreset = "raw";
-  else if (!chroma && mertens && !clahe && !sharpen) activePreset = "mertens_only";
-  else if (chroma && !mertens && !clahe && !sharpen) activePreset = "chroma_only";
-  else if (!chroma && !mertens && clahe && !sharpen) activePreset = "clahe_only";
-  else if (!chroma && !mertens && !clahe && sharpen) activePreset = "sharpen_only";
+  if (sr && chroma && mertens && clahe && sharpen) activePreset = "super_res";
+  else if (sr && !chroma && !mertens && !clahe && !sharpen) activePreset = "super_res_only";
+  else if (!sr && chroma && mertens && clahe && sharpen) activePreset = "polish";
+  else if (!sr && chroma && mertens && !clahe && sharpen) activePreset = "mertens_hdr";
+  else if (!sr && !chroma && !mertens && !clahe && !sharpen) activePreset = "raw";
+  else if (!sr && !chroma && mertens && !clahe && !sharpen) activePreset = "mertens_only";
+  else if (!sr && chroma && !mertens && !clahe && !sharpen) activePreset = "chroma_only";
+  else if (!sr && !chroma && !mertens && clahe && !sharpen) activePreset = "clahe_only";
+  else if (!sr && !chroma && !mertens && !clahe && sharpen) activePreset = "sharpen_only";
 
   // Pre-fetch metadata & standard presets into browser cache
   useEffect(() => {
@@ -81,7 +88,7 @@ export default function ImageZoom({
       .then((meta) => {
         if (meta.has_initial) setHasInitial(true);
         // Preload standard preset images so toggling is 100% instantaneous
-        ["polish", "mertens_hdr", "raw", "mertens_only", "chroma_only", "clahe_only", "sharpen_only"].forEach((p) => {
+        ["polish", "mertens_hdr", "raw", "super_res", "mertens_only", "chroma_only", "clahe_only", "sharpen_only"].forEach((p) => {
           const img = new Image();
           img.src = getCropVariantUrl(detectionId, { preset: p });
         });
@@ -110,10 +117,12 @@ export default function ImageZoom({
       } else if (e.key === "3") {
         applyPreset("raw");
       } else if (e.key === "4") {
-        applyPreset("mertens_only");
+        applyPreset("super_res");
       } else if (e.key === "5") {
-        applyPreset("chroma_only");
+        applyPreset("mertens_only");
       } else if (e.key === "6") {
+        applyPreset("chroma_only");
+      } else if (e.key === "7") {
         applyPreset("sharpen_only");
       } else if (e.key.toLowerCase() === "p") {
         setPixelated((v) => !v);
@@ -148,42 +157,61 @@ export default function ImageZoom({
     if (isComparing) {
       currentImageUrl = getCropVariantUrl(detectionId, { preset: "raw", source });
     } else {
-      currentImageUrl = getCropVariantUrl(detectionId, { chroma, mertens, clahe, sharpen, source });
+      currentImageUrl = getCropVariantUrl(detectionId, { chroma, mertens, clahe, sharpen, sr, source });
     }
   }
 
   const applyPreset = (p: PresetId) => {
-    if (p === "polish") {
+    if (p === "super_res") {
+      setSr(true);
+      setChroma(true);
+      setMertens(true);
+      setClahe(true);
+      setSharpen(true);
+    } else if (p === "super_res_only") {
+      setSr(true);
+      setChroma(false);
+      setMertens(false);
+      setClahe(false);
+      setSharpen(false);
+    } else if (p === "polish") {
+      setSr(false);
       setChroma(true);
       setMertens(true);
       setClahe(true);
       setSharpen(true);
     } else if (p === "mertens_hdr") {
+      setSr(false);
       setChroma(true);
       setMertens(true);
       setClahe(false);
       setSharpen(true);
     } else if (p === "raw") {
+      setSr(false);
       setChroma(false);
       setMertens(false);
       setClahe(false);
       setSharpen(false);
     } else if (p === "mertens_only") {
+      setSr(false);
       setChroma(false);
       setMertens(true);
       setClahe(false);
       setSharpen(false);
     } else if (p === "chroma_only") {
+      setSr(false);
       setChroma(true);
       setMertens(false);
       setClahe(false);
       setSharpen(false);
     } else if (p === "clahe_only") {
+      setSr(false);
       setChroma(false);
       setMertens(false);
       setClahe(true);
       setSharpen(false);
     } else if (p === "sharpen_only") {
+      setSr(false);
       setChroma(false);
       setMertens(false);
       setClahe(false);
@@ -243,6 +271,11 @@ export default function ImageZoom({
                   {naturalDims.w} × {naturalDims.h} px
                 </span>
               )}
+              {cropAreaPx != null && (
+                <span title="Original detection pixel area">
+                  · {cropAreaPx.toLocaleString()} px²
+                </span>
+              )}
               {initialSharpness != null && (
                 <span title="Laplacian sharpness variance">
                   · var {Math.round(initialSharpness)}
@@ -292,13 +325,24 @@ export default function ImageZoom({
               Raw
             </button>
             <button
+              className={`px-2.5 py-1 text-xs rounded font-medium transition-all ${
+                activePreset === "super_res"
+                  ? "bg-purple-600 text-white shadow-sm font-semibold"
+                  : "text-muted hover:text-ink hover:bg-surface/60"
+              }`}
+              onClick={() => applyPreset("super_res")}
+              title="Multi-frame shift-and-add 2x super-resolution + full polish [Press 4]"
+            >
+              Super-Res 2x
+            </button>
+            <button
               className={`px-2 py-1 text-xs rounded font-medium transition-all ${
                 activePreset === "mertens_only"
                   ? "bg-accent text-white shadow-sm font-semibold"
                   : "text-muted hover:text-ink hover:bg-surface/60"
               }`}
               onClick={() => applyPreset("mertens_only")}
-              title="Mertens multiscale exposure fusion only [Press 4]"
+              title="Mertens multiscale exposure fusion only [Press 5]"
             >
               Mertens Only
             </button>
@@ -309,7 +353,7 @@ export default function ImageZoom({
                   : "text-muted hover:text-ink hover:bg-surface/60"
               }`}
               onClick={() => applyPreset("chroma_only")}
-              title="Chroma-guided 4:2:0 filter only [Press 5]"
+              title="Chroma-guided 4:2:0 filter only [Press 6]"
             >
               Chroma Only
             </button>
@@ -320,7 +364,7 @@ export default function ImageZoom({
                   : "text-muted hover:text-ink hover:bg-surface/60"
               }`}
               onClick={() => applyPreset("sharpen_only")}
-              title="Bilateral unsharp mask only [Press 6]"
+              title="Bilateral unsharp mask only [Press 7]"
             >
               Sharpen Only
             </button>
@@ -391,6 +435,14 @@ export default function ImageZoom({
               <span className="px-2.5 py-1 text-xs font-bold uppercase tracking-wider rounded-md bg-amber-600 text-white shadow-lg animate-pulse">
                 Before (Raw)
               </span>
+            ) : activePreset === "super_res" ? (
+              <span className="px-2.5 py-1 text-xs font-medium rounded-md bg-purple-900/80 text-purple-100 backdrop-blur-md border border-purple-500/30">
+                Super-Res 2x (Shift-and-Add)
+              </span>
+            ) : activePreset === "super_res_only" ? (
+              <span className="px-2.5 py-1 text-xs font-medium rounded-md bg-purple-900/80 text-purple-100 backdrop-blur-md border border-purple-500/30">
+                Super-Res 2x (Unprocessed)
+              </span>
             ) : activePreset === "polish" ? (
               <span className="px-2.5 py-1 text-xs font-medium rounded-md bg-black/60 text-white/90 backdrop-blur-md border border-white/10">
                 Full Polish (Chroma + Mertens + CLAHE + Sharpen)
@@ -406,6 +458,7 @@ export default function ImageZoom({
             ) : (
               <span className="px-2.5 py-1 text-xs font-medium rounded-md bg-black/60 text-white/90 backdrop-blur-md border border-white/10">
                 {[
+                  sr && "Super-Res 2x",
                   chroma && "Chroma",
                   mertens && "Mertens HDR",
                   clahe && "CLAHE",
@@ -428,6 +481,20 @@ export default function ImageZoom({
           {/* Individual Technique Toggles */}
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <span className="text-muted font-medium mr-1 hidden sm:inline">Techniques:</span>
+
+            {/* Multi-frame Shift-and-Add Super-Resolution */}
+            <button
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-all ${
+                sr
+                  ? "bg-purple-500/20 border-purple-500/50 text-ink font-semibold"
+                  : "bg-panel border-line text-muted line-through opacity-70"
+              }`}
+              onClick={() => setSr((v) => !v)}
+              title="Multi-frame shift-and-add: sub-pixel burst frame registration for optical resolution gain and noise reduction"
+            >
+              <i className={`w-2 h-2 rounded-full ${sr ? "bg-purple-500" : "bg-muted"}`} />
+              Super-Res 2x
+            </button>
 
             {/* Chroma-guided Denoising */}
             <button

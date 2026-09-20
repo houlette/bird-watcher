@@ -313,6 +313,31 @@ def process_visit(visit: Visit, db: Session) -> int:
                             best.bbox = improved_bbox
                         lucky_src_idx = found_src_idx
 
+        # Multi-frame shift-and-add super-resolution
+        best.sr_crop = None
+        if getattr(settings, "super_res_enabled", True) and ext not in IMAGE_EXTS:
+            w_crop, h_crop = int(best.bbox[2]), int(best.bbox[3])
+            if min(w_crop, h_crop) <= getattr(settings, "super_res_max_crop_size", 240):
+                with timer.stage("super_res"):
+                    timer.count("super_res_attempted")
+                    burst_crops = _extract_burst_crops(
+                        clip_path,
+                        lucky_src_idx,
+                        best.bbox,
+                        radius=2,
+                    )
+                    sr_stats: dict = {}
+                    sr_result = _shift_and_add_super_res(
+                        best.crop,
+                        burst_crops,
+                        scale=getattr(settings, "super_res_scale", 2),
+                        stats=sr_stats,
+                    )
+                    if sr_result is not None:
+                        if sr_stats.get("n_used", 1) >= 2:
+                            timer.count("super_res_fused")
+                        best.sr_crop = sr_result
+
         # Always save the YOLO-detected crop. If the classifier later rejects
         # it, the row still goes into the feed as "Unidentified" so the user
         # can tag it via the picker (real species OR "Not a bird" / "Unknown
@@ -911,6 +936,164 @@ def _hunt_lucky_crop(
     return None, None, center_src_idx
 
 
+def _apply_mtf_compensation(hr_bgr: np.ndarray | None) -> np.ndarray | None:
+    """Subtle edge-preserving deconvolution filter to restore optical MTF
+    (modulation transfer function) attenuated by sensor pixel aperture integration.
+    """
+    if hr_bgr is None or getattr(hr_bgr, "size", 0) == 0:
+        return hr_bgr
+    gaussian = cv2.GaussianBlur(hr_bgr, (0, 0), 1.0)
+    detail = cv2.subtract(hr_bgr, gaussian)
+    # Coring: suppress noise below 2 units to avoid boosting flat noise floor
+    detail_c = np.where(np.abs(detail) < 2, 0, detail).astype(np.float32)
+    enhanced = np.clip(hr_bgr.astype(np.float32) + 0.35 * detail_c, 0, 255).astype(np.uint8)
+    return enhanced
+
+
+def _shift_and_add_super_res(
+    anchor: np.ndarray | None,
+    candidates: list[np.ndarray] | None = None,
+    *,
+    scale: int = 2,
+    min_corr: float = 0.12,
+    max_shift_fraction: float = 0.15,
+    stats: dict | None = None,
+) -> np.ndarray | None:
+    """Multi-frame shift-and-add super-resolution reconstruction.
+
+    Sub-pixel image registration across burst frames from the source video,
+    exploiting sensor micro-jitter to recover true optical resolution beyond
+    the single-frame Nyquist limit and reduce noise by up to sqrt(N).
+
+    Parameters:
+      - anchor: primary reference crop (uint8 BGR).
+      - candidates: neighboring burst crops from source video or track.
+      - scale: upsampling factor (default 2).
+      - min_corr: minimum normalized cross-correlation peak to accept candidate.
+      - max_shift_fraction: maximum allowed translation as fraction of min dimension.
+      - stats: optional dict populated with execution metadata.
+
+    Returns:
+      - Super-resolved uint8 BGR image sized (scale*H, scale*W), with sensor
+        aperture MTF compensation applied.
+    """
+    if anchor is None or getattr(anchor, "size", 0) == 0:
+        return anchor
+    h, w = anchor.shape[:2]
+    target_size = (w * scale, h * scale)
+
+    # Base high-resolution reference via Lanczos-4
+    ref_hr = cv2.resize(anchor, target_size, interpolation=cv2.INTER_LANCZOS4)
+    if not candidates:
+        if stats is not None:
+            stats.update({"n_used": 1, "scale": scale, "shifts": [(0.0, 0.0)]})
+        return _apply_mtf_compensation(ref_hr)
+
+    anchor_gray = cv2.cvtColor(anchor, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    hann = cv2.createHanningWindow((w, h), cv2.CV_32F)
+    max_shift_px = max(2.0, min(w, h) * max_shift_fraction)
+
+    aligned_hr = [ref_hr]
+    shifts = [(0.0, 0.0)]
+    for cand in candidates:
+        if cand is None or getattr(cand, "size", 0) == 0:
+            continue
+        if cand.shape[:2] != (h, w):
+            cand_ref = cv2.resize(cand, (w, h))
+        else:
+            cand_ref = cand
+
+        cand_gray = cv2.cvtColor(cand_ref, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        try:
+            (dx, dy), resp = cv2.phaseCorrelate(anchor_gray, cand_gray, hann)
+        except cv2.error:
+            continue
+
+        if resp < min_corr:
+            continue
+        if np.hypot(dx, dy) > max_shift_px:
+            continue
+
+        # Map candidate into the scale*W, scale*H grid with sub-pixel alignment
+        cand_hr = cv2.resize(cand_ref, target_size, interpolation=cv2.INTER_LANCZOS4)
+        M = np.float32([[1, 0, -scale * dx], [0, 1, -scale * dy]])
+        warped = cv2.warpAffine(
+            cand_hr,
+            M,
+            target_size,
+            flags=cv2.INTER_LANCZOS4,
+            borderMode=cv2.BORDER_REFLECT_101,
+        )
+        aligned_hr.append(warped)
+        shifts.append((float(dx), float(dy)))
+
+    if stats is not None:
+        stats.update({"n_used": len(aligned_hr), "scale": scale, "shifts": shifts})
+
+    if len(aligned_hr) == 1:
+        fused = ref_hr
+    elif len(aligned_hr) == 2:
+        fused = np.mean(np.stack(aligned_hr), axis=0).astype(np.uint8)
+    else:
+        # Robust temporal median: eliminates sensor mosquito noise and transient motion artifacts
+        fused = np.median(np.stack(aligned_hr), axis=0).astype(np.uint8)
+
+    return _apply_mtf_compensation(fused)
+
+
+def _extract_burst_crops(
+    clip_path: Path,
+    center_src_idx: int,
+    bbox: tuple[int, int, int, int] | list[int],
+    radius: int = 2,
+) -> list[np.ndarray]:
+    """Decode a small window of consecutive source frames around center_src_idx
+    and extract the crops defined by bbox.
+    """
+    if len(bbox) < 4 or bbox[2] <= 0 or bbox[3] <= 0:
+        return []
+    cap = cv2.VideoCapture(str(clip_path))
+    if not cap.isOpened():
+        return []
+    crops: list[np.ndarray] = []
+    try:
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        start_idx = max(0, center_src_idx - radius)
+        end_idx = center_src_idx + radius
+        if total > 0:
+            end_idx = min(total - 1, end_idx)
+        if start_idx > end_idx:
+            return []
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_idx)
+        fw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        fh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        x, y, w, h = (int(v) for v in bbox[:4])
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            curr_idx = int(cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1
+            if curr_idx < start_idx:
+                continue
+            if curr_idx > end_idx:
+                break
+            if fw == 0 or fh == 0:
+                fh, fw = frame.shape[:2]
+            # Extract crop matching bbox
+            x1 = max(0, min(x, fw - 1))
+            y1 = max(0, min(y, fh - 1))
+            x2 = max(x1 + 1, min(x + w, fw))
+            y2 = max(y1 + 1, min(y + h, fh))
+            c = frame[y1:y2, x1:x2]
+            if c is not None and c.size > 0:
+                crops.append(c)
+    except Exception:
+        log.exception("Burst crop extraction failed for %s", clip_path)
+    finally:
+        cap.release()
+    return crops
+
+
 def _save_source_frames(
     clip_path: Path,
     frame_index_by_track: dict[int, int],
@@ -1101,6 +1284,8 @@ def _mertens_exposure_fusion(bgr: np.ndarray) -> np.ndarray:
 def render_crop_variant(
     bgr: np.ndarray,
     *,
+    super_res: bool = False,
+    candidates: list[np.ndarray] | None = None,
     chroma: bool = True,
     clahe: bool = True,
     mertens: bool = False,
@@ -1108,6 +1293,7 @@ def render_crop_variant(
 ) -> np.ndarray:
     """Apply an arbitrary combination of computational photography techniques to a crop.
 
+    - super_res: Multi-frame shift-and-add super-resolution reconstruction at 2x scale.
     - chroma: Chroma-guided filtering in YCrCb (He et al., ECCV 2010) to remove
       4:2:0 subsampling bleed and smooth chroma sensor noise.
     - mertens: Multiscale exposure fusion (Tommert & Mertens, 2007) to recover shadows
@@ -1122,6 +1308,11 @@ def render_crop_variant(
         bgr = np.clip(bgr, 0, 255).astype(np.uint8)
 
     out = bgr.copy()
+    if super_res:
+        sr_out = _shift_and_add_super_res(out, candidates=candidates, scale=getattr(settings, "super_res_scale", 2))
+        if sr_out is not None:
+            out = sr_out
+
     if chroma:
         out = _chroma_guided_filter(out)
 
@@ -1184,6 +1375,12 @@ def _save_crop(det, *, visit_id: int, track_id: int) -> Path:
     if initial_crop is not None and initial_crop.size > 0:
         init_raw_path = CROPS_DIR / f"v{visit_id:08d}_t{track_id:04d}_initial_raw.jpg"
         cv2.imwrite(str(init_raw_path), initial_crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
+
+    # If shift-and-add super-resolution produced a high-res crop, save it
+    sr_crop = getattr(det, "sr_crop", None)
+    if sr_crop is not None and sr_crop.size > 0:
+        sr_path = CROPS_DIR / f"v{visit_id:08d}_t{track_id:04d}_sr.jpg"
+        cv2.imwrite(str(sr_path), sr_crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
 
     return out_path.relative_to(DATA_DIR)
 

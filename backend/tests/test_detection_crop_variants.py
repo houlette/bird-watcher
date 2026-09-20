@@ -174,3 +174,66 @@ def test_crop_variants_on_demand_extraction_from_frame(client, db, monkeypatch, 
     cached = cv2.imread(str(raw_path))
     assert cached.shape[0] > 0 and cached.shape[1] > 0
 
+
+def test_crop_variants_super_res(client, db, monkeypatch, tmp_path):
+    """Test getting super_res preset and verify resolution scaling."""
+    import pipeline.process as proc
+
+    crops_dir = tmp_path / "crops"
+    crops_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(proc, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(proc, "CROPS_DIR", crops_dir)
+
+    v = Visit(clip_path="clips/dummy3.mp4")
+    db.add(v)
+    db.flush()
+
+    # 60x80 synthetic crop
+    raw_img = np.full((60, 80, 3), 110, dtype=np.uint8)
+    raw_path = crops_dir / f"v{v.id:08d}_t0003_raw.jpg"
+    cv2.imwrite(str(raw_path), raw_img)
+
+    det = Detection(
+        visit_id=v.id,
+        track_id=3,
+        confidence=0.95,
+        crop_path=f"crops/v{v.id:08d}_t0003.jpg",
+        bbox=[50, 50, 80, 60],
+    )
+    db.add(det)
+    db.commit()
+
+    # 1. Check variants metadata includes super_res
+    res_meta = client.get(f"/api/detections/{det.id}/crop-variants")
+    assert res_meta.status_code == 200
+    meta = res_meta.json()
+    assert "super_res" in meta["variants"]
+    assert "super_res_only" in meta["variants"]
+    assert meta["has_sr"] is False
+
+    # 2. Query super_res preset (on-demand 2x scale)
+    res_sr = client.get(f"/api/detections/{det.id}/crop?preset=super_res")
+    assert res_sr.status_code == 200
+    assert res_sr.headers["content-type"] == "image/jpeg"
+
+    # Decode returned JPEG to verify 2x dimensions
+    arr = np.frombuffer(res_sr.content, np.uint8)
+    decoded = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    assert decoded.shape == (120, 160, 3)
+
+    # 3. Query with pre-saved _sr.jpg
+    sr_file = crops_dir / f"v{v.id:08d}_t0003_sr.jpg"
+    sr_img = np.full((120, 160, 3), 140, dtype=np.uint8)
+    cv2.imwrite(str(sr_file), sr_img)
+
+    res_meta2 = client.get(f"/api/detections/{det.id}/crop-variants")
+    assert res_meta2.json()["has_sr"] is True
+
+    res_sr2 = client.get(f"/api/detections/{det.id}/crop?preset=super_res_only")
+    assert res_sr2.status_code == 200
+    arr2 = np.frombuffer(res_sr2.content, np.uint8)
+    decoded2 = cv2.imdecode(arr2, cv2.IMREAD_COLOR)
+    assert decoded2.shape == (120, 160, 3)
+
+

@@ -45,6 +45,7 @@ export type CropVariantsMeta = {
   detection_id: number;
   has_raw: boolean;
   has_initial: boolean;
+  has_sr?: boolean;
   sharpness: number | null;
   crop_area_px: number | null;
   brightness: number | null;
@@ -64,6 +65,7 @@ export function getCropVariantUrl(
     clahe?: boolean;
     mertens?: boolean;
     sharpen?: boolean;
+    sr?: boolean;
     preset?: string;
     source?: "lucky" | "initial";
   } = {},
@@ -76,6 +78,7 @@ export function getCropVariantUrl(
     if (options.clahe !== undefined) params.set("clahe", options.clahe ? "1" : "0");
     if (options.mertens !== undefined) params.set("mertens", options.mertens ? "1" : "0");
     if (options.sharpen !== undefined) params.set("sharpen", options.sharpen ? "1" : "0");
+    if (options.sr !== undefined) params.set("sr", options.sr ? "1" : "0");
   }
   if (options.source && options.source !== "lucky") {
     params.set("source", options.source);

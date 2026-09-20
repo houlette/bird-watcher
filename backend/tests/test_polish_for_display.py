@@ -195,3 +195,54 @@ def test_mertens_exposure_fusion_recovers_contrast():
     assert fused[:, 30:].max() <= 250
 
 
+def test_shift_and_add_super_res_edge_cases():
+    """Verify shift-and-add super-resolution handles empty, None, and single inputs."""
+    from pipeline.process import _shift_and_add_super_res
+
+    assert _shift_and_add_super_res(None) is None
+    empty = np.zeros((0, 0, 3), dtype=np.uint8)
+    assert _shift_and_add_super_res(empty).size == 0
+
+    # Single image with no candidates: scales to 2x via Lanczos4 + MTF compensation
+    img = np.full((50, 60, 3), 128, dtype=np.uint8)
+    sr = _shift_and_add_super_res(img, scale=2)
+    assert sr.shape == (100, 120, 3)
+    assert sr.dtype == np.uint8
+
+    # Differently sized candidate handles gracefully
+    cand_diff = np.full((30, 40, 3), 128, dtype=np.uint8)
+    sr_cand = _shift_and_add_super_res(img, [cand_diff], scale=2)
+    assert sr_cand.shape == (100, 120, 3)
+
+
+def test_shift_and_add_super_res_reduces_noise():
+    """Shift-and-add fusion across burst frames with sensor noise should reduce noise."""
+    from pipeline.process import _shift_and_add_super_res
+
+    np.random.seed(42)
+    # Uniform gray region with simulated sensor noise across 5 burst frames
+    base = np.full((60, 60, 3), 120, dtype=np.float32)
+    shifts = [(0.0, 0.0), (0.3, -0.4), (-0.2, 0.5), (0.4, 0.2), (-0.3, -0.3)]
+    frames = []
+    for dx, dy in shifts:
+        M = np.float32([[1, 0, dx], [0, 1, dy]])
+        shifted = cv2.warpAffine(base, M, (60, 60), borderMode=cv2.BORDER_REFLECT_101)
+        noise = np.random.normal(0, 12.0, (60, 60, 3)).astype(np.float32)
+        frames.append(np.clip(shifted + noise, 0, 255).astype(np.uint8))
+
+    ref = frames[0]
+    single_2x = cv2.resize(ref, (120, 120), interpolation=cv2.INTER_LANCZOS4)
+
+    stats = {}
+    fused_2x = _shift_and_add_super_res(ref, frames[1:], scale=2, stats=stats)
+
+    assert fused_2x.shape == (120, 120, 3)
+    assert stats["n_used"] >= 3
+
+    # The temporal median fusion should have substantially lower noise variance than single-frame 2x
+    single_noise_std = single_2x.std()
+    fused_noise_std = fused_2x.std()
+    assert fused_noise_std < single_noise_std * 0.85
+
+
+

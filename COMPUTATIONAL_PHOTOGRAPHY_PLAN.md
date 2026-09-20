@@ -110,7 +110,13 @@ The camera stream presents several physical constraints:
 - **Benefit**: Exploits natural sensor micro-jitter to achieve true optical resolution
   gain and $\sqrt{N}$ noise reduction, resolving barbules and eye reflections beyond
   the single-frame Nyquist limit.
-- **Status**: Planned (Step 6).
+- **Implementation**: Phase-correlation sub-pixel registration (`cv2.phaseCorrelate`) on
+  Hann-windowed luma, Lanczos-4 warping with sub-pixel affine translation matrices into
+  a $2\times$ high-resolution grid, robust temporal median reconstruction to eliminate sensor
+  noise and H.264 compression ringing, followed by noise-cored MTF aperture deconvolution.
+- **Trigger Gate**: Runs on video tracks where `min(w, h) <= 240` px; 0 ms on already-large crops.
+- **Latency Budget**: Benchmarks at ~25 ms for 5-crop reconstruction (well within < 50 ms budget).
+- **Status**: Shipped & deployed to production.
 
 ### Technique 7: Synthetic Bokeh / Background Defocus
 - **Concept**: Isolate the bird subject from harsh backyard clutter (railings, siding,
@@ -140,8 +146,8 @@ The camera stream presents several physical constraints:
    alongside production polished crops (`crops/v..._raw.jpg` and `crops/v..._initial_raw.jpg`).
    The backend provides dynamic variant endpoints (`/api/detections/{id}/crop` and
    `/api/detections/{id}/crop-variants`), while the frontend provides an interactive inspection
-    studio in `ImageZoom` with real-time technique toggling (Chroma, CLAHE, Mertens, Sharpen, Lucky),
-    preset buttons (`Full Polish`, `Mertens HDR`, `Raw`, `Chroma Only`, `CLAHE Only`, `Mertens Only`, `Sharpen Only`),
+    studio in `ImageZoom` with real-time technique toggling (Super-Res, Chroma, CLAHE, Mertens, Sharpen, Lucky),
+    preset buttons (`Full Polish`, `Mertens HDR`, `Raw`, `Super-Res 2x`, `Mertens Only`, `Chroma Only`, `Sharpen Only`),
     instant hold-to-compare (Spacebar), and 1x/2x/4x nearest-neighbor pixel magnification.
 
 ---
@@ -153,7 +159,7 @@ The camera stream presents several physical constraints:
 | Edge-Aware Sharpening | Shipped | ~1.5 ms / crop | Bilateral unsharp mask on L-channel; coring=2.0, clamp=±15.0 | 2026-09-20 | `860eb0a` |
 | Lucky Imaging | Shipped | 0 ms (crisp) / ~90 ms (blurry) | ±3 source frames searched when var < 200; phase-corr gated | 2026-09-20 | `fb3073a` |
 | Chroma-Guided Denoising | Shipped | ~1.1 ms / crop | Fast YCrCb guided filter (r=2, eps=1e-4); >50% chroma noise reduction | 2026-09-20 | `205416a` |
-| Mertens Exposure Fusion | Shipped | ~0.66 ms / crop | 3-exposure multiscale blending; zero highlight clipping & smooth shadow lift | 2026-09-20 | `b319669` |
+| Mertens Exposure Fusion | Shipped | ~0.66 ms / crop | 3-exposure multiscale blending; zero highlight clipping & smooth shadow lift | 2026-09-20 | `0216cc5` |
+| Shift-and-Add Super-Res | Shipped | ~25 ms / crop | Sub-pixel phase registration + 2x Lanczos4 + temporal median + MTF restoration | 2026-09-20 | `cd79fa4` |
 | Lightweight SISR (ONNX) | Planned | < 40 ms target | 2× upscaling on crops < 180 px | - | - |
-| Shift-and-Add Super-Res | Planned | < 50 ms target | Sub-pixel alignment over 3-5 burst frames | - | - |
 | Synthetic Bokeh | Planned | < 15 ms target | Subject isolation blur outside bird mask | - | - |

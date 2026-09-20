@@ -81,6 +81,12 @@ class Settings(BaseSettings):
     # blending synthetic exposure brackets to recover shadow plumage and highlights without halos.
     mertens_fusion_enabled: bool = os.getenv("MERTENS_FUSION_ENABLED", "1") in ("1", "true", "True", "yes")
 
+    # Multi-frame shift-and-add super-resolution: sub-pixel frame registration
+    # across burst frames from source video to gain optical resolution and reduce noise.
+    super_res_enabled: bool = os.getenv("SUPER_RES_ENABLED", "1") in ("1", "true", "True", "yes")
+    super_res_scale: int = int(os.getenv("SUPER_RES_SCALE", "2"))
+    super_res_max_crop_size: int = int(os.getenv("SUPER_RES_MAX_CROP_SIZE", "240"))
+
     # Web Push (VAPID). The public key is sent to the browser at subscription
     # time; the private key signs the JWT in each push request. Generate both
     # via scripts/generate_vapid_keys.py.
