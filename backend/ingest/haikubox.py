@@ -204,7 +204,8 @@ def _recorrelate_recent_detections(db: Session) -> int:
     as live processing, just executed against a fuller cache.
     """
     cutoff = utcnow() - timedelta(hours=RECORRELATE_LOOKBACK_HOURS)
-    window_s = settings.audio_correlation_window_seconds
+    lookback_s = settings.audio_correlation_window_seconds
+    lookahead_s = settings.audio_correlation_lookahead_seconds
     rows = (
         db.query(Detection, Species.common_name, Visit.started_at)
         .join(Species, Detection.species_id == Species.id)
@@ -230,8 +231,8 @@ def _recorrelate_recent_detections(db: Session) -> int:
         # Earliest + latest capture for this species; pull every audio row
         # for the species in that span and match in Python. Cheap because
         # one species rarely has more than a handful of audio rows per day.
-        earliest = min(when for _, when in items) - timedelta(seconds=window_s)
-        latest = max(when for _, when in items)
+        earliest = min(when for _, when in items) - timedelta(seconds=lookback_s)
+        latest = max(when for _, when in items) + timedelta(seconds=lookahead_s)
         audio_times = [
             t for (t,) in (
                 db.query(HaikuboxDetection.detected_at)
@@ -245,8 +246,8 @@ def _recorrelate_recent_detections(db: Session) -> int:
             continue
         audio_times.sort()
         for det, when in items:
-            lo = when - timedelta(seconds=window_s)
-            hi = when
+            lo = when - timedelta(seconds=lookback_s)
+            hi = when + timedelta(seconds=lookahead_s)
             # Linear scan is fine — handful of audio rows per species
             # per day. If this ever becomes a bottleneck, bisect.
             if any(lo <= t <= hi for t in audio_times):

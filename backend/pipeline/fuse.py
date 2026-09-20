@@ -55,9 +55,15 @@ class FusedPrediction:
     size_mult: float = 1.0  # 1.0 means no effect (no size calibration / unknown species)
 
 
-def _audio_species_set(db: Session, window_end: datetime) -> set[str]:
-    """Common names heard by the Haikubox within the correlation window."""
-    window_start = window_end - timedelta(seconds=settings.audio_correlation_window_seconds)
+def _audio_species_set(db: Session, when: datetime) -> set[str]:
+    """Common names heard by the Haikubox within the correlation window.
+
+    Spans [when - lookback, when + lookahead]. Covers pre-visit approach, the
+    duration of the video clip (~20s), immediate post-visit departure, and
+    minor clock drift between camera NTP and Haikubox cloud clock.
+    """
+    window_start = when - timedelta(seconds=settings.audio_correlation_window_seconds)
+    window_end = when + timedelta(seconds=settings.audio_correlation_lookahead_seconds)
     rows = (
         db.query(HaikuboxDetection.species_common_name)
         .filter(HaikuboxDetection.detected_at >= window_start)

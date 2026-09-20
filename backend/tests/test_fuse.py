@@ -75,9 +75,52 @@ def test_audio_outside_window_is_ignored(db, monkeypatch):
     monkeypatch.setattr("pipeline.fuse.settings.haikubox_api_key", "fake")
     monkeypatch.setattr("pipeline.fuse.settings.haikubox_serial", "fake")
     monkeypatch.setattr("pipeline.fuse.settings.audio_correlation_window_seconds", 90)
+    monkeypatch.setattr("pipeline.fuse.settings.audio_correlation_lookahead_seconds", 30)
     now = datetime(2026, 5, 1, 12, 0, 0)
     # 10 minutes ago — outside the 90s window
     db.add(HaikuboxDetection(species_common_name="Purple Finch", detected_at=now - timedelta(minutes=10)))
+    db.commit()
+    fused = fuse([("House Finch", 0.55), ("Purple Finch", 0.40)], db=db, when=now)
+    assert fused[0].species == "House Finch"
+    assert all(not f.audio_confirmed for f in fused)
+
+
+def test_audio_during_visit_is_matched(db, monkeypatch):
+    """Audio 15 seconds after visit start (during the ~20s clip) should match."""
+    monkeypatch.setattr("pipeline.fuse.settings.haikubox_api_key", "fake")
+    monkeypatch.setattr("pipeline.fuse.settings.haikubox_serial", "fake")
+    monkeypatch.setattr("pipeline.fuse.settings.audio_correlation_window_seconds", 90)
+    monkeypatch.setattr("pipeline.fuse.settings.audio_correlation_lookahead_seconds", 30)
+    now = datetime(2026, 5, 1, 12, 0, 0)
+    db.add(HaikuboxDetection(species_common_name="Purple Finch", detected_at=now + timedelta(seconds=15)))
+    db.commit()
+    fused = fuse([("House Finch", 0.55), ("Purple Finch", 0.40)], db=db, when=now)
+    assert fused[0].species == "Purple Finch"
+    assert fused[0].audio_confirmed is True
+
+
+def test_audio_just_after_visit_is_matched(db, monkeypatch):
+    """Audio 25 seconds after visit start (departure call within 30s lookahead) should match."""
+    monkeypatch.setattr("pipeline.fuse.settings.haikubox_api_key", "fake")
+    monkeypatch.setattr("pipeline.fuse.settings.haikubox_serial", "fake")
+    monkeypatch.setattr("pipeline.fuse.settings.audio_correlation_window_seconds", 90)
+    monkeypatch.setattr("pipeline.fuse.settings.audio_correlation_lookahead_seconds", 30)
+    now = datetime(2026, 5, 1, 12, 0, 0)
+    db.add(HaikuboxDetection(species_common_name="Purple Finch", detected_at=now + timedelta(seconds=25)))
+    db.commit()
+    fused = fuse([("House Finch", 0.55), ("Purple Finch", 0.40)], db=db, when=now)
+    assert fused[0].species == "Purple Finch"
+    assert fused[0].audio_confirmed is True
+
+
+def test_audio_beyond_lookahead_is_ignored(db, monkeypatch):
+    """Audio well after the visit (>30s lookahead) should not match."""
+    monkeypatch.setattr("pipeline.fuse.settings.haikubox_api_key", "fake")
+    monkeypatch.setattr("pipeline.fuse.settings.haikubox_serial", "fake")
+    monkeypatch.setattr("pipeline.fuse.settings.audio_correlation_window_seconds", 90)
+    monkeypatch.setattr("pipeline.fuse.settings.audio_correlation_lookahead_seconds", 30)
+    now = datetime(2026, 5, 1, 12, 0, 0)
+    db.add(HaikuboxDetection(species_common_name="Purple Finch", detected_at=now + timedelta(seconds=60)))
     db.commit()
     fused = fuse([("House Finch", 0.55), ("Purple Finch", 0.40)], db=db, when=now)
     assert fused[0].species == "House Finch"

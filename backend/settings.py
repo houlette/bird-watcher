@@ -17,8 +17,13 @@ class Settings(BaseSettings):
     haikubox_serial: str = os.getenv("HAIKUBOX_SERIAL", "")
 
     # The classifier is allowed up to this many seconds of look-back into audio
-    # detections to count a bird as "audio-confirmed."
+    # detections before visit.started_at to count a bird as "audio-confirmed."
     audio_correlation_window_seconds: int = 90
+
+    # Look-ahead seconds after visit.started_at for audio correlation.
+    # Video clips are ~20s; looking ahead 30s covers vocalizations during
+    # the visit and immediate departure, as well as minor camera NTP clock skew.
+    audio_correlation_lookahead_seconds: int = 30
 
     # Bird species classifier (HuggingFace transformers image-classification).
     # Default: dennisjooo/Birds-Classifier-EfficientNetB2 (525-class gpiosenka
