@@ -64,7 +64,7 @@ The camera stream presents several physical constraints:
   verifies the candidate matches the anchor (`response >= 0.15`) and has not hopped
   away (`shift <= 20% bbox dimension`). Bounding box is updated to match the sharp
   source frame.
-- **Status**: Implemented & active in `backend/pipeline/process.py`.
+- **Status**: Shipped & deployed to production (commit `fb3073a`).
 
 ### Technique 2: Edge-Aware Adaptive Sharpening (Bilateral Unsharp Masking)
 - **Concept**: Standard unsharp masking amplifies sensor noise and creates harsh halos
@@ -138,7 +138,7 @@ The camera stream presents several physical constraints:
 | Technique | Status | Latency Impact | Quality Metric / Result | Shipped Date | Commit |
 |---|---|---|---|---|---|
 | Edge-Aware Sharpening | Shipped | ~1.5 ms / crop | Bilateral unsharp mask on L-channel; coring=2.0, clamp=±15.0 | 2026-09-20 | `860eb0a` |
-| Lucky Imaging | In Progress | 0 ms (crisp) / ~90 ms (blurry) | ±3 source frames searched when var < 200; phase-corr gated | 2026-09-20 | pending |
+| Lucky Imaging | Shipped | 0 ms (crisp) / ~90 ms (blurry) | ±3 source frames searched when var < 200; phase-corr gated | 2026-09-20 | `fb3073a` |
 | Chroma-Guided Denoising | Planned | < 2 ms target | Luma-guided chroma edge snapping | - | - |
 | Lightweight SISR (ONNX) | Planned | < 40 ms target | 2× upscaling on crops < 180 px | - | - |
 | Mertens Exposure Fusion | Planned | < 10 ms target | 3-exposure multiscale blending for backlit crops | - | - |
