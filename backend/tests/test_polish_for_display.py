@@ -143,16 +143,55 @@ def test_render_crop_variant_combinations():
     np.testing.assert_array_equal(img, raw)
 
     # All true matches _polish_for_display
-    full = render_crop_variant(img, chroma=True, clahe=True, sharpen=True)
+    full = render_crop_variant(img, chroma=True, clahe=True, mertens=True, sharpen=True)
     polish = _polish_for_display(img)
     np.testing.assert_array_equal(full, polish)
 
     # Individual flags produce differing images
-    chroma_only = render_crop_variant(img, chroma=True, clahe=False, sharpen=False)
-    clahe_only = render_crop_variant(img, chroma=False, clahe=True, sharpen=False)
-    sharpen_only = render_crop_variant(img, chroma=False, clahe=False, sharpen=True)
+    chroma_only = render_crop_variant(img, chroma=True, clahe=False, mertens=False, sharpen=False)
+    clahe_only = render_crop_variant(img, chroma=False, clahe=True, mertens=False, sharpen=False)
+    mertens_only = render_crop_variant(img, chroma=False, clahe=False, mertens=True, sharpen=False)
+    sharpen_only = render_crop_variant(img, chroma=False, clahe=False, mertens=False, sharpen=True)
 
     assert not np.array_equal(chroma_only, img)
     assert not np.array_equal(clahe_only, img)
+    assert not np.array_equal(mertens_only, img)
     assert not np.array_equal(chroma_only, clahe_only)
+
+
+def test_mertens_exposure_fusion_edge_cases():
+    """Verify Mertens fusion handles empty, None, and small inputs safely."""
+    from pipeline.process import _mertens_exposure_fusion
+
+    assert _mertens_exposure_fusion(None) is None
+    empty = np.zeros((0, 0, 3), dtype=np.uint8)
+    assert _mertens_exposure_fusion(empty).size == 0
+
+    tiny = np.full((2, 2, 3), 128, dtype=np.uint8)
+    out_tiny = _mertens_exposure_fusion(tiny)
+    assert out_tiny.shape == (2, 2, 3)
+
+    solid = np.full((40, 40, 3), 128, dtype=np.uint8)
+    out_solid = _mertens_exposure_fusion(solid)
+    assert out_solid.shape == (40, 40, 3)
+    # Uniform gray should be preserved near midtone
+    assert abs(int(out_solid[0, 0, 0]) - 128) < 10
+
+
+def test_mertens_exposure_fusion_recovers_contrast():
+    """Mertens should lift dark shadows while preserving highlights without clipping."""
+    from pipeline.process import _mertens_exposure_fusion
+
+    # High-contrast synthetic image: deep shadow on left, bright highlight on right
+    img = np.zeros((60, 60, 3), dtype=np.uint8)
+    img[:, :30] = [20, 25, 20]     # deep plumage shadow
+    img[:, 30:] = [230, 225, 220]  # bright sunlit feather highlight
+
+    fused = _mertens_exposure_fusion(img)
+
+    # Shadow should be lifted above raw
+    assert fused[:, :30].mean() > img[:, :30].mean()
+    # Highlight should remain unclipped (< 255)
+    assert fused[:, 30:].max() <= 250
+
 

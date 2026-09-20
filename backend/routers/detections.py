@@ -303,8 +303,9 @@ async def get_detection_crop(
     detection_id: int,
     chroma: bool | None = Query(None, description="Apply chroma-guided filtering (4:2:0 subsampling restoration)"),
     clahe: bool | None = Query(None, description="Apply CLAHE dynamic range normalization"),
+    mertens: bool | None = Query(None, description="Apply Mertens multiscale exposure fusion"),
     sharpen: bool | None = Query(None, description="Apply edge-preserving bilateral unsharp masking"),
-    preset: str | None = Query(None, description="Convenience preset: 'raw', 'polish', 'chroma_only', 'clahe_only', 'sharpen_only'"),
+    preset: str | None = Query(None, description="Convenience preset: 'raw', 'polish', 'mertens_hdr', 'mertens_only', 'chroma_only', 'clahe_only', 'sharpen_only'"),
     source: str = Query("lucky", description="'lucky' (default) or 'initial' (pre-lucky 3fps frame)"),
     db: Session = Depends(get_db),
 ):
@@ -324,18 +325,23 @@ async def get_detection_crop(
 
     # Map presets
     if preset == "raw":
-        use_chroma, use_clahe, use_sharpen = False, False, False
+        use_chroma, use_clahe, use_mertens, use_sharpen = False, False, False, False
     elif preset == "polish":
-        use_chroma, use_clahe, use_sharpen = True, True, True
+        use_chroma, use_clahe, use_mertens, use_sharpen = True, True, True, True
+    elif preset == "mertens_hdr":
+        use_chroma, use_clahe, use_mertens, use_sharpen = True, False, True, True
+    elif preset == "mertens_only":
+        use_chroma, use_clahe, use_mertens, use_sharpen = False, False, True, False
     elif preset == "chroma_only":
-        use_chroma, use_clahe, use_sharpen = True, False, False
+        use_chroma, use_clahe, use_mertens, use_sharpen = True, False, False, False
     elif preset == "clahe_only":
-        use_chroma, use_clahe, use_sharpen = False, True, False
+        use_chroma, use_clahe, use_mertens, use_sharpen = False, True, False, False
     elif preset == "sharpen_only":
-        use_chroma, use_clahe, use_sharpen = False, False, True
+        use_chroma, use_clahe, use_mertens, use_sharpen = False, False, False, True
     else:
         use_chroma = chroma if chroma is not None else True
         use_clahe = clahe if clahe is not None else True
+        use_mertens = mertens if mertens is not None else True
         use_sharpen = sharpen if sharpen is not None else True
 
     raw_crop = None
@@ -383,6 +389,7 @@ async def get_detection_crop(
         raw_crop,
         chroma=use_chroma,
         clahe=use_clahe,
+        mertens=use_mertens,
         sharpen=use_sharpen,
     )
 
@@ -420,6 +427,8 @@ async def get_detection_crop_variants(
     base = f"/api/detections/{detection_id}/crop"
     variants = {
         "polish": f"{base}?preset=polish",
+        "mertens_hdr": f"{base}?preset=mertens_hdr",
+        "mertens_only": f"{base}?preset=mertens_only",
         "raw": f"{base}?preset=raw",
         "chroma_only": f"{base}?preset=chroma_only",
         "clahe_only": f"{base}?preset=clahe_only",

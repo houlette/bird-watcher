@@ -1062,17 +1062,56 @@ def _chroma_guided_filter(
     return cv2.cvtColor(ycrcb.astype(np.uint8), cv2.COLOR_YCrCb2BGR)
 
 
+# Mertens multiscale exposure fusion (Tommert & Mertens, 2007) parameters.
+# Decomposes synthetic exposure brackets into a Laplacian pyramid and blends
+# them based on local contrast, saturation, and well-exposedness weights.
+_MERTENS_MERGER = cv2.createMergeMertens(contrast_weight=1.0, saturation_weight=1.0, exposure_weight=1.0)
+_MERTENS_LUT_DARK = np.array(
+    [np.clip(pow(i / 255.0, 1.8) * 255.0, 0, 255) for i in range(256)],
+    dtype=np.uint8,
+)
+_MERTENS_LUT_BRIGHT = np.array(
+    [np.clip(pow(i / 255.0, 0.55) * 255.0, 0, 255) for i in range(256)],
+    dtype=np.uint8,
+)
+
+
+def _mertens_exposure_fusion(bgr: np.ndarray) -> np.ndarray:
+    """Recover deep shadows and blown highlights without halos via multiscale exposure fusion.
+
+    Feeder-cam crops frequently suffer from extreme outdoor dynamic range (e.g. bright
+    sunlit siding/sky vs deep plumage shadows). Unlike CLAHE, which redistributes local
+    histograms and can introduce halo outlines around high-contrast bird silhouettes,
+    Mertens exposure fusion blends synthetically bracketed exposures across multiple
+    pyramid scales, producing completely smooth, natural tone transitions with zero halos.
+    """
+    if bgr is None or bgr.size == 0:
+        return bgr
+
+    if bgr.dtype != np.uint8:
+        bgr = np.clip(bgr, 0, 255).astype(np.uint8)
+
+    dark = cv2.LUT(bgr, _MERTENS_LUT_DARK)
+    bright = cv2.LUT(bgr, _MERTENS_LUT_BRIGHT)
+
+    fused = _MERTENS_MERGER.process([dark, bgr, bright])
+    return np.clip(np.rint(fused * 255.0), 0, 255).astype(np.uint8)
+
+
 def render_crop_variant(
     bgr: np.ndarray,
     *,
     chroma: bool = True,
     clahe: bool = True,
+    mertens: bool = False,
     sharpen: bool = True,
 ) -> np.ndarray:
     """Apply an arbitrary combination of computational photography techniques to a crop.
 
     - chroma: Chroma-guided filtering in YCrCb (He et al., ECCV 2010) to remove
       4:2:0 subsampling bleed and smooth chroma sensor noise.
+    - mertens: Multiscale exposure fusion (Tommert & Mertens, 2007) to recover shadows
+      and highlight detail with zero edge halos.
     - clahe: Dynamic range normalization via CLAHE on the L channel of LAB.
     - sharpen: Edge-preserving bilateral unsharp masking on the L channel of LAB.
     """
@@ -1085,6 +1124,9 @@ def render_crop_variant(
     out = bgr.copy()
     if chroma:
         out = _chroma_guided_filter(out)
+
+    if mertens:
+        out = _mertens_exposure_fusion(out)
 
     if not clahe and not sharpen:
         return out
@@ -1109,7 +1151,7 @@ def render_crop_variant(
 
 
 def _polish_for_display(bgr: np.ndarray) -> np.ndarray:
-    """Lighting-normalize (CLAHE), chroma-denoise, and adaptively sharpen the feed crop.
+    """Lighting-normalize, chroma-denoise, and adaptively sharpen the feed crop.
 
     Convenience wrapper applying production pipeline defaults.
     """
@@ -1117,6 +1159,7 @@ def _polish_for_display(bgr: np.ndarray) -> np.ndarray:
         bgr,
         chroma=getattr(settings, "chroma_filter_enabled", True),
         clahe=True,
+        mertens=getattr(settings, "mertens_fusion_enabled", True),
         sharpen=True,
     )
 

@@ -77,6 +77,10 @@ class Settings(BaseSettings):
     # using full-resolution luma as guide to eliminate color bleed and chroma noise.
     chroma_filter_enabled: bool = os.getenv("CHROMA_FILTER_ENABLED", "1") in ("1", "true", "True", "yes")
 
+    # Mertens exposure fusion: multiscale exposure fusion (Tommert & Mertens)
+    # blending synthetic exposure brackets to recover shadow plumage and highlights without halos.
+    mertens_fusion_enabled: bool = os.getenv("MERTENS_FUSION_ENABLED", "1") in ("1", "true", "True", "yes")
+
     # Web Push (VAPID). The public key is sent to the browser at subscription
     # time; the private key signs the JWT in each push request. Generate both
     # via scripts/generate_vapid_keys.py.

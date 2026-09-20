@@ -15,7 +15,16 @@ type Props = {
   onClose: () => void;
 };
 
-type PresetId = "polish" | "raw" | "chroma_only" | "clahe_only" | "sharpen_only" | "custom";
+type PresetId =
+  | "polish"
+  | "mertens_hdr"
+  | "raw"
+  | "mertens_only"
+  | "chroma_only"
+  | "clahe_only"
+  | "sharpen_only"
+  | "custom";
+
 type ZoomMode = "fit" | "1x" | "2x" | "4x";
 
 /**
@@ -23,6 +32,7 @@ type ZoomMode = "fit" | "1x" | "2x" | "4x";
  *
  * Allows toggling between combinations of techniques:
  *   - Chroma-guided filter (He et al.) in YCrCb: removes 4:2:0 subsampling bleed & color noise
+ *   - Mertens multiscale exposure fusion: natural dynamic range recovery without halos
  *   - CLAHE: dynamic range lighting normalization on L channel
  *   - Bilateral unsharp masking: plumage edge sharpening without halos
  *   - Lucky imaging frame compare (when lucky imaging improved the detection)
@@ -40,6 +50,7 @@ export default function ImageZoom({
 }: Props) {
   // Technique toggle states
   const [chroma, setChroma] = useState(true);
+  const [mertens, setMertens] = useState(true);
   const [clahe, setClahe] = useState(true);
   const [sharpen, setSharpen] = useState(true);
   const [source, setSource] = useState<"lucky" | "initial">("lucky");
@@ -55,11 +66,13 @@ export default function ImageZoom({
 
   // Determine active preset
   let activePreset: PresetId = "custom";
-  if (chroma && clahe && sharpen) activePreset = "polish";
-  else if (!chroma && !clahe && !sharpen) activePreset = "raw";
-  else if (chroma && !clahe && !sharpen) activePreset = "chroma_only";
-  else if (!chroma && clahe && !sharpen) activePreset = "clahe_only";
-  else if (!chroma && !clahe && sharpen) activePreset = "sharpen_only";
+  if (chroma && mertens && clahe && sharpen) activePreset = "polish";
+  else if (chroma && mertens && !clahe && sharpen) activePreset = "mertens_hdr";
+  else if (!chroma && !mertens && !clahe && !sharpen) activePreset = "raw";
+  else if (!chroma && mertens && !clahe && !sharpen) activePreset = "mertens_only";
+  else if (chroma && !mertens && !clahe && !sharpen) activePreset = "chroma_only";
+  else if (!chroma && !mertens && clahe && !sharpen) activePreset = "clahe_only";
+  else if (!chroma && !mertens && !clahe && sharpen) activePreset = "sharpen_only";
 
   // Pre-fetch metadata & standard presets into browser cache
   useEffect(() => {
@@ -68,7 +81,7 @@ export default function ImageZoom({
       .then((meta) => {
         if (meta.has_initial) setHasInitial(true);
         // Preload standard preset images so toggling is 100% instantaneous
-        ["polish", "raw", "chroma_only", "clahe_only", "sharpen_only"].forEach((p) => {
+        ["polish", "mertens_hdr", "raw", "mertens_only", "chroma_only", "clahe_only", "sharpen_only"].forEach((p) => {
           const img = new Image();
           img.src = getCropVariantUrl(detectionId, { preset: p });
         });
@@ -91,25 +104,17 @@ export default function ImageZoom({
         return;
       }
       if (e.key === "1") {
-        setChroma(true);
-        setClahe(true);
-        setSharpen(true);
+        applyPreset("polish");
       } else if (e.key === "2") {
-        setChroma(false);
-        setClahe(false);
-        setSharpen(false);
+        applyPreset("mertens_hdr");
       } else if (e.key === "3") {
-        setChroma(true);
-        setClahe(false);
-        setSharpen(false);
+        applyPreset("raw");
       } else if (e.key === "4") {
-        setChroma(false);
-        setClahe(true);
-        setSharpen(false);
+        applyPreset("mertens_only");
       } else if (e.key === "5") {
-        setChroma(false);
-        setClahe(false);
-        setSharpen(true);
+        applyPreset("chroma_only");
+      } else if (e.key === "6") {
+        applyPreset("sharpen_only");
       } else if (e.key.toLowerCase() === "p") {
         setPixelated((v) => !v);
       } else if (e.key.toLowerCase() === "z") {
@@ -143,29 +148,44 @@ export default function ImageZoom({
     if (isComparing) {
       currentImageUrl = getCropVariantUrl(detectionId, { preset: "raw", source });
     } else {
-      currentImageUrl = getCropVariantUrl(detectionId, { chroma, clahe, sharpen, source });
+      currentImageUrl = getCropVariantUrl(detectionId, { chroma, mertens, clahe, sharpen, source });
     }
   }
 
   const applyPreset = (p: PresetId) => {
     if (p === "polish") {
       setChroma(true);
+      setMertens(true);
       setClahe(true);
+      setSharpen(true);
+    } else if (p === "mertens_hdr") {
+      setChroma(true);
+      setMertens(true);
+      setClahe(false);
       setSharpen(true);
     } else if (p === "raw") {
       setChroma(false);
+      setMertens(false);
+      setClahe(false);
+      setSharpen(false);
+    } else if (p === "mertens_only") {
+      setChroma(false);
+      setMertens(true);
       setClahe(false);
       setSharpen(false);
     } else if (p === "chroma_only") {
       setChroma(true);
+      setMertens(false);
       setClahe(false);
       setSharpen(false);
     } else if (p === "clahe_only") {
       setChroma(false);
+      setMertens(false);
       setClahe(true);
       setSharpen(false);
     } else if (p === "sharpen_only") {
       setChroma(false);
+      setMertens(false);
       setClahe(false);
       setSharpen(true);
     }
@@ -237,7 +257,7 @@ export default function ImageZoom({
 
         {/* Center: Presets */}
         {detectionId && (
-          <div className="flex items-center gap-1 p-1 rounded-lg bg-panel/80 border border-line">
+          <div className="flex flex-wrap items-center gap-1 p-1 rounded-lg bg-panel/80 border border-line">
             <button
               className={`px-2.5 py-1 text-xs rounded font-medium transition-all ${
                 activePreset === "polish"
@@ -251,14 +271,36 @@ export default function ImageZoom({
             </button>
             <button
               className={`px-2.5 py-1 text-xs rounded font-medium transition-all ${
+                activePreset === "mertens_hdr"
+                  ? "bg-teal-600 text-white shadow-sm font-semibold"
+                  : "text-muted hover:text-ink hover:bg-surface/60"
+              }`}
+              onClick={() => applyPreset("mertens_hdr")}
+              title="Mertens multiscale exposure fusion + Chroma + Sharpen (no CLAHE) [Press 2]"
+            >
+              Mertens HDR
+            </button>
+            <button
+              className={`px-2.5 py-1 text-xs rounded font-medium transition-all ${
                 activePreset === "raw"
                   ? "bg-amber-600/90 text-white shadow-sm font-semibold"
                   : "text-muted hover:text-ink hover:bg-surface/60"
               }`}
               onClick={() => applyPreset("raw")}
-              title="Camera raw sensor pixels (no processing) [Press 2]"
+              title="Camera raw sensor pixels (no processing) [Press 3]"
             >
               Raw
+            </button>
+            <button
+              className={`px-2 py-1 text-xs rounded font-medium transition-all ${
+                activePreset === "mertens_only"
+                  ? "bg-accent text-white shadow-sm font-semibold"
+                  : "text-muted hover:text-ink hover:bg-surface/60"
+              }`}
+              onClick={() => applyPreset("mertens_only")}
+              title="Mertens multiscale exposure fusion only [Press 4]"
+            >
+              Mertens Only
             </button>
             <button
               className={`px-2 py-1 text-xs rounded font-medium transition-all ${
@@ -267,20 +309,9 @@ export default function ImageZoom({
                   : "text-muted hover:text-ink hover:bg-surface/60"
               }`}
               onClick={() => applyPreset("chroma_only")}
-              title="Chroma-guided 4:2:0 filter only [Press 3]"
+              title="Chroma-guided 4:2:0 filter only [Press 5]"
             >
               Chroma Only
-            </button>
-            <button
-              className={`px-2 py-1 text-xs rounded font-medium transition-all ${
-                activePreset === "clahe_only"
-                  ? "bg-accent text-white shadow-sm font-semibold"
-                  : "text-muted hover:text-ink hover:bg-surface/60"
-              }`}
-              onClick={() => applyPreset("clahe_only")}
-              title="Dynamic range CLAHE only [Press 4]"
-            >
-              CLAHE Only
             </button>
             <button
               className={`px-2 py-1 text-xs rounded font-medium transition-all ${
@@ -289,7 +320,7 @@ export default function ImageZoom({
                   : "text-muted hover:text-ink hover:bg-surface/60"
               }`}
               onClick={() => applyPreset("sharpen_only")}
-              title="Bilateral unsharp mask only [Press 5]"
+              title="Bilateral unsharp mask only [Press 6]"
             >
               Sharpen Only
             </button>
@@ -362,7 +393,11 @@ export default function ImageZoom({
               </span>
             ) : activePreset === "polish" ? (
               <span className="px-2.5 py-1 text-xs font-medium rounded-md bg-black/60 text-white/90 backdrop-blur-md border border-white/10">
-                Full Polish
+                Full Polish (Chroma + Mertens + CLAHE + Sharpen)
+              </span>
+            ) : activePreset === "mertens_hdr" ? (
+              <span className="px-2.5 py-1 text-xs font-medium rounded-md bg-teal-900/80 text-teal-100 backdrop-blur-md border border-teal-500/30">
+                Mertens HDR Fusion (No Halos)
               </span>
             ) : activePreset === "raw" ? (
               <span className="px-2.5 py-1 text-xs font-medium rounded-md bg-amber-900/60 text-amber-200 backdrop-blur-md border border-amber-500/20">
@@ -372,6 +407,7 @@ export default function ImageZoom({
               <span className="px-2.5 py-1 text-xs font-medium rounded-md bg-black/60 text-white/90 backdrop-blur-md border border-white/10">
                 {[
                   chroma && "Chroma",
+                  mertens && "Mertens HDR",
                   clahe && "CLAHE",
                   sharpen && "Sharpen",
                 ]
@@ -407,6 +443,20 @@ export default function ImageZoom({
               Chroma Denoise
             </button>
 
+            {/* Mertens Multiscale Exposure Fusion */}
+            <button
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-all ${
+                mertens
+                  ? "bg-leaf/15 border-leaf/50 text-ink font-semibold"
+                  : "bg-panel border-line text-muted line-through opacity-70"
+              }`}
+              onClick={() => setMertens((v) => !v)}
+              title="Tommert & Mertens multiscale exposure fusion: blends synthetic brackets to lift shadows and preserve highlights with zero halos"
+            >
+              <i className={`w-2 h-2 rounded-full ${mertens ? "bg-leaf" : "bg-muted"}`} />
+              Exposure Fusion (Mertens HDR)
+            </button>
+
             {/* CLAHE Lighting Normalization */}
             <button
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-all ${
@@ -415,7 +465,7 @@ export default function ImageZoom({
                   : "bg-panel border-line text-muted line-through opacity-70"
               }`}
               onClick={() => setClahe((v) => !v)}
-              title="L-channel CLAHE: dynamic range shadow recovery without blowing highlights"
+              title="L-channel CLAHE: local contrast dynamic range redistribution"
             >
               <i className={`w-2 h-2 rounded-full ${clahe ? "bg-leaf" : "bg-muted"}`} />
               Dynamic Range (CLAHE)

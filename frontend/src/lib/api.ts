@@ -62,6 +62,7 @@ export function getCropVariantUrl(
   options: {
     chroma?: boolean;
     clahe?: boolean;
+    mertens?: boolean;
     sharpen?: boolean;
     preset?: string;
     source?: "lucky" | "initial";
@@ -73,6 +74,7 @@ export function getCropVariantUrl(
   } else {
     if (options.chroma !== undefined) params.set("chroma", options.chroma ? "1" : "0");
     if (options.clahe !== undefined) params.set("clahe", options.clahe ? "1" : "0");
+    if (options.mertens !== undefined) params.set("mertens", options.mertens ? "1" : "0");
     if (options.sharpen !== undefined) params.set("sharpen", options.sharpen ? "1" : "0");
   }
   if (options.source && options.source !== "lucky") {

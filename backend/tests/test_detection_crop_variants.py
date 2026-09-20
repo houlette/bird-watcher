@@ -113,10 +113,17 @@ def test_crop_variants_endpoints(client, db, monkeypatch, tmp_path):
     assert not np.array_equal(decoded_raw, decoded_polish)
 
     # 4. Custom boolean flags
-    res_flags = client.get(f"/api/detections/{det.id}/crop?chroma=1&clahe=0&sharpen=0")
+    res_flags = client.get(f"/api/detections/{det.id}/crop?chroma=1&clahe=0&mertens=1&sharpen=0")
     assert res_flags.status_code == 200
-    chroma_only = cv2.imdecode(np.frombuffer(res_flags.content, np.uint8), cv2.IMREAD_COLOR)
-    assert chroma_only.shape == (100, 100, 3)
+    mertens_custom = cv2.imdecode(np.frombuffer(res_flags.content, np.uint8), cv2.IMREAD_COLOR)
+    assert mertens_custom.shape == (100, 100, 3)
+
+    # 4b. Preset "mertens_hdr"
+    res_mhdr = client.get(f"/api/detections/{det.id}/crop?preset=mertens_hdr")
+    assert res_mhdr.status_code == 200
+    mhdr = cv2.imdecode(np.frombuffer(res_mhdr.content, np.uint8), cv2.IMREAD_COLOR)
+    assert mhdr.shape == (100, 100, 3)
+    assert not np.array_equal(decoded_raw, mhdr)
 
     # 5. Non-existent detection returns 404
     assert client.get("/api/detections/99999999/crop").status_code == 404

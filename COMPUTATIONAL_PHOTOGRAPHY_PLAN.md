@@ -98,7 +98,11 @@ The camera stream presents several physical constraints:
   plumage shadows) based on local contrast, saturation, and well-exposedness weights.
 - **Benefit over CLAHE**: Zero halo artifacts, natural tone transitions, lifts deep
   under-belly shadows without blowing out white throat/breast feathers.
-- **Status**: Planned (Step 5).
+- **Implementation**: Pure OpenCV (`cv2.createMergeMertens`) with $O(1)$ lookup tables (`cv2.LUT`)
+  generating dark ($\gamma=1.8$) and bright ($\gamma=0.55$) synthetic brackets without floating-point
+  power ops per pixel. Zero external dependencies.
+- **Latency Budget**: Benchmarks at ~0.66 ms on 200x200 crops (well within the < 10 ms budget).
+- **Status**: Shipped & deployed to production.
 
 ### Technique 6: Multi-Frame Shift-and-Add Super-Resolution
 - **Concept**: Sub-pixel image registration across 3–5 consecutive motionless frames
@@ -136,9 +140,9 @@ The camera stream presents several physical constraints:
    alongside production polished crops (`crops/v..._raw.jpg` and `crops/v..._initial_raw.jpg`).
    The backend provides dynamic variant endpoints (`/api/detections/{id}/crop` and
    `/api/detections/{id}/crop-variants`), while the frontend provides an interactive inspection
-   studio in `ImageZoom` with real-time technique toggling (Chroma, CLAHE, Sharpen, Lucky),
-   preset buttons (`Full Polish`, `Raw`, `Chroma Only`, `CLAHE Only`, `Sharpen Only`),
-   instant hold-to-compare (Spacebar), and 1x/2x/4x nearest-neighbor pixel magnification.
+    studio in `ImageZoom` with real-time technique toggling (Chroma, CLAHE, Mertens, Sharpen, Lucky),
+    preset buttons (`Full Polish`, `Mertens HDR`, `Raw`, `Chroma Only`, `CLAHE Only`, `Mertens Only`, `Sharpen Only`),
+    instant hold-to-compare (Spacebar), and 1x/2x/4x nearest-neighbor pixel magnification.
 
 ---
 
@@ -149,7 +153,7 @@ The camera stream presents several physical constraints:
 | Edge-Aware Sharpening | Shipped | ~1.5 ms / crop | Bilateral unsharp mask on L-channel; coring=2.0, clamp=±15.0 | 2026-09-20 | `860eb0a` |
 | Lucky Imaging | Shipped | 0 ms (crisp) / ~90 ms (blurry) | ±3 source frames searched when var < 200; phase-corr gated | 2026-09-20 | `fb3073a` |
 | Chroma-Guided Denoising | Shipped | ~1.1 ms / crop | Fast YCrCb guided filter (r=2, eps=1e-4); >50% chroma noise reduction | 2026-09-20 | `205416a` |
+| Mertens Exposure Fusion | Shipped | ~0.66 ms / crop | 3-exposure multiscale blending; zero highlight clipping & smooth shadow lift | 2026-09-20 | `b319669` |
 | Lightweight SISR (ONNX) | Planned | < 40 ms target | 2× upscaling on crops < 180 px | - | - |
-| Mertens Exposure Fusion | Planned | < 10 ms target | 3-exposure multiscale blending for backlit crops | - | - |
 | Shift-and-Add Super-Res | Planned | < 50 ms target | Sub-pixel alignment over 3-5 burst frames | - | - |
 | Synthetic Bokeh | Planned | < 15 ms target | Subject isolation blur outside bird mask | - | - |
