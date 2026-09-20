@@ -203,6 +203,7 @@ def test_process_visit_lucky_imaging_integration(tmp_path, monkeypatch):
             def finalize(self):
                 return [track]
 
+        monkeypatch.setattr(process_mod, "detect_birds", lambda _img, _idx, **_k: [det])
         monkeypatch.setattr(process_mod, "Tracker", FakeTracker)
         monkeypatch.setattr(process_mod, "classify_bird", lambda _img: [])
         monkeypatch.setattr(process_mod, "_save_source_frames", lambda *_a, **_k: None)

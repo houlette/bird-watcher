@@ -853,6 +853,19 @@ def _hunt_lucky_crop(
             if response < min_corr:
                 continue
 
+            # Color and luminance consistency: reject if overall color shifted dramatically
+            mean_diff = float(np.abs(anchor_resized.mean(axis=(0, 1)) - cand_resized.mean(axis=(0, 1))).max())
+            if mean_diff > 35.0:
+                continue
+
+            # Spatial correlation: verify structural similarity to prevent false-positive alignment on periodic patterns
+            try:
+                spatial_corr = float(cv2.matchTemplate(cand_gray, anchor_gray, cv2.TM_CCOEFF_NORMED)[0][0])
+            except cv2.error:
+                continue
+            if np.isnan(spatial_corr) or spatial_corr < 0.25:
+                continue
+
             # Scale phase-correlation shift back to unresized crop coordinates
             scale_x = initial_crop.shape[1] / _FUSION_RESIZE_PX
             scale_y = initial_crop.shape[0] / _FUSION_RESIZE_PX
