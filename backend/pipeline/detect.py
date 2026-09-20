@@ -17,6 +17,7 @@ code is ~50 lines.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
@@ -33,7 +34,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-COCO_BIRD_CLASS = 14
+COCO_BIRD_CLASS = int(os.getenv("YOLO_BIRD_CLASS", "14"))
 
 # Confidence threshold. With tiling, birds-on-tile score much higher than
 # birds-on-downsampled-full-frame, so we can be moderately strict. Bumped
@@ -41,7 +42,7 @@ COCO_BIRD_CLASS = 14
 # fewer detections (32 → 10 per 15-clip dataset) with no measurable loss
 # on the FP-suppression axis. The dropped detections are mostly the
 # "blurry blob" novel-FP class polluting the feed.
-BIRD_CONFIDENCE_THRESHOLD = 0.35
+BIRD_CONFIDENCE_THRESHOLD = float(os.getenv("YOLO_CONFIDENCE_THRESHOLD", "0.35"))
 
 # Tiling parameters. A 3840×2160 frame tiled at 1024 with 20% overlap
 # gives a 5×3 grid = 15 tiles. Each tile run at imgsz=1024 takes
@@ -162,8 +163,8 @@ def _get_openvino() -> "_OpenVinoTiles | None":
         if _openvino is None and not _openvino_failed:
             try:
                 _openvino = _OpenVinoTiles(OPENVINO_MODEL_PATH, OPENVINO_STREAMS, OPENVINO_THREADS)
-                log.info("YOLO backend: OpenVINO %s, %d streams, %d threads",
-                         OPENVINO_MODEL_PATH, OPENVINO_STREAMS, OPENVINO_THREADS)
+                log.info("YOLO backend: OpenVINO %s, %d streams, %d threads, bird_class=%d, conf=%.2f",
+                         OPENVINO_MODEL_PATH, OPENVINO_STREAMS, OPENVINO_THREADS, COCO_BIRD_CLASS, BIRD_CONFIDENCE_THRESHOLD)
             except Exception:  # noqa: BLE001
                 _openvino_failed = True
                 log.exception("OpenVINO backend unavailable (%s); falling back to PyTorch", OPENVINO_MODEL_PATH)
@@ -304,16 +305,22 @@ def _nmm(dets: list[BirdDetection], iou_thresh: float) -> list[BirdDetection]:
     return keep
 
 
-def _tile_boxes_torch(frame_image: np.ndarray, tiles) -> list[list[tuple[float, float, float, float, float]]]:
+def _tile_boxes_torch(
+    frame_image: np.ndarray,
+    tiles,
+    confidence_threshold: float = BIRD_CONFIDENCE_THRESHOLD,
+    classes: list[int] | None = None,
+) -> list[list[tuple[float, float, float, float, float]]]:
     """Per tile, [(x1, y1, x2, y2, conf)] in tile coordinates, via PyTorch."""
     model = _get_model()
+    target_classes = classes if classes is not None else [COCO_BIRD_CLASS]
     out = []
     for tile_x, tile_y, tile_w, tile_h in tiles:
         tile = frame_image[tile_y : tile_y + tile_h, tile_x : tile_x + tile_w]
         results = model.predict(
             tile,
-            classes=[COCO_BIRD_CLASS],
-            conf=BIRD_CONFIDENCE_THRESHOLD,
+            classes=target_classes,
+            conf=confidence_threshold,
             imgsz=TILE_PX,  # tiles are already tile-sized; no waste downsample
             verbose=False,
         )
@@ -328,7 +335,13 @@ def _tile_boxes_torch(frame_image: np.ndarray, tiles) -> list[list[tuple[float, 
     return out
 
 
-def _tile_boxes_openvino(runner: _OpenVinoTiles, frame_image: np.ndarray, tiles) -> list[list[tuple[float, float, float, float, float]]]:
+def _tile_boxes_openvino(
+    runner: _OpenVinoTiles,
+    frame_image: np.ndarray,
+    tiles,
+    confidence_threshold: float = BIRD_CONFIDENCE_THRESHOLD,
+    classes: list[int] | None = None,
+) -> list[list[tuple[float, float, float, float, float]]]:
     """Same contract as _tile_boxes_torch. Pre- and post-processing are
     Ultralytics' own (rect letterbox padded to a multiple of 32, NMS at the
     predictor's defaults), which is what made the outputs match PyTorch."""
@@ -336,6 +349,7 @@ def _tile_boxes_openvino(runner: _OpenVinoTiles, frame_image: np.ndarray, tiles)
     from ultralytics.data.augment import LetterBox
     from ultralytics.utils import ops
 
+    target_classes = classes if classes is not None else [COCO_BIRD_CLASS]
     letterbox = LetterBox(new_shape=(TILE_PX, TILE_PX), auto=True, stride=32)
     crops = [frame_image[y : y + h, x : x + w] for x, y, w, h in tiles]
     padded = [letterbox(image=c) for c in crops]
@@ -343,7 +357,7 @@ def _tile_boxes_openvino(runner: _OpenVinoTiles, frame_image: np.ndarray, tiles)
     out = []
     for crop, pad, raw in zip(crops, padded, runner.infer(inputs), strict=True):
         det = ops.non_max_suppression(
-            torch.from_numpy(raw), BIRD_CONFIDENCE_THRESHOLD, TILE_NMS_IOU, classes=[COCO_BIRD_CLASS]
+            torch.from_numpy(raw), confidence_threshold, TILE_NMS_IOU, classes=target_classes
         )[0]
         if len(det):
             det[:, :4] = ops.scale_boxes(pad.shape[:2], det[:, :4], crop.shape)
@@ -357,11 +371,17 @@ def detect_birds(
     stats: dict | None = None,
     backend: str | None = None,
     tiles: list[tuple[int, int, int, int]] | None = None,
+    runner: _OpenVinoTiles | None = None,
+    confidence_threshold: float | None = None,
+    classes: list[int] | None = None,
 ) -> list[BirdDetection]:
     """Tiled YOLO bird detection on a single BGR frame.
 
     `backend` overrides YOLO_BACKEND for this call (used by parity checks).
     `tiles` overrides the full grid with a subset of active tiles (used by motion gating).
+    `runner` explicitly supplies the OpenVINO engine (used by replay / evaluation).
+    `confidence_threshold` overrides the default threshold.
+    `classes` overrides the target class IDs.
     If `stats` is given, `tiles` is incremented by the number of tiles run,
     `backend` records the backend that actually ran, and for PyTorch
     `torch_threads` records the thread count in effect, which the first
@@ -374,15 +394,19 @@ def detect_birds(
     height, width = frame_image.shape[:2]
     if tiles is None:
         tiles = _tile_offsets(width, height)
-    runner = _get_openvino() if (backend or YOLO_BACKEND) == "openvino" else None
-    if runner is not None:
-        per_tile = _tile_boxes_openvino(runner, frame_image, tiles)
+
+    conf = confidence_threshold if confidence_threshold is not None else BIRD_CONFIDENCE_THRESHOLD
+    target_classes = classes if classes is not None else [COCO_BIRD_CLASS]
+
+    active_runner = runner if runner is not None else (_get_openvino() if (backend or YOLO_BACKEND) == "openvino" else None)
+    if active_runner is not None:
+        per_tile = _tile_boxes_openvino(active_runner, frame_image, tiles, confidence_threshold=conf, classes=target_classes)
     else:
-        per_tile = _tile_boxes_torch(frame_image, tiles)
+        per_tile = _tile_boxes_torch(frame_image, tiles, confidence_threshold=conf, classes=target_classes)
     if stats is not None:
         stats["tiles"] = stats.get("tiles", 0) + len(tiles)
-        stats["backend"] = "openvino" if runner is not None else "torch"
-        if runner is None:
+        stats["backend"] = "openvino" if active_runner is not None else "torch"
+        if active_runner is None:
             import torch
 
             stats["torch_threads"] = torch.get_num_threads()

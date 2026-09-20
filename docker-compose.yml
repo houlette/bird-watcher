@@ -23,6 +23,9 @@ services:
       # that 2 over 2 bought is no longer needed at the 5g limit below.
       - YOLO_OPENVINO_STREAMS=${YOLO_OPENVINO_STREAMS:-4}
       - YOLO_OPENVINO_THREADS=${YOLO_OPENVINO_THREADS:-4}
+      - YOLO_OPENVINO_MODEL=${YOLO_OPENVINO_MODEL:-/app/models/yolo11s_yard_openvino/best.xml}
+      - YOLO_BIRD_CLASS=${YOLO_BIRD_CLASS:-0}
+      - YOLO_CONFIDENCE_THRESHOLD=${YOLO_CONFIDENCE_THRESHOLD:-0.35}
     volumes:
       - ./backend/data:/app/data
       # Preserved source frames are cold: written once per labeled
