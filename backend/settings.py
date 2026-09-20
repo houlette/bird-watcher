@@ -68,6 +68,11 @@ class Settings(BaseSettings):
     # to disable if needed.
     motion_gated_tiles_enabled: bool = os.getenv("MOTION_GATED_TILES_ENABLED", "1") in ("1", "true", "True", "yes")
 
+    # Lucky imaging: hunt adjacent source video frames around soft/blurry crops
+    # to find motion-still, peak-sharpness micro-moments.
+    lucky_imaging_enabled: bool = os.getenv("LUCKY_IMAGING_ENABLED", "1") in ("1", "true", "True", "yes")
+    lucky_imaging_threshold: float = float(os.getenv("LUCKY_IMAGING_THRESHOLD", "200.0"))
+
     # Web Push (VAPID). The public key is sent to the browser at subscription
     # time; the private key signs the JWT in each push request. Generate both
     # via scripts/generate_vapid_keys.py.

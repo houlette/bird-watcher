@@ -26,9 +26,9 @@ from pipeline.binary_filter import (
 )
 from settings import settings
 from pipeline.classify import SpeciesPrediction, classify_bird
-from pipeline.detect import _tile_offsets, detect_birds
+from pipeline.detect import BirdDetection, _tile_offsets, detect_birds
 from pipeline.exceptions import SkipFile
-from pipeline.frames import extract_frames
+from pipeline.frames import IMAGE_EXTS, extract_frames
 from pipeline.fuse import FusedPrediction, fuse
 from pipeline.motion_tiles import select_active_tiles_hardened
 from pipeline.notify import dispatch_for_detection
@@ -67,7 +67,8 @@ def process_visit(visit: Visit, db: Session) -> int:
     # Every step below that can take real time runs inside exactly one
     # timer.stage(), so the stages add up; see pipeline/timing.py.
     timer = StageTimer()
-    timer.extra["clip"] = {"ext": clip_path.suffix.lower(), "bytes": clip_path.stat().st_size}
+    ext = clip_path.suffix.lower()
+    timer.extra["clip"] = {"ext": ext, "bytes": clip_path.stat().st_size}
     decode_stats: dict = {}
     detect_stats: dict = {}
 
@@ -209,6 +210,9 @@ def process_visit(visit: Visit, db: Session) -> int:
     if "backend" in detect_stats:
         timer.extra["detect_backend"] = detect_stats["backend"]
 
+    src_fps = float(decode_stats.get("source_fps", 25.0))
+    step = max(1, int(round(src_fps / 3.0)))
+
     if not any_frame_decoded:
         # Empty/corrupted clip — mark processed so we don't retry forever.
         visit.processed_at = utcnow()
@@ -279,6 +283,35 @@ def process_visit(visit: Visit, db: Session) -> int:
         # that; see pipeline/territory.py.
         track_frames_for_db = [int(d.frame_index) for d in track.detections]
 
+        # Lucky imaging: hunt adjacent source video frames around soft/blurry crops
+        # to find motion-still, peak-sharpness micro-moments during the bird's perch.
+        lucky_src_idx = int(best.frame_index * step)
+        if settings.lucky_imaging_enabled and ext not in IMAGE_EXTS:
+            curr_sharpness = _laplacian_variance(best.crop) if best.crop is not None else 0.0
+            if 0.0 < curr_sharpness < settings.lucky_imaging_threshold:
+                with timer.stage("lucky_imaging"):
+                    timer.count("lucky_imaging_attempted")
+                    improved_crop, improved_bbox, found_src_idx = _hunt_lucky_crop(
+                        clip_path,
+                        best,
+                        step=step,
+                    )
+                    if improved_crop is not None:
+                        timer.count("lucky_imaging_improved")
+                        log.info(
+                            "visit %d track %d: lucky imaging improved crop sharpness from %.1f to %.1f (source frame %d -> %d)",
+                            visit.id,
+                            track.track_id,
+                            curr_sharpness,
+                            _laplacian_variance(improved_crop),
+                            lucky_src_idx,
+                            found_src_idx,
+                        )
+                        best.crop = improved_crop
+                        if improved_bbox is not None:
+                            best.bbox = improved_bbox
+                        lucky_src_idx = found_src_idx
+
         # Always save the YOLO-detected crop. If the classifier later rejects
         # it, the row still goes into the feed as "Unidentified" so the user
         # can tag it via the picker (real species OR "Not a bird" / "Unknown
@@ -344,7 +377,7 @@ def process_visit(visit: Visit, db: Session) -> int:
                 "brightness": brightness,
                 "sharpness": sharpness,
             })
-            frames_to_save[track.track_id] = best.frame_index
+            frames_to_save[track.track_id] = lucky_src_idx
             continue
 
         averaged = _average_predictions(per_crop_predictions)
@@ -440,7 +473,7 @@ def process_visit(visit: Visit, db: Session) -> int:
             "nab_p_polished": nab_p_polished,
             "fusion_n_used": fusion_stats.get("n_used"),
         })
-        frames_to_save[track.track_id] = best.frame_index
+        frames_to_save[track.track_id] = lucky_src_idx
 
     # ---- Phase 2: persist in one short write transaction. ----
     # Drop any read snapshot fuse() left open during the (seconds-long) Phase 1
@@ -486,7 +519,7 @@ def process_visit(visit: Visit, db: Session) -> int:
     # label) triples the fine-tune will need.
     with timer.stage("source_frames"):
         try:
-            _save_source_frames(clip_path, frames_to_save, visit_id=visit.id)
+            _save_source_frames(clip_path, frames_to_save, visit_id=visit.id, is_source_index=True)
         except Exception:  # noqa: BLE001
             # Non-fatal: missing source frames just means this visit's tracks
             # won't be available for YOLO fine-tune. Detection rows still land.
@@ -718,12 +751,159 @@ def _rank_detections(track: Track) -> list:
     return [d for _, d in scored]
 
 
+# Lucky imaging parameters.
+# Reject phase-correlation alignments below this peak strength.
+_LUCKY_MIN_CORR_PEAK = 0.15
+# A candidate frame must be at least this factor sharper than the current best.
+_LUCKY_MIN_IMPROVEMENT = 1.10
+# Maximum allowed bird displacement as a fraction of bbox dimension.
+_LUCKY_MAX_SHIFT_FRACTION = 0.20
+
+
+def _hunt_lucky_crop(
+    clip_path: Path,
+    det: BirdDetection,
+    *,
+    step: int = 7,
+    radius: int | None = None,
+    min_corr: float = _LUCKY_MIN_CORR_PEAK,
+    min_improvement: float = _LUCKY_MIN_IMPROVEMENT,
+) -> tuple[np.ndarray | None, tuple[int, int, int, int] | None, int]:
+    """Search adjacent source video frames around `det.frame_index` for a sharper crop.
+
+    Used when the top-ranked sampled frame has motion blur or soft focus. Birds move
+    saccadically with micro-pauses (50-200 ms); by checking ±radius source frames around
+    the sampled frame (which samples every ~7th frame at 3 fps), we can catch the moment
+    of tack-sharp stillness.
+
+    Returns:
+        (improved_crop, improved_bbox, source_frame_index)
+        If no sharper frame meeting alignment criteria is found, returns
+        (None, None, det.frame_index * step).
+    """
+    center_src_idx = int(det.frame_index * step)
+    if det.crop is None or getattr(det.crop, "size", 0) == 0 or len(det.bbox) < 4:
+        return None, None, center_src_idx
+
+    best_var = _laplacian_variance(det.crop)
+    if radius is None:
+        radius = max(1, min(3, step // 2))
+
+    x, y, w, h = (int(v) for v in det.bbox[:4])
+    if w <= 0 or h <= 0:
+        return None, None, center_src_idx
+
+    cap = cv2.VideoCapture(str(clip_path))
+    if not cap.isOpened():
+        return None, None, center_src_idx
+
+    best_crop: np.ndarray | None = None
+    best_bbox: tuple[int, int, int, int] | None = None
+    best_src_idx = center_src_idx
+
+    try:
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        start_idx = max(0, center_src_idx - radius)
+        end_idx = center_src_idx + radius
+        if total_frames > 0:
+            end_idx = min(total_frames - 1, end_idx)
+        if start_idx > end_idx:
+            return None, None, center_src_idx
+
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_idx)
+        fw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        fh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+
+        # Target size for phase correlation alignment
+        target_size = (_FUSION_RESIZE_PX, _FUSION_RESIZE_PX)
+        anchor_resized = cv2.resize(det.crop, target_size)
+        anchor_gray = cv2.cvtColor(anchor_resized, cv2.COLOR_BGR2GRAY).astype(np.float32)
+
+        max_dx = w * _LUCKY_MAX_SHIFT_FRACTION
+        max_dy = h * _LUCKY_MAX_SHIFT_FRACTION
+
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            curr_idx = int(cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1
+            if curr_idx < start_idx:
+                continue
+            if curr_idx > end_idx:
+                break
+            if curr_idx == center_src_idx:
+                continue
+
+            if fw == 0 or fh == 0:
+                fh, fw = frame.shape[:2]
+
+            # 1. Initial crop at original bbox
+            initial_crop = _extract_crop_from_image(det, frame)
+            if initial_crop is None or initial_crop.size == 0:
+                continue
+
+            # 2. Phase-correlation alignment against anchor
+            cand_resized = cv2.resize(initial_crop, target_size)
+            cand_gray = cv2.cvtColor(cand_resized, cv2.COLOR_BGR2GRAY).astype(np.float32)
+            try:
+                (p_dx, p_dy), response = cv2.phaseCorrelate(anchor_gray, cand_gray)
+            except cv2.error:
+                continue
+
+            if response < min_corr:
+                continue
+
+            # Scale phase-correlation shift back to unresized crop coordinates
+            scale_x = initial_crop.shape[1] / _FUSION_RESIZE_PX
+            scale_y = initial_crop.shape[0] / _FUSION_RESIZE_PX
+            real_dx = p_dx * scale_x
+            real_dy = p_dy * scale_y
+
+            if abs(real_dx) > max_dx or abs(real_dy) > max_dy:
+                continue
+
+            # If bird shifted slightly, adjust bbox
+            if abs(real_dx) >= 1.0 or abs(real_dy) >= 1.0:
+                adj_x = int(round(np.clip(x + real_dx, 0, max(0, fw - w))))
+                adj_y = int(round(np.clip(y + real_dy, 0, max(0, fh - h))))
+                adj_bbox = (adj_x, adj_y, w, h)
+                temp_det = BirdDetection(
+                    bbox=adj_bbox,
+                    confidence=det.confidence,
+                    frame_index=curr_idx,
+                )
+                refined_crop = _extract_crop_from_image(temp_det, frame)
+            else:
+                adj_bbox = (x, y, w, h)
+                refined_crop = initial_crop
+
+            if refined_crop is None or refined_crop.size == 0:
+                continue
+
+            cand_var = _laplacian_variance(refined_crop)
+            if cand_var >= best_var * min_improvement and cand_var > (best_var + 5.0):
+                best_var = cand_var
+                best_crop = refined_crop
+                best_bbox = adj_bbox
+                best_src_idx = curr_idx
+
+    except Exception:
+        log.exception("Lucky imaging hunt failed unexpectedly for %s", clip_path)
+    finally:
+        cap.release()
+
+    if best_crop is not None:
+        return best_crop, best_bbox, best_src_idx
+    return None, None, center_src_idx
+
+
 def _save_source_frames(
     clip_path: Path,
     frame_index_by_track: dict[int, int],
     *,
     visit_id: int,
     target_fps: float = 3.0,
+    is_source_index: bool = False,
 ) -> None:
     """Re-decode the clip and write out the source frame for each persisted track.
 
@@ -732,9 +912,9 @@ def _save_source_frames(
     finalize phase — that was the OOM trigger we just fixed. The cost of one
     extra clip decode per visit is ~5–10 % wall time, paid once per visit.
 
-    The sampled frame index stored on `BirdDetection.frame_index` is the index
-    after subsampling (3 fps from a 20 fps source = every 7th frame), so we
-    multiply by `step` to recover the source-stream index, then seek there.
+    When `is_source_index` is True, `frame_index_by_track` contains exact source
+    frame indices (e.g. from lucky imaging). Otherwise, it contains sampled frame
+    indices which are multiplied by `step` to recover the source-stream index.
 
     No-op if the clip can't be reopened (file was deleted mid-process) — the
     Detection rows still land; only the frame archive is missing.
@@ -748,8 +928,8 @@ def _save_source_frames(
     try:
         src_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
         step = max(1, int(round(src_fps / target_fps)))
-        for track_id, sampled_idx in frame_index_by_track.items():
-            src_idx = sampled_idx * step
+        for track_id, idx in frame_index_by_track.items():
+            src_idx = idx if is_source_index else idx * step
             cap.set(cv2.CAP_PROP_POS_FRAMES, src_idx)
             ok, frame = cap.read()
             if not ok:
