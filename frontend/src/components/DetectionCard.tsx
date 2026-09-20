@@ -167,6 +167,27 @@ export default function DetectionCard({
             <ZoomIcon size={14} />
           </span>
         )}
+        {/* Computational photography badges: Lucky imaging & Super-res */}
+        {(detection.has_lucky || detection.has_sr) && (
+          <div className="absolute top-2 right-2 z-[3] flex items-center gap-1">
+            {detection.has_lucky && (
+              <span
+                className="rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 text-[9px] font-bold backdrop-blur-sm shadow-sm flex items-center gap-0.5"
+                title="Lucky Imaging: sharpest micro-pause frame selected from video burst"
+              >
+                ★ Lucky
+              </span>
+            )}
+            {detection.has_sr && (
+              <span
+                className="rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30 px-1.5 py-0.5 text-[9px] font-bold backdrop-blur-sm shadow-sm flex items-center gap-0.5"
+                title="Super-Res: 2x multi-frame shift-and-add reconstruction"
+              >
+                2× SR
+              </span>
+            )}
+          </div>
+        )}
         {seriesCount > 1 && (
           <span
             className="absolute left-2 bottom-2 z-[3] rounded-full bg-surface/85 px-2 py-0.5 text-[10px] font-semibold text-muted backdrop-blur-sm"
@@ -423,6 +444,8 @@ export default function DetectionCard({
           initialSharpness={detection.sharpness}
           cropAreaPx={detection.crop_area_px}
           brightness={detection.brightness}
+          hasLucky={detection.has_lucky}
+          hasSr={detection.has_sr}
           onClose={() => setZoomOpen(false)}
         />
       )}

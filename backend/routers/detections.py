@@ -24,6 +24,7 @@ from db.models import (
 # it in the feed.
 HIDDEN_FROM_FEED = frozenset({NOT_A_BIRD_LABEL, POOR_QUALITY_LABEL})
 from db.session import get_db
+from pipeline.process import CROPS_DIR
 
 router = APIRouter()
 
@@ -266,6 +267,16 @@ async def list_detections(
             # P(NAB) the binary filter scored, non-null only when it overrode
             # this crop to "Not a bird". Lets the UI flag/sort the audit cohort.
             "nab_override_p": d.nab_override_p,
+            "has_lucky": bool(
+                d.visit_id is not None
+                and d.track_id is not None
+                and (CROPS_DIR / f"v{d.visit_id:08d}_t{d.track_id:04d}_initial_raw.jpg").exists()
+            ),
+            "has_sr": bool(
+                d.visit_id is not None
+                and d.track_id is not None
+                and (CROPS_DIR / f"v{d.visit_id:08d}_t{d.track_id:04d}_sr.jpg").exists()
+            ),
         }
         for d in rows
     ]
@@ -292,6 +303,16 @@ async def get_visit(visit_id: int, db: Session = Depends(get_db)) -> dict:
                 "audio_confirmed": bool(d.audio_confirmed),
                 "crop_url": f"/media/{d.crop_path}",
                 "track_id": d.track_id,
+                "has_lucky": bool(
+                    d.visit_id is not None
+                    and d.track_id is not None
+                    and (CROPS_DIR / f"v{d.visit_id:08d}_t{d.track_id:04d}_initial_raw.jpg").exists()
+                ),
+                "has_sr": bool(
+                    d.visit_id is not None
+                    and d.track_id is not None
+                    and (CROPS_DIR / f"v{d.visit_id:08d}_t{d.track_id:04d}_sr.jpg").exists()
+                ),
             }
             for d in visit.detections
         ],

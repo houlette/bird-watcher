@@ -39,6 +39,9 @@ export type Detection = {
   // P(NAB) the binary post-filter scored; non-null only when it overrode
   // this crop to "Not a bird". Drives the binary-filter audit feed.
   nab_override_p: number | null;
+  // Computational photography flags
+  has_lucky?: boolean;
+  has_sr?: boolean;
 };
 
 export type CropVariantsMeta = {

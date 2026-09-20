@@ -237,3 +237,60 @@ def test_crop_variants_super_res(client, db, monkeypatch, tmp_path):
     assert decoded2.shape == (120, 160, 3)
 
 
+def test_detection_has_lucky_and_sr_flags(client, db, monkeypatch, tmp_path):
+    """Verify that GET /api/detections and GET /api/visits/{id} surface has_lucky and has_sr."""
+    import pipeline.process as proc
+    import routers.detections as det_router
+
+    crops_dir = tmp_path / "crops"
+    crops_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(proc, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(proc, "CROPS_DIR", crops_dir)
+    monkeypatch.setattr(det_router, "CROPS_DIR", crops_dir)
+
+    v = Visit(clip_path="clips/v00000004.mp4")
+    db.add(v)
+    db.flush()
+
+    d1 = Detection(
+        visit_id=v.id,
+        track_id=1,
+        confidence=0.9,
+        crop_path=f"crops/v{v.id:08d}_t0001.jpg",
+        bbox=[0, 0, 100, 100],
+    )
+    d2 = Detection(
+        visit_id=v.id,
+        track_id=2,
+        confidence=0.85,
+        crop_path=f"crops/v{v.id:08d}_t0002.jpg",
+        bbox=[0, 0, 100, 100],
+    )
+    db.add_all([d1, d2])
+    db.commit()
+
+    # D1 has lucky initial_raw and sr
+    (crops_dir / f"v{v.id:08d}_t0001_initial_raw.jpg").write_bytes(b"dummy")
+    (crops_dir / f"v{v.id:08d}_t0001_sr.jpg").write_bytes(b"dummy")
+
+    # 1. Test GET /api/detections
+    res = client.get("/api/detections")
+    assert res.status_code == 200
+    items = {item["id"]: item for item in res.json()}
+    assert items[d1.id]["has_lucky"] is True
+    assert items[d1.id]["has_sr"] is True
+    assert items[d2.id]["has_lucky"] is False
+    assert items[d2.id]["has_sr"] is False
+
+    # 2. Test GET /api/visits/{id}
+    res_visit = client.get(f"/api/detections/visits/{v.id}")
+    assert res_visit.status_code == 200
+    visit_dets = {item["id"]: item for item in res_visit.json()["detections"]}
+    assert visit_dets[d1.id]["has_lucky"] is True
+    assert visit_dets[d1.id]["has_sr"] is True
+    assert visit_dets[d2.id]["has_lucky"] is False
+    assert visit_dets[d2.id]["has_sr"] is False
+
+
+

@@ -12,6 +12,8 @@ type Props = {
   initialSharpness?: number | null;
   cropAreaPx?: number | null;
   brightness?: number | null;
+  hasLucky?: boolean;
+  hasSr?: boolean;
   onClose: () => void;
 };
 
@@ -50,6 +52,8 @@ export default function ImageZoom({
   initialSharpness,
   cropAreaPx,
   brightness,
+  hasLucky,
+  hasSr,
   onClose,
 }: Props) {
   // Technique toggle states
@@ -59,7 +63,8 @@ export default function ImageZoom({
   const [clahe, setClahe] = useState(true);
   const [sharpen, setSharpen] = useState(true);
   const [source, setSource] = useState<"lucky" | "initial">("lucky");
-  const [hasInitial, setHasInitial] = useState(false);
+  const [hasInitial, setHasInitial] = useState(hasLucky ?? false);
+  const [hasSrState, setHasSrState] = useState(hasSr ?? false);
 
   // Comparison & View states
   const [isComparing, setIsComparing] = useState(false);
@@ -87,6 +92,7 @@ export default function ImageZoom({
     fetchCropVariantsMeta(detectionId)
       .then((meta) => {
         if (meta.has_initial) setHasInitial(true);
+        if (meta.has_sr) setHasSrState(true);
         // Preload standard preset images so toggling is 100% instantaneous
         ["polish", "mertens_hdr", "raw", "super_res", "mertens_only", "chroma_only", "clahe_only", "sharpen_only"].forEach((p) => {
           const img = new Image();
@@ -284,6 +290,22 @@ export default function ImageZoom({
               {brightness != null && (
                 <span title="Mean luminance">· bright {Math.round(brightness)}</span>
               )}
+              {hasInitial && (
+                <span
+                  className="rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 text-[9px] font-bold shadow-xs flex items-center gap-0.5 ml-1"
+                  title="Lucky imaging found and swapped in a sharper video frame"
+                >
+                  ★ Lucky Frame
+                </span>
+              )}
+              {hasSrState && (
+                <span
+                  className="rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30 px-1.5 py-0.5 text-[9px] font-bold shadow-xs flex items-center gap-0.5 ml-0.5"
+                  title="2x Multi-frame shift-and-add super-resolution reconstruction available"
+                >
+                  2× SR
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -325,7 +347,7 @@ export default function ImageZoom({
               Raw
             </button>
             <button
-              className={`px-2.5 py-1 text-xs rounded font-medium transition-all ${
+              className={`px-2.5 py-1 text-xs rounded font-medium transition-all flex items-center gap-1 ${
                 activePreset === "super_res"
                   ? "bg-purple-600 text-white shadow-sm font-semibold"
                   : "text-muted hover:text-ink hover:bg-surface/60"
@@ -333,7 +355,10 @@ export default function ImageZoom({
               onClick={() => applyPreset("super_res")}
               title="Multi-frame shift-and-add 2x super-resolution + full polish [Press 4]"
             >
-              Super-Res 2x
+              <span>Super-Res 2x</span>
+              {hasSrState && (
+                <span className="w-1.5 h-1.5 rounded-full bg-purple-400" title="Pre-generated" />
+              )}
             </button>
             <button
               className={`px-2 py-1 text-xs rounded font-medium transition-all ${
