@@ -1,10 +1,12 @@
-"""Tests for the user-feed image polish (CLAHE) in pipeline.process.
+"""Tests for the user-feed image polish (CLAHE + edge-aware sharpener) in pipeline.process.
 
-The polish only affects the JPEG written to disk for the feed; the classifier
-input goes through a separate path in pipeline.classify. Sharpening was
-removed after several rounds of user feedback that it read as crunchy on
-feather edges — these tests now verify only CLAHE behavior (shape/dtype
-preservation, dynamic-range widening on dim input, no color cast).
+The polish affects the JPEG written to disk for the feed; the classifier
+input goes through its own preprocessing in pipeline.classify. We test:
+  - shape and dtype preservation
+  - dynamic-range widening via CLAHE on dim input
+  - color neutrality on neutral gray
+  - edge-aware sharpening on blurry input (lifting high-frequency variance)
+  - gating on already-crisp input (preventing oversharpening)
 """
 from __future__ import annotations
 
@@ -38,3 +40,40 @@ def test_polish_does_not_introduce_color_cast_on_neutral_gray():
     out_lab = cv2.cvtColor(_polish_for_display(img), cv2.COLOR_BGR2LAB)
     assert abs(int(out_lab[:, :, 1].mean()) - 128) <= 1
     assert abs(int(out_lab[:, :, 2].mean()) - 128) <= 1
+
+
+def test_polish_sharpens_blurry_input():
+    """Soft/blurry images should gain high-frequency detail after polish."""
+    # Create an image with soft edges
+    base = np.zeros((100, 100, 3), dtype=np.uint8)
+    cv2.circle(base, (50, 50), 30, (200, 200, 200), -1)
+    blurry = cv2.GaussianBlur(base, (9, 9), 2.5)
+
+    var_before = cv2.Laplacian(cv2.cvtColor(blurry, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var()
+    polished = _polish_for_display(blurry)
+    var_after = cv2.Laplacian(cv2.cvtColor(polished, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var()
+
+    assert var_after > var_before
+
+
+def test_polish_skips_sharpening_on_already_crisp_input(monkeypatch):
+    """High-contrast/crisp crops above the cutoff threshold should skip sharpening."""
+    from pipeline import process
+
+    # Force cutoff threshold low to verify gating
+    monkeypatch.setattr(process, "_SHARPEN_CUTOFF_VAR", 50.0)
+
+    # Sharp checkered pattern with high variance
+    sharp = np.zeros((100, 100, 3), dtype=np.uint8)
+    sharp[::2, ::2] = 255
+    sharp[1::2, 1::2] = 255
+
+    # With max_amount = 0 (CLAHE only), output should equal output when gated
+    monkeypatch.setattr(process, "_SHARPEN_MAX_AMOUNT", 0.0)
+    clahe_only = _polish_for_display(sharp)
+
+    # Restore max_amount; because variance >> cutoff, it should still equal clahe_only
+    monkeypatch.setattr(process, "_SHARPEN_MAX_AMOUNT", 0.4)
+    gated = _polish_for_display(sharp)
+
+    np.testing.assert_array_equal(clahe_only, gated)

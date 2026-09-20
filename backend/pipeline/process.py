@@ -772,16 +772,25 @@ def _save_source_frames(
 #   - CLAHE on the L channel of LAB to lift shadowed feather detail without
 #     blowing out highlights or shifting color. Same setup as the classifier
 #     uses; ~1 ms.
-#   - Unsharp mask was tried at 0.5 → 0.3 → 0.15 amount and consistently
-#     read as "crunchy" on feather edges. Disabled — the win wasn't worth
-#     the artifact. The constant and helper paths are retained in case
-#     we want to re-introduce a smarter sharpener later (e.g., edge-aware
-#     or only-when-blurry), but the live path skips it entirely when
-#     amount == 0.
+#   - Edge-aware adaptive sharpener:
+#     Standard Gaussian unsharp mask previously created harsh "crunchy" halos
+#     along high-contrast silhouette edges and amplified sensor noise.
+#     We replace it with an edge-preserving bilateral unsharp mask on the L
+#     channel of LAB:
+#       1. Bilateral filter smooths sensor noise and micro-texture while
+#          respecting sharp boundary edges.
+#       2. Subtracting bilateral from L isolates plumage texture without
+#          overshoot spikes at edges.
+#       3. Deadband coring suppresses low-amplitude sensor noise in flat areas.
+#       4. Dynamic clamping prevents edge clipping / halos.
+#       5. Adaptive gating: scales boost inversely with input sharpness,
+#          short-circuiting completely when the crop is already crisp
+#          (variance >= _SHARPEN_CUTOFF_VAR).
 _DISPLAY_CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-_UNSHARP_AMOUNT = 0.0
-_UNSHARP_BLUR_KSIZE = (0, 0)         # auto-compute from sigma
-_UNSHARP_BLUR_SIGMA = 1.5
+_SHARPEN_MAX_AMOUNT = 0.4
+_SHARPEN_CUTOFF_VAR = 250.0
+_SHARPEN_CORING_THRESHOLD = 2.0
+_SHARPEN_MAX_BOOST = 15.0
 
 
 def _score_crop_variants(best, served_crop, served_p):
@@ -805,20 +814,39 @@ def _score_crop_variants(best, served_crop, served_p):
 
 
 def _polish_for_display(bgr: np.ndarray) -> np.ndarray:
-    """Lighting-normalize (CLAHE) the user-visible feed crop. Sharpening
-    is short-circuited when _UNSHARP_AMOUNT == 0 (no GaussianBlur /
-    addWeighted cost)."""
-    # CLAHE
+    """Lighting-normalize (CLAHE) and adaptively sharpen the user-visible feed crop.
+
+    Operates on the L channel of LAB to preserve exact chroma. For crops with
+    soft focus or motion blur (Laplacian variance < _SHARPEN_CUTOFF_VAR), an
+    edge-preserving bilateral unsharp mask brings out fine feather plumage
+    without creating harsh halos or boosting sensor noise.
+    """
     lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
-    l, a, b = cv2.split(lab)
-    l_eq = _DISPLAY_CLAHE.apply(l)
-    eq = cv2.cvtColor(cv2.merge((l_eq, a, b)), cv2.COLOR_LAB2BGR)
-    if _UNSHARP_AMOUNT <= 0:
-        return eq
-    # Unsharp mask: out = eq + amount * (eq - blur(eq))
-    blurred = cv2.GaussianBlur(eq, _UNSHARP_BLUR_KSIZE, _UNSHARP_BLUR_SIGMA)
-    sharpened = cv2.addWeighted(eq, 1 + _UNSHARP_AMOUNT, blurred, -_UNSHARP_AMOUNT, 0)
-    return sharpened
+    l_channel, a_channel, b_channel = cv2.split(lab)
+    l_eq = _DISPLAY_CLAHE.apply(l_channel)
+
+    if _SHARPEN_MAX_AMOUNT <= 0:
+        return cv2.cvtColor(cv2.merge((l_eq, a_channel, b_channel)), cv2.COLOR_LAB2BGR)
+
+    # Sharpness gating: already-crisp crops need no sharpening
+    var = cv2.Laplacian(l_eq, cv2.CV_64F).var()
+    if var >= _SHARPEN_CUTOFF_VAR:
+        return cv2.cvtColor(cv2.merge((l_eq, a_channel, b_channel)), cv2.COLOR_LAB2BGR)
+
+    # Scale sharpening amount inversely with sharpness (blurrier gets more)
+    amount = _SHARPEN_MAX_AMOUNT * (1.0 - var / _SHARPEN_CUTOFF_VAR)
+
+    # Bilateral filter preserves sharp silhouette edges while smoothing texture/noise
+    bilat = cv2.bilateralFilter(l_eq, d=5, sigmaColor=25, sigmaSpace=3)
+    diff = l_eq.astype(np.float32) - bilat.astype(np.float32)
+
+    # Coring: ignore low-amplitude sensor noise in flat regions
+    diff = np.where(np.abs(diff) < _SHARPEN_CORING_THRESHOLD, 0.0, diff)
+    # Clamp extreme spikes to avoid haloing on high-contrast edges
+    diff = np.clip(diff, -_SHARPEN_MAX_BOOST, _SHARPEN_MAX_BOOST)
+
+    l_sharp = np.clip(l_eq.astype(np.float32) + amount * diff, 0, 255).astype(np.uint8)
+    return cv2.cvtColor(cv2.merge((l_sharp, a_channel, b_channel)), cv2.COLOR_LAB2BGR)
 
 
 def _save_crop(det, *, visit_id: int, track_id: int) -> Path:
