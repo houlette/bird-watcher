@@ -172,7 +172,7 @@ export default function DetectionCard({
           <div className="absolute top-2 right-2 z-[3] flex items-center gap-1">
             {detection.has_lucky && (
               <span
-                className="rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 text-[9px] font-bold backdrop-blur-sm shadow-sm flex items-center gap-0.5"
+                className="rounded-full bg-amber-600/90 text-white dark:bg-amber-500/25 dark:text-amber-300 dark:border-amber-500/40 border border-amber-600/30 px-1.5 py-0.5 text-[9px] font-bold backdrop-blur-md shadow-xs flex items-center gap-0.5"
                 title="Lucky Imaging: sharpest micro-pause frame selected from video burst"
               >
                 ★ Lucky
@@ -180,7 +180,7 @@ export default function DetectionCard({
             )}
             {detection.has_sr && (
               <span
-                className="rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30 px-1.5 py-0.5 text-[9px] font-bold backdrop-blur-sm shadow-sm flex items-center gap-0.5"
+                className="rounded-full bg-purple-600/90 text-white dark:bg-purple-500/25 dark:text-purple-300 dark:border-purple-500/40 border border-purple-700/30 px-1.5 py-0.5 text-[9px] font-bold backdrop-blur-md shadow-xs flex items-center gap-0.5"
                 title="Super-Res: 2x multi-frame shift-and-add reconstruction"
               >
                 2× SR
@@ -188,7 +188,7 @@ export default function DetectionCard({
             )}
             {detection.has_sisr && (
               <span
-                className="rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-1.5 py-0.5 text-[9px] font-bold backdrop-blur-sm shadow-sm flex items-center gap-0.5"
+                className="rounded-full bg-indigo-600/90 text-white dark:bg-indigo-500/25 dark:text-indigo-300 dark:border-indigo-500/40 border border-indigo-700/30 px-1.5 py-0.5 text-[9px] font-bold backdrop-blur-md shadow-xs flex items-center gap-0.5"
                 title="Neural Super-Res: 2x FSRCNN deep learning single-image reconstruction"
               >
                 2× Neural
