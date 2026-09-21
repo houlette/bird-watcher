@@ -167,35 +167,6 @@ export default function DetectionCard({
             <ZoomIcon size={14} />
           </span>
         )}
-        {/* Computational photography badges: Lucky imaging, Super-res & Neural SR */}
-        {(detection.has_lucky || detection.has_sr || detection.has_sisr) && (
-          <div className="absolute top-2 right-2 z-[3] flex items-center gap-1">
-            {detection.has_lucky && (
-              <span
-                className="rounded-full bg-amber-600/90 text-white dark:bg-amber-500/25 dark:text-amber-300 dark:border-amber-500/40 border border-amber-600/30 px-1.5 py-0.5 text-[9px] font-bold backdrop-blur-md shadow-xs flex items-center gap-0.5"
-                title="Lucky Imaging: sharpest micro-pause frame selected from video burst"
-              >
-                ★ Lucky
-              </span>
-            )}
-            {detection.has_sr && (
-              <span
-                className="rounded-full bg-purple-600/90 text-white dark:bg-purple-500/25 dark:text-purple-300 dark:border-purple-500/40 border border-purple-700/30 px-1.5 py-0.5 text-[9px] font-bold backdrop-blur-md shadow-xs flex items-center gap-0.5"
-                title="Super-Res: 2x multi-frame shift-and-add reconstruction"
-              >
-                2× SR
-              </span>
-            )}
-            {detection.has_sisr && (
-              <span
-                className="rounded-full bg-indigo-600/90 text-white dark:bg-indigo-500/25 dark:text-indigo-300 dark:border-indigo-500/40 border border-indigo-700/30 px-1.5 py-0.5 text-[9px] font-bold backdrop-blur-md shadow-xs flex items-center gap-0.5"
-                title="Neural Super-Res: 2x FSRCNN deep learning single-image reconstruction"
-              >
-                2× Neural
-              </span>
-            )}
-          </div>
-        )}
         {seriesCount > 1 && (
           <span
             className="absolute left-2 bottom-2 z-[3] rounded-full bg-surface/85 px-2 py-0.5 text-[10px] font-semibold text-muted backdrop-blur-sm"
@@ -264,7 +235,7 @@ export default function DetectionCard({
           )}
         </div>
 
-        <div className="mt-1.5 flex items-center gap-2 text-xs text-muted">
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-muted">
           {/* A 0% chip is noise: it means the classifier rejected every
               crop and the label came from elsewhere (LLM, user). Show the
               provenance instead. */}
@@ -293,6 +264,30 @@ export default function DetectionCard({
             </span>
           ) : null}
           <span className="text-faint tnum">{time}</span>
+          {detection.has_lucky && (
+            <span
+              className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-800 dark:text-amber-300 border border-amber-600/25 dark:border-amber-500/35 bg-amber-500/10 leading-none align-middle"
+              title="Lucky Imaging: sharpest micro-pause frame selected from video burst"
+            >
+              ★ lucky
+            </span>
+          )}
+          {detection.has_sr && (
+            <span
+              className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-purple-800 dark:text-purple-300 border border-purple-600/25 dark:border-purple-500/35 bg-purple-500/10 leading-none align-middle"
+              title="Super-Res: 2x multi-frame shift-and-add reconstruction"
+            >
+              2× sr
+            </span>
+          )}
+          {detection.has_sisr && (
+            <span
+              className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-indigo-800 dark:text-indigo-300 border border-indigo-600/25 dark:border-indigo-500/35 bg-indigo-500/10 leading-none align-middle"
+              title="Neural Super-Res: 2x FSRCNN deep learning single-image reconstruction"
+            >
+              2× neural
+            </span>
+          )}
         </div>
 
         {/* Quality footer — only when all three metrics are populated. Each
