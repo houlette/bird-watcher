@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { CloseIcon } from "./FieldIcons";
@@ -112,31 +112,48 @@ export default function ImageZoom({
       .catch(() => {});
   }, [detectionId]);
 
-  // Lock body scroll and restore exact scroll position on unmount
+  const modalRef = useRef<HTMLDivElement>(null);
+
+  // Focus modal container on mount so activeElement is within the overlay
   useEffect(() => {
-    const originalOverflow = document.body.style.overflow;
-    const scrollY = window.scrollY;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = originalOverflow;
-      window.scrollTo({ top: scrollY, behavior: "instant" as ScrollBehavior });
-    };
+    modalRef.current?.focus();
   }, []);
 
-  // Keyboard navigation
+  // Keyboard navigation & spacebar compare
   useEffect(() => {
+    const isSpaceKey = (e: KeyboardEvent) =>
+      e.code === "Space" ||
+      e.key === " " ||
+      e.key === "Spacebar" ||
+      e.keyCode === 32 ||
+      e.which === 32;
+
+    const isBackslash = (e: KeyboardEvent) =>
+      e.key === "\\" ||
+      e.code === "Backslash" ||
+      e.keyCode === 220 ||
+      e.which === 220;
+
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
+      if (e.key === "Escape" || e.keyCode === 27) {
+        e.preventDefault();
+        e.stopPropagation();
         onClose();
         return;
       }
-      if (e.code === "Space" || e.key === " " || e.key === "\\") {
+
+      if (isSpaceKey(e) || isBackslash(e)) {
+        // Unconditionally prevent default and stop propagation so spacebar
+        // NEVER scrolls the page or triggers button clicks
         e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation?.();
         if (!e.repeat) {
           setIsComparing(true);
         }
         return;
       }
+
       if (e.key === "1") {
         applyPreset("polish");
       } else if (e.key === "2") {
@@ -166,17 +183,26 @@ export default function ImageZoom({
     };
 
     const onKeyUp = (e: KeyboardEvent) => {
-      if (e.code === "Space" || e.key === " " || e.key === "\\") {
+      if (isSpaceKey(e) || isBackslash(e)) {
         e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation?.();
         setIsComparing(false);
       }
     };
 
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
+    // Attach in capture phase on both window and document to intercept before
+    // browser default action, target elements, or scroll containers.
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    window.addEventListener("keyup", onKeyUp, { capture: true });
+    document.addEventListener("keydown", onKeyDown, { capture: true });
+    document.addEventListener("keyup", onKeyUp, { capture: true });
+
     return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
+      window.removeEventListener("keyup", onKeyUp, { capture: true });
+      document.removeEventListener("keydown", onKeyDown, { capture: true });
+      document.removeEventListener("keyup", onKeyUp, { capture: true });
     };
   }, [onClose]);
 
@@ -300,11 +326,18 @@ export default function ImageZoom({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex flex-col justify-between p-3 sm:p-5 backdrop-blur-md bg-[color-mix(in_oklab,#090b08_94%,transparent)] select-none overscroll-contain"
+      ref={modalRef}
+      tabIndex={-1}
+      className="fixed inset-0 z-50 flex flex-col justify-between p-3 sm:p-5 backdrop-blur-md bg-[color-mix(in_oklab,#090b08_94%,transparent)] select-none overscroll-contain outline-none"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
       aria-label="Computational Photography Inspector"
+      onWheel={(e) => {
+        if (e.target === e.currentTarget) {
+          e.preventDefault();
+        }
+      }}
     >
       {/* Top Header & Preset Bar */}
       <div
