@@ -338,6 +338,26 @@ def process_visit(visit: Visit, db: Session) -> int:
                             timer.count("super_res_fused")
                         best.sr_crop = sr_result
 
+        # Single-image neural super-resolution (FSRCNN via OpenVINO)
+        # If multi-frame burst was unavailable or didn't fuse >= 2 frames,
+        # and the crop is small (< sisr_max_crop_size), enhance via neural SISR.
+        best.sisr_crop = None
+        if (
+            best.sr_crop is None
+            and getattr(settings, "sisr_enabled", True)
+        ):
+            w_crop, h_crop = int(best.bbox[2]), int(best.bbox[3])
+            if max(w_crop, h_crop) <= getattr(settings, "sisr_max_crop_size", 180):
+                with timer.stage("sisr"):
+                    timer.count("sisr_attempted")
+                    sisr_result = _single_image_super_res(
+                        best.crop,
+                        scale=getattr(settings, "sisr_scale", 2),
+                    )
+                    if sisr_result is not None:
+                        timer.count("sisr_applied")
+                        best.sisr_crop = sisr_result
+
         # Always save the YOLO-detected crop. If the classifier later rejects
         # it, the row still goes into the feed as "Unidentified" so the user
         # can tag it via the picker (real species OR "Not a bird" / "Unknown
@@ -1094,6 +1114,85 @@ def _extract_burst_crops(
     return crops
 
 
+_FSRCNN_MODEL_PATHS = {
+    2: Path(__file__).resolve().parent / "models" / "fsrcnn_x2.xml",
+    4: Path(__file__).resolve().parent / "models" / "fsrcnn_x4.xml",
+}
+_FSRCNN_COMPILED_MODELS: dict[int, object] = {}
+
+
+def _get_fsrcnn_model(scale: int = 2):
+    """Lazy-load and compile FSRCNN OpenVINO model for scale 2 or 4."""
+    if scale not in (2, 4):
+        scale = 2
+    if scale in _FSRCNN_COMPILED_MODELS:
+        return _FSRCNN_COMPILED_MODELS[scale]
+
+    model_path = _FSRCNN_MODEL_PATHS.get(scale)
+    if not model_path or not model_path.exists():
+        log.warning("FSRCNN model not found at %s", model_path)
+        return None
+
+    try:
+        import openvino as ov
+
+        core = ov.Core()
+        model = core.read_model(str(model_path))
+        compiled = core.compile_model(model, "CPU")
+        _FSRCNN_COMPILED_MODELS[scale] = compiled
+        log.info("Loaded and compiled FSRCNN x%d OpenVINO model from %s", scale, model_path)
+        return compiled
+    except Exception:
+        log.exception("Failed to compile FSRCNN x%d OpenVINO model", scale)
+        return None
+
+
+def _single_image_super_res(
+    crop: np.ndarray | None,
+    scale: int = 2,
+) -> np.ndarray | None:
+    """Single-image neural super-resolution via FSRCNN in OpenVINO.
+
+    Enhances high-frequency plumage detail (barbules, bill edges, eye glints)
+    on small crops (< 180 px) where multi-frame burst alignment is unavailable.
+    Operates on the Y (luma) channel in [0, 1] range, upscales chroma via
+    bicubic interpolation, and applies chroma-guided filtering to eliminate
+    4:2:0 subsampling bleed on the upscaled grid.
+    """
+    if crop is None or getattr(crop, "size", 0) == 0:
+        return crop
+    if scale not in (2, 4):
+        scale = 2
+
+    h, w = crop.shape[:2]
+    out_w, out_h = w * scale, h * scale
+
+    compiled = _get_fsrcnn_model(scale)
+    if compiled is None:
+        return cv2.resize(crop, (out_w, out_h), interpolation=cv2.INTER_LANCZOS4)
+
+    try:
+        ycrcb = cv2.cvtColor(crop, cv2.COLOR_BGR2YCrCb)
+        y = (ycrcb[:, :, 0].astype(np.float32) * (1.0 / 255.0))[np.newaxis, :, :, np.newaxis]
+
+        output_layer = compiled.output(0)
+        hr_y_raw = compiled([y])[output_layer][0, 0]
+        hr_y = np.clip(np.round(hr_y_raw * 255.0), 0, 255).astype(np.uint8)
+
+        hr_cr = cv2.resize(ycrcb[:, :, 1], (out_w, out_h), interpolation=cv2.INTER_CUBIC)
+        hr_cb = cv2.resize(ycrcb[:, :, 2], (out_w, out_h), interpolation=cv2.INTER_CUBIC)
+
+        hr_ycrcb = np.dstack([hr_y, hr_cr, hr_cb])
+        hr_bgr = cv2.cvtColor(hr_ycrcb, cv2.COLOR_YCrCb2BGR)
+
+        # Snap color boundaries and clean chroma bleed on new high-res grid
+        refined = _chroma_guided_filter(hr_bgr)
+        return _apply_mtf_compensation(refined)
+    except Exception:
+        log.exception("FSRCNN single-image super-resolution failed; falling back to Lanczos-4")
+        return cv2.resize(crop, (out_w, out_h), interpolation=cv2.INTER_LANCZOS4)
+
+
 def _save_source_frames(
     clip_path: Path,
     frame_index_by_track: dict[int, int],
@@ -1285,6 +1384,7 @@ def render_crop_variant(
     bgr: np.ndarray,
     *,
     super_res: bool = False,
+    sisr: bool = False,
     candidates: list[np.ndarray] | None = None,
     chroma: bool = True,
     clahe: bool = True,
@@ -1294,6 +1394,7 @@ def render_crop_variant(
     """Apply an arbitrary combination of computational photography techniques to a crop.
 
     - super_res: Multi-frame shift-and-add super-resolution reconstruction at 2x scale.
+    - sisr: Single-image neural super-resolution (FSRCNN via OpenVINO) at 2x scale.
     - chroma: Chroma-guided filtering in YCrCb (He et al., ECCV 2010) to remove
       4:2:0 subsampling bleed and smooth chroma sensor noise.
     - mertens: Multiscale exposure fusion (Tommert & Mertens, 2007) to recover shadows
@@ -1312,6 +1413,10 @@ def render_crop_variant(
         sr_out = _shift_and_add_super_res(out, candidates=candidates, scale=getattr(settings, "super_res_scale", 2))
         if sr_out is not None:
             out = sr_out
+    elif sisr:
+        sisr_out = _single_image_super_res(out, scale=getattr(settings, "sisr_scale", 2))
+        if sisr_out is not None:
+            out = sisr_out
 
     if chroma:
         out = _chroma_guided_filter(out)
@@ -1381,6 +1486,12 @@ def _save_crop(det, *, visit_id: int, track_id: int) -> Path:
     if sr_crop is not None and sr_crop.size > 0:
         sr_path = CROPS_DIR / f"v{visit_id:08d}_t{track_id:04d}_sr.jpg"
         cv2.imwrite(str(sr_path), sr_crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
+
+    # If single-image super-resolution produced a high-res crop, save it
+    sisr_crop = getattr(det, "sisr_crop", None)
+    if sisr_crop is not None and sisr_crop.size > 0:
+        sisr_path = CROPS_DIR / f"v{visit_id:08d}_t{track_id:04d}_sisr.jpg"
+        cv2.imwrite(str(sisr_path), sisr_crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
 
     return out_path.relative_to(DATA_DIR)
 

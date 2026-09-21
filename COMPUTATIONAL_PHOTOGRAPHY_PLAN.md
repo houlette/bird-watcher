@@ -84,13 +84,22 @@ The camera stream presents several physical constraints:
 - **Target Latency**: < 2 ms per crop (benchmarks at ~1.1 ms).
 - **Status**: Shipped & deployed to production.
 
-### Technique 4: Single-Image Super-Resolution (SISR) via Lightweight ONNX
-- **Concept**: Enhance small crops (< 180×180 px) to crisp 2×/4× resolution for display
-  using an ultra-lightweight neural network (e.g. Real-ESRGAN-compact, FastSR, or
-  OmniSR) quantized to OpenVINO INT8/FP16.
-- **Trigger Gate**: Only runs on crops where `min(w, h) < 180` px.
-- **Budget Gate**: Inference must take < 40 ms on 1 CPU thread.
-- **Status**: Planned (Step 4).
+### Technique 4: Single-Image Super-Resolution (SISR) via Lightweight OpenVINO
+- **Concept**: Enhance small crops (< 180×180 px) that lack multi-frame video bursts (or
+  where birds hopped too fast for multi-frame fusion) to crisp 2× resolution using an
+  ultra-lightweight neural network: FSRCNN (Dong et al.) compiled in OpenVINO.
+- **Mechanism**: Operates purely on the Y (luma) channel in [0, 1] range to recover high-frequency
+  micro-texture (barbules, eye reflections, bill contours) without color shift. Upscales chroma
+  channels via bicubic interpolation and passes through chroma-guided filtering to eliminate
+  4:2:0 subsampling bleed on the upscaled grid.
+- **Trigger Gate**: Only runs on crops where `best.sr_crop is None` (multi-frame burst unavailable or unaligned)
+  and `max(w, h) <= 180` px (configurable via `sisr_max_crop_size`).
+- **Budget Gate**: Strict gate < 40 ms on 1 CPU thread.
+- **Performance**: Benchmarks at **~2.5–3.3 ms** on 1 CPU thread (>10× faster than budget gate!).
+  Produces a **+47.8% Laplacian edge contrast gain** over standard bicubic upsampling.
+- **Model Assets**: OpenVINO IR files `backend/pipeline/models/fsrcnn_x2.xml` (63 KB) and `.bin` (17 KB),
+  tracked in git with zero heavy external runtime dependencies.
+- **Status**: Shipped & deployed to production.
 
 ### Technique 5: Mertens Exposure Fusion (Local Contrast & Shadow Recovery)
 - **Concept**: Tommert / Mertens multiscale exposure fusion blends multiple synthetic
@@ -161,5 +170,5 @@ The camera stream presents several physical constraints:
 | Chroma-Guided Denoising | Shipped | ~1.1 ms / crop | Fast YCrCb guided filter (r=2, eps=1e-4); >50% chroma noise reduction | 2026-09-20 | `205416a` |
 | Mertens Exposure Fusion | Shipped | ~0.66 ms / crop | 3-exposure multiscale blending; zero highlight clipping & smooth shadow lift | 2026-09-20 | `0216cc5` |
 | Shift-and-Add Super-Res | Shipped | ~25 ms / crop | Sub-pixel phase registration + 2x Lanczos4 + temporal median + MTF restoration | 2026-09-20 | `cd79fa4` |
-| Lightweight SISR (ONNX) | Planned | < 40 ms target | 2× upscaling on crops < 180 px | - | - |
+| Single-Image Super-Res (FSRCNN) | Shipped | ~2.5 ms / crop | FSRCNN via OpenVINO on Y channel; +47.8% edge contrast gain on crops < 180px | 2026-09-21 | `878df6b` |
 | Synthetic Bokeh | Planned | < 15 ms target | Subject isolation blur outside bird mask | - | - |

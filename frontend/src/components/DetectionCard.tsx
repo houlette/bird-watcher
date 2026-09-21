@@ -167,8 +167,8 @@ export default function DetectionCard({
             <ZoomIcon size={14} />
           </span>
         )}
-        {/* Computational photography badges: Lucky imaging & Super-res */}
-        {(detection.has_lucky || detection.has_sr) && (
+        {/* Computational photography badges: Lucky imaging, Super-res & Neural SR */}
+        {(detection.has_lucky || detection.has_sr || detection.has_sisr) && (
           <div className="absolute top-2 right-2 z-[3] flex items-center gap-1">
             {detection.has_lucky && (
               <span
@@ -184,6 +184,14 @@ export default function DetectionCard({
                 title="Super-Res: 2x multi-frame shift-and-add reconstruction"
               >
                 2× SR
+              </span>
+            )}
+            {detection.has_sisr && (
+              <span
+                className="rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-1.5 py-0.5 text-[9px] font-bold backdrop-blur-sm shadow-sm flex items-center gap-0.5"
+                title="Neural Super-Res: 2x FSRCNN deep learning single-image reconstruction"
+              >
+                2× Neural
               </span>
             )}
           </div>
@@ -450,6 +458,7 @@ export default function DetectionCard({
           brightness={detection.brightness}
           hasLucky={detection.has_lucky}
           hasSr={detection.has_sr}
+          hasSisr={detection.has_sisr}
           onClose={() => setZoomOpen(false)}
         />
       )}

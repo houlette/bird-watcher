@@ -277,6 +277,11 @@ async def list_detections(
                 and d.track_id is not None
                 and (CROPS_DIR / f"v{d.visit_id:08d}_t{d.track_id:04d}_sr.jpg").exists()
             ),
+            "has_sisr": bool(
+                d.visit_id is not None
+                and d.track_id is not None
+                and (CROPS_DIR / f"v{d.visit_id:08d}_t{d.track_id:04d}_sisr.jpg").exists()
+            ),
         }
         for d in rows
     ]
@@ -313,6 +318,11 @@ async def get_visit(visit_id: int, db: Session = Depends(get_db)) -> dict:
                     and d.track_id is not None
                     and (CROPS_DIR / f"v{d.visit_id:08d}_t{d.track_id:04d}_sr.jpg").exists()
                 ),
+                "has_sisr": bool(
+                    d.visit_id is not None
+                    and d.track_id is not None
+                    and (CROPS_DIR / f"v{d.visit_id:08d}_t{d.track_id:04d}_sisr.jpg").exists()
+                ),
             }
             for d in visit.detections
         ],
@@ -327,7 +337,8 @@ async def get_detection_crop(
     mertens: bool | None = Query(None, description="Apply Mertens multiscale exposure fusion"),
     sharpen: bool | None = Query(None, description="Apply edge-preserving bilateral unsharp masking"),
     sr: bool | None = Query(None, description="Apply 2x multi-frame shift-and-add super-resolution"),
-    preset: str | None = Query(None, description="Convenience preset: 'raw', 'polish', 'mertens_hdr', 'mertens_only', 'super_res', 'super_res_only', 'chroma_only', 'clahe_only', 'sharpen_only'"),
+    sisr: bool | None = Query(None, description="Apply 2x single-image neural super-resolution (FSRCNN)"),
+    preset: str | None = Query(None, description="Convenience preset: 'raw', 'polish', 'mertens_hdr', 'mertens_only', 'super_res', 'super_res_only', 'neural_sr', 'neural_sr_only', 'chroma_only', 'clahe_only', 'sharpen_only'"),
     source: str = Query("lucky", description="'lucky' (default) or 'initial' (pre-lucky 3fps frame)"),
     db: Session = Depends(get_db),
 ):
@@ -347,25 +358,30 @@ async def get_detection_crop(
 
     # Map presets
     if preset == "raw":
-        use_sr, use_chroma, use_clahe, use_mertens, use_sharpen = False, False, False, False, False
+        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen = False, False, False, False, False, False
     elif preset == "polish":
-        use_sr, use_chroma, use_clahe, use_mertens, use_sharpen = False, True, True, True, True
+        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen = False, False, True, True, True, True
     elif preset == "mertens_hdr":
-        use_sr, use_chroma, use_clahe, use_mertens, use_sharpen = False, True, False, True, True
+        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen = False, False, True, False, True, True
     elif preset == "mertens_only":
-        use_sr, use_chroma, use_clahe, use_mertens, use_sharpen = False, False, False, True, False
+        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen = False, False, False, False, True, False
     elif preset == "super_res":
-        use_sr, use_chroma, use_clahe, use_mertens, use_sharpen = True, True, True, True, True
+        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen = True, False, True, True, True, True
     elif preset == "super_res_only":
-        use_sr, use_chroma, use_clahe, use_mertens, use_sharpen = True, False, False, False, False
+        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen = True, False, False, False, False, False
+    elif preset == "neural_sr":
+        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen = False, True, True, True, True, True
+    elif preset == "neural_sr_only":
+        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen = False, True, False, False, False, False
     elif preset == "chroma_only":
-        use_sr, use_chroma, use_clahe, use_mertens, use_sharpen = False, True, False, False, False
+        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen = False, False, True, False, False, False
     elif preset == "clahe_only":
-        use_sr, use_chroma, use_clahe, use_mertens, use_sharpen = False, False, True, False, False
+        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen = False, False, False, True, False, False
     elif preset == "sharpen_only":
-        use_sr, use_chroma, use_clahe, use_mertens, use_sharpen = False, False, False, False, True
+        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen = False, False, False, False, False, True
     else:
         use_sr = sr if sr is not None else False
+        use_sisr = sisr if sisr is not None else False
         use_chroma = chroma if chroma is not None else True
         use_clahe = clahe if clahe is not None else True
         use_mertens = mertens if mertens is not None else True
@@ -374,12 +390,18 @@ async def get_detection_crop(
     raw_crop = None
     vid = detection.visit_id
     tid = detection.track_id
+    sr_path = None
+    sisr_path = None
 
     # 0. If super_res requested and pre-saved _sr.jpg exists on disk, use it directly
     if use_sr:
         sr_path = CROPS_DIR / f"v{vid:08d}_t{tid:04d}_sr.jpg"
         if sr_path.exists():
             raw_crop = cv2.imread(str(sr_path))
+    elif use_sisr:
+        sisr_path = CROPS_DIR / f"v{vid:08d}_t{tid:04d}_sisr.jpg"
+        if sisr_path.exists():
+            raw_crop = cv2.imread(str(sisr_path))
 
     # 1. If source == "initial", check if pre-lucky initial raw crop exists
     if source == "initial":
@@ -427,6 +449,15 @@ async def get_detection_crop(
             mertens=False,
             sharpen=False,
         )
+    elif use_sisr and (sisr_path is None or not sisr_path.exists()):
+        raw_crop = render_crop_variant(
+            raw_crop,
+            sisr=True,
+            chroma=False,
+            clahe=False,
+            mertens=False,
+            sharpen=False,
+        )
 
     rendered = render_crop_variant(
         raw_crop,
@@ -451,7 +482,7 @@ async def get_detection_crop(
 async def get_detection_crop_variants(
     detection_id: int,
     db: Session = Depends(get_db),
-) -> dict:
+):
     """Return metadata and quick URLs for all available crop variants of a detection."""
     from pipeline.process import CROPS_DIR, FRAMES_DIR
 
@@ -463,6 +494,7 @@ async def get_detection_crop_variants(
     tid = detection.track_id
     has_initial = (CROPS_DIR / f"v{vid:08d}_t{tid:04d}_initial_raw.jpg").exists()
     has_sr = (CROPS_DIR / f"v{vid:08d}_t{tid:04d}_sr.jpg").exists()
+    has_sisr = (CROPS_DIR / f"v{vid:08d}_t{tid:04d}_sisr.jpg").exists()
     has_raw = (
         (CROPS_DIR / f"v{vid:08d}_t{tid:04d}_raw.jpg").exists()
         or (FRAMES_DIR / f"v{vid:08d}_t{tid:04d}.jpg").exists()
@@ -474,6 +506,8 @@ async def get_detection_crop_variants(
         "mertens_hdr": f"{base}?preset=mertens_hdr",
         "super_res": f"{base}?preset=super_res",
         "super_res_only": f"{base}?preset=super_res_only",
+        "neural_sr": f"{base}?preset=neural_sr",
+        "neural_sr_only": f"{base}?preset=neural_sr_only",
         "mertens_only": f"{base}?preset=mertens_only",
         "raw": f"{base}?preset=raw",
         "chroma_only": f"{base}?preset=chroma_only",
@@ -489,6 +523,7 @@ async def get_detection_crop_variants(
         "has_raw": has_raw,
         "has_initial": has_initial,
         "has_sr": has_sr,
+        "has_sisr": has_sisr,
         "sharpness": detection.sharpness,
         "crop_area_px": detection.crop_area_px,
         "brightness": detection.brightness,

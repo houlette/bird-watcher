@@ -87,6 +87,12 @@ class Settings(BaseSettings):
     super_res_scale: int = int(os.getenv("SUPER_RES_SCALE", "2"))
     super_res_max_crop_size: int = int(os.getenv("SUPER_RES_MAX_CROP_SIZE", "240"))
 
+    # Single-image neural super-resolution (FSRCNN via OpenVINO): 2x/4x deep learning
+    # upscaling for small crops when multi-frame burst alignment is unavailable.
+    sisr_enabled: bool = os.getenv("SISR_ENABLED", "1") in ("1", "true", "True", "yes")
+    sisr_scale: int = int(os.getenv("SISR_SCALE", "2"))
+    sisr_max_crop_size: int = int(os.getenv("SISR_MAX_CROP_SIZE", "180"))
+
     # Web Push (VAPID). The public key is sent to the browser at subscription
     # time; the private key signs the JWT in each push request. Generate both
     # via scripts/generate_vapid_keys.py.

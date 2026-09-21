@@ -14,6 +14,7 @@ type Props = {
   brightness?: number | null;
   hasLucky?: boolean;
   hasSr?: boolean;
+  hasSisr?: boolean;
   onClose: () => void;
 };
 
@@ -23,6 +24,8 @@ type PresetId =
   | "raw"
   | "super_res"
   | "super_res_only"
+  | "neural_sr"
+  | "neural_sr_only"
   | "mertens_only"
   | "chroma_only"
   | "clahe_only"
@@ -36,6 +39,7 @@ type ZoomMode = "fit" | "1x" | "2x" | "4x";
  *
  * Allows toggling between combinations of techniques:
  *   - Multi-frame shift-and-add super-resolution: sub-pixel burst alignment for true 2x detail
+ *   - Single-image neural super-resolution: 2x FSRCNN deep learning reconstruction
  *   - Chroma-guided filter (He et al.) in YCrCb: removes 4:2:0 subsampling bleed & color noise
  *   - Mertens multiscale exposure fusion: natural dynamic range recovery without halos
  *   - CLAHE: dynamic range lighting normalization on L channel
@@ -54,10 +58,12 @@ export default function ImageZoom({
   brightness,
   hasLucky,
   hasSr,
+  hasSisr,
   onClose,
 }: Props) {
   // Technique toggle states
   const [sr, setSr] = useState(false);
+  const [sisr, setSisr] = useState(false);
   const [chroma, setChroma] = useState(true);
   const [mertens, setMertens] = useState(true);
   const [clahe, setClahe] = useState(true);
@@ -65,6 +71,7 @@ export default function ImageZoom({
   const [source, setSource] = useState<"lucky" | "initial">("lucky");
   const [hasInitial, setHasInitial] = useState(hasLucky ?? false);
   const [hasSrState, setHasSrState] = useState(hasSr ?? false);
+  const [hasSisrState, setHasSisrState] = useState(hasSisr ?? false);
 
   // Comparison & View states
   const [isComparing, setIsComparing] = useState(false);
@@ -78,13 +85,15 @@ export default function ImageZoom({
   let activePreset: PresetId = "custom";
   if (sr && chroma && mertens && clahe && sharpen) activePreset = "super_res";
   else if (sr && !chroma && !mertens && !clahe && !sharpen) activePreset = "super_res_only";
-  else if (!sr && chroma && mertens && clahe && sharpen) activePreset = "polish";
-  else if (!sr && chroma && mertens && !clahe && sharpen) activePreset = "mertens_hdr";
-  else if (!sr && !chroma && !mertens && !clahe && !sharpen) activePreset = "raw";
-  else if (!sr && !chroma && mertens && !clahe && !sharpen) activePreset = "mertens_only";
-  else if (!sr && chroma && !mertens && !clahe && !sharpen) activePreset = "chroma_only";
-  else if (!sr && !chroma && !mertens && clahe && !sharpen) activePreset = "clahe_only";
-  else if (!sr && !chroma && !mertens && !clahe && sharpen) activePreset = "sharpen_only";
+  else if (sisr && chroma && mertens && clahe && sharpen) activePreset = "neural_sr";
+  else if (sisr && !chroma && !mertens && !clahe && !sharpen) activePreset = "neural_sr_only";
+  else if (!sr && !sisr && chroma && mertens && clahe && sharpen) activePreset = "polish";
+  else if (!sr && !sisr && chroma && mertens && !clahe && sharpen) activePreset = "mertens_hdr";
+  else if (!sr && !sisr && !chroma && !mertens && !clahe && !sharpen) activePreset = "raw";
+  else if (!sr && !sisr && !chroma && mertens && !clahe && !sharpen) activePreset = "mertens_only";
+  else if (!sr && !sisr && chroma && !mertens && !clahe && !sharpen) activePreset = "chroma_only";
+  else if (!sr && !sisr && !chroma && !mertens && clahe && !sharpen) activePreset = "clahe_only";
+  else if (!sr && !sisr && !chroma && !mertens && !clahe && sharpen) activePreset = "sharpen_only";
 
   // Pre-fetch metadata & standard presets into browser cache
   useEffect(() => {
@@ -93,8 +102,9 @@ export default function ImageZoom({
       .then((meta) => {
         if (meta.has_initial) setHasInitial(true);
         if (meta.has_sr) setHasSrState(true);
+        if (meta.has_sisr) setHasSisrState(true);
         // Preload standard preset images so toggling is 100% instantaneous
-        ["polish", "mertens_hdr", "raw", "super_res", "mertens_only", "chroma_only", "clahe_only", "sharpen_only"].forEach((p) => {
+        ["polish", "mertens_hdr", "raw", "super_res", "neural_sr", "mertens_only", "chroma_only", "clahe_only", "sharpen_only"].forEach((p) => {
           const img = new Image();
           img.src = getCropVariantUrl(detectionId, { preset: p });
         });
@@ -141,6 +151,8 @@ export default function ImageZoom({
         applyPreset("chroma_only");
       } else if (e.key === "7") {
         applyPreset("sharpen_only");
+      } else if (e.key === "8") {
+        applyPreset("neural_sr");
       } else if (e.key.toLowerCase() === "p") {
         setPixelated((v) => !v);
       } else if (e.key.toLowerCase() === "z") {
@@ -174,61 +186,84 @@ export default function ImageZoom({
     if (isComparing) {
       currentImageUrl = getCropVariantUrl(detectionId, { preset: "raw", source });
     } else {
-      currentImageUrl = getCropVariantUrl(detectionId, { chroma, mertens, clahe, sharpen, sr, source });
+      currentImageUrl = getCropVariantUrl(detectionId, { chroma, mertens, clahe, sharpen, sr, sisr, source });
     }
   }
 
   const applyPreset = (p: PresetId) => {
     if (p === "super_res") {
       setSr(true);
+      setSisr(false);
       setChroma(true);
       setMertens(true);
       setClahe(true);
       setSharpen(true);
     } else if (p === "super_res_only") {
       setSr(true);
+      setSisr(false);
+      setChroma(false);
+      setMertens(false);
+      setClahe(false);
+      setSharpen(false);
+    } else if (p === "neural_sr") {
+      setSr(false);
+      setSisr(true);
+      setChroma(true);
+      setMertens(true);
+      setClahe(true);
+      setSharpen(true);
+    } else if (p === "neural_sr_only") {
+      setSr(false);
+      setSisr(true);
       setChroma(false);
       setMertens(false);
       setClahe(false);
       setSharpen(false);
     } else if (p === "polish") {
       setSr(false);
+      setSisr(false);
       setChroma(true);
       setMertens(true);
       setClahe(true);
       setSharpen(true);
     } else if (p === "mertens_hdr") {
       setSr(false);
+      setSisr(false);
       setChroma(true);
       setMertens(true);
       setClahe(false);
       setSharpen(true);
     } else if (p === "raw") {
       setSr(false);
+      setSisr(false);
       setChroma(false);
       setMertens(false);
       setClahe(false);
       setSharpen(false);
     } else if (p === "mertens_only") {
       setSr(false);
+      setSisr(false);
       setChroma(false);
       setMertens(true);
       setClahe(false);
       setSharpen(false);
     } else if (p === "chroma_only") {
       setSr(false);
+      setSisr(false);
       setChroma(true);
       setMertens(false);
       setClahe(false);
       setSharpen(false);
     } else if (p === "clahe_only") {
       setSr(false);
+      setSisr(false);
       setChroma(false);
       setMertens(false);
       setClahe(true);
       setSharpen(false);
     } else if (p === "sharpen_only") {
       setSr(false);
+      setSisr(false);
       setChroma(false);
       setMertens(false);
       setClahe(false);
@@ -317,6 +352,14 @@ export default function ImageZoom({
                   2× SR
                 </span>
               )}
+              {hasSisrState && (
+                <span
+                  className="rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-1.5 py-0.5 text-[9px] font-bold shadow-xs flex items-center gap-0.5 ml-0.5"
+                  title="2x Neural single-image super-resolution (FSRCNN) reconstruction available"
+                >
+                  2× Neural
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -369,6 +412,20 @@ export default function ImageZoom({
               <span>Super-Res 2x</span>
               {hasSrState && (
                 <span className="w-1.5 h-1.5 rounded-full bg-purple-400" title="Pre-generated" />
+              )}
+            </button>
+            <button
+              className={`px-2.5 py-1 text-xs rounded font-medium transition-all flex items-center gap-1 ${
+                activePreset === "neural_sr"
+                  ? "bg-indigo-600 text-white shadow-sm font-semibold"
+                  : "text-muted hover:text-ink hover:bg-surface/60"
+              }`}
+              onClick={() => applyPreset("neural_sr")}
+              title="Single-image neural 2x super-resolution (FSRCNN via OpenVINO) + full polish [Press 8]"
+            >
+              <span>Neural SR 2x</span>
+              {hasSisrState && (
+                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400" title="Pre-generated" />
               )}
             </button>
             <button
@@ -479,6 +536,14 @@ export default function ImageZoom({
               <span className="px-2.5 py-1 text-xs font-medium rounded-md bg-purple-900/80 text-purple-100 backdrop-blur-md border border-purple-500/30">
                 Super-Res 2x (Unprocessed)
               </span>
+            ) : activePreset === "neural_sr" ? (
+              <span className="px-2.5 py-1 text-xs font-medium rounded-md bg-indigo-900/80 text-indigo-100 backdrop-blur-md border border-indigo-500/30">
+                Neural SR 2x (FSRCNN OpenVINO)
+              </span>
+            ) : activePreset === "neural_sr_only" ? (
+              <span className="px-2.5 py-1 text-xs font-medium rounded-md bg-indigo-900/80 text-indigo-100 backdrop-blur-md border border-indigo-500/30">
+                Neural SR 2x (Unprocessed)
+              </span>
             ) : activePreset === "polish" ? (
               <span className="px-2.5 py-1 text-xs font-medium rounded-md bg-black/60 text-white/90 backdrop-blur-md border border-white/10">
                 Full Polish (Chroma + Mertens + CLAHE + Sharpen)
@@ -495,6 +560,7 @@ export default function ImageZoom({
               <span className="px-2.5 py-1 text-xs font-medium rounded-md bg-black/60 text-white/90 backdrop-blur-md border border-white/10">
                 {[
                   sr && "Super-Res 2x",
+                  sisr && "Neural SR 2x",
                   chroma && "Chroma",
                   mertens && "Mertens HDR",
                   clahe && "CLAHE",
@@ -525,11 +591,37 @@ export default function ImageZoom({
                   ? "bg-purple-500/20 border-purple-500/50 text-ink font-semibold"
                   : "bg-panel border-line text-muted line-through opacity-70"
               }`}
-              onClick={() => setSr((v) => !v)}
+              onClick={() => {
+                setSr((v) => {
+                  const next = !v;
+                  if (next) setSisr(false);
+                  return next;
+                });
+              }}
               title="Multi-frame shift-and-add: sub-pixel burst frame registration for optical resolution gain and noise reduction"
             >
               <i className={`w-2 h-2 rounded-full ${sr ? "bg-purple-500" : "bg-muted"}`} />
               Super-Res 2x
+            </button>
+
+            {/* Single-Image Neural Super-Resolution (FSRCNN) */}
+            <button
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-all ${
+                sisr
+                  ? "bg-indigo-500/20 border-indigo-500/50 text-ink font-semibold"
+                  : "bg-panel border-line text-muted line-through opacity-70"
+              }`}
+              onClick={() => {
+                setSisr((v) => {
+                  const next = !v;
+                  if (next) setSr(false);
+                  return next;
+                });
+              }}
+              title="Single-image neural super-resolution: 2x deep learning reconstruction via lightweight FSRCNN in OpenVINO"
+            >
+              <i className={`w-2 h-2 rounded-full ${sisr ? "bg-indigo-500" : "bg-muted"}`} />
+              Neural SR 2x
             </button>
 
             {/* Chroma-guided Denoising */}

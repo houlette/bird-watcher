@@ -270,9 +270,10 @@ def test_detection_has_lucky_and_sr_flags(client, db, monkeypatch, tmp_path):
     db.add_all([d1, d2])
     db.commit()
 
-    # D1 has lucky initial_raw and sr
+    # D1 has lucky initial_raw and sr; D2 has sisr
     (crops_dir / f"v{v.id:08d}_t0001_initial_raw.jpg").write_bytes(b"dummy")
     (crops_dir / f"v{v.id:08d}_t0001_sr.jpg").write_bytes(b"dummy")
+    (crops_dir / f"v{v.id:08d}_t0002_sisr.jpg").write_bytes(b"dummy")
 
     # 1. Test GET /api/detections
     res = client.get("/api/detections")
@@ -280,8 +281,10 @@ def test_detection_has_lucky_and_sr_flags(client, db, monkeypatch, tmp_path):
     items = {item["id"]: item for item in res.json()}
     assert items[d1.id]["has_lucky"] is True
     assert items[d1.id]["has_sr"] is True
+    assert items[d1.id]["has_sisr"] is False
     assert items[d2.id]["has_lucky"] is False
     assert items[d2.id]["has_sr"] is False
+    assert items[d2.id]["has_sisr"] is True
 
     # 2. Test GET /api/visits/{id}
     res_visit = client.get(f"/api/detections/visits/{v.id}")
@@ -289,8 +292,78 @@ def test_detection_has_lucky_and_sr_flags(client, db, monkeypatch, tmp_path):
     visit_dets = {item["id"]: item for item in res_visit.json()["detections"]}
     assert visit_dets[d1.id]["has_lucky"] is True
     assert visit_dets[d1.id]["has_sr"] is True
+    assert visit_dets[d1.id]["has_sisr"] is False
     assert visit_dets[d2.id]["has_lucky"] is False
     assert visit_dets[d2.id]["has_sr"] is False
+    assert visit_dets[d2.id]["has_sisr"] is True
+
+
+def test_crop_variants_single_image_super_res(client, db, monkeypatch, tmp_path):
+    """Test single-image neural super-resolution (FSRCNN) endpoint, scaling, and presets."""
+    import pipeline.process as proc
+
+    crops_dir = tmp_path / "crops"
+    crops_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(proc, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(proc, "CROPS_DIR", crops_dir)
+
+    v = Visit(clip_path="clips/dummy5.mp4")
+    db.add(v)
+    db.flush()
+
+    # 40x50 synthetic crop
+    raw_img = np.full((40, 50, 3), 120, dtype=np.uint8)
+    raw_path = crops_dir / f"v{v.id:08d}_t0005_raw.jpg"
+    cv2.imwrite(str(raw_path), raw_img)
+
+    det = Detection(
+        visit_id=v.id,
+        track_id=5,
+        confidence=0.96,
+        crop_path=f"crops/v{v.id:08d}_t0005.jpg",
+        bbox=[10, 10, 50, 40],
+    )
+    db.add(det)
+    db.commit()
+
+    # 1. Check variants metadata includes neural_sr
+    res_meta = client.get(f"/api/detections/{det.id}/crop-variants")
+    assert res_meta.status_code == 200
+    meta = res_meta.json()
+    assert "neural_sr" in meta["variants"]
+    assert "neural_sr_only" in meta["variants"]
+    assert meta["has_sisr"] is False
+
+    # 2. Query neural_sr preset (on-demand 2x scale)
+    res_sisr = client.get(f"/api/detections/{det.id}/crop?preset=neural_sr")
+    assert res_sisr.status_code == 200
+    assert res_sisr.headers["content-type"] == "image/jpeg"
+
+    # Decode returned JPEG to verify 2x dimensions (40x50 -> 80x100)
+    arr = np.frombuffer(res_sisr.content, np.uint8)
+    decoded = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    assert decoded.shape == (80, 100, 3)
+
+    # 3. Query neural_sr_only
+    res_sisr_only = client.get(f"/api/detections/{det.id}/crop?preset=neural_sr_only")
+    assert res_sisr_only.status_code == 200
+    decoded_only = cv2.imdecode(np.frombuffer(res_sisr_only.content, np.uint8), cv2.IMREAD_COLOR)
+    assert decoded_only.shape == (80, 100, 3)
+
+    # 4. Query with pre-saved _sisr.jpg
+    sisr_file = crops_dir / f"v{v.id:08d}_t0005_sisr.jpg"
+    sisr_img = np.full((80, 100, 3), 160, dtype=np.uint8)
+    cv2.imwrite(str(sisr_file), sisr_img)
+
+    res_meta2 = client.get(f"/api/detections/{det.id}/crop-variants")
+    assert res_meta2.json()["has_sisr"] is True
+
+    res_presaved = client.get(f"/api/detections/{det.id}/crop?preset=neural_sr_only")
+    assert res_presaved.status_code == 200
+    decoded_presaved = cv2.imdecode(np.frombuffer(res_presaved.content, np.uint8), cv2.IMREAD_COLOR)
+    assert decoded_presaved.shape == (80, 100, 3)
+
 
 
 
