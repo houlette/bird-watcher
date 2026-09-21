@@ -102,6 +102,17 @@ export default function ImageZoom({
       .catch(() => {});
   }, [detectionId]);
 
+  // Lock body scroll and restore exact scroll position on unmount
+  useEffect(() => {
+    const originalOverflow = document.body.style.overflow;
+    const scrollY = window.scrollY;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = originalOverflow;
+      window.scrollTo({ top: scrollY, behavior: "instant" as ScrollBehavior });
+    };
+  }, []);
+
   // Keyboard navigation
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -109,9 +120,9 @@ export default function ImageZoom({
         onClose();
         return;
       }
-      if (e.code === "Space" || e.key === "\\") {
+      if (e.code === "Space" || e.key === " " || e.key === "\\") {
+        e.preventDefault();
         if (!e.repeat) {
-          e.preventDefault();
           setIsComparing(true);
         }
         return;
@@ -143,7 +154,7 @@ export default function ImageZoom({
     };
 
     const onKeyUp = (e: KeyboardEvent) => {
-      if (e.code === "Space" || e.key === "\\") {
+      if (e.code === "Space" || e.key === " " || e.key === "\\") {
         e.preventDefault();
         setIsComparing(false);
       }
@@ -254,7 +265,7 @@ export default function ImageZoom({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex flex-col justify-between p-3 sm:p-5 backdrop-blur-md bg-[color-mix(in_oklab,#090b08_94%,transparent)] select-none"
+      className="fixed inset-0 z-50 flex flex-col justify-between p-3 sm:p-5 backdrop-blur-md bg-[color-mix(in_oklab,#090b08_94%,transparent)] select-none overscroll-contain"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
@@ -437,7 +448,7 @@ export default function ImageZoom({
       </div>
 
       {/* Main Image Viewport */}
-      <div className="flex-1 overflow-auto flex items-center justify-center p-2 relative my-2">
+      <div className="flex-1 overflow-auto flex items-center justify-center p-2 relative my-2 overscroll-contain">
         <div className="relative inline-block">
           <img
             src={currentImageUrl}

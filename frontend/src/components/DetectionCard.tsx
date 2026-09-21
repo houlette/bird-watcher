@@ -228,13 +228,13 @@ export default function DetectionCard({
         )}
 
       <div className={`p-3 flex flex-col flex-1 ${compact ? "text-xs" : "text-sm"}`}>
-        <div className="flex items-start justify-between gap-2">
+        <div className="leading-tight">
           {/* Identified species link to their plate page (all sightings of
               that species); sentinels and Unidentified stay plain text. */}
           {identified && detection.species_id != null ? (
             <Link
               to={`/species/${detection.species_id}`}
-              className={`font-serif leading-tight text-ink font-medium hover:text-leaf hover:underline underline-offset-2 transition-colors ${
+              className={`font-serif text-ink font-medium hover:text-leaf hover:underline underline-offset-2 transition-colors inline ${
                 compact ? "text-sm" : "text-[16px]"
               }`}
             >
@@ -242,14 +242,18 @@ export default function DetectionCard({
             </Link>
           ) : (
             <span
-              className={`font-serif leading-tight ${
+              className={`font-serif inline ${
                 identified ? "text-ink font-medium" : "text-muted italic"
               } ${compact ? "text-sm" : "text-[16px]"}`}
             >
               {detection.species ?? "Unidentified"}
             </span>
           )}
-          {detection.audio_confirmed && <AudioBadge />}
+          {detection.audio_confirmed && (
+            <span className="inline-block ml-1.5 align-middle -translate-y-px">
+              <AudioBadge />
+            </span>
+          )}
         </div>
 
         <div className="mt-1.5 flex items-center gap-2 text-xs text-muted">
