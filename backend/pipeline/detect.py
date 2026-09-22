@@ -112,6 +112,7 @@ class BirdDetection:
     confidence: float
     frame_index: int
     crop: Any = field(default=None, repr=False, compare=False)  # H×W×3 BGR ndarray once populated
+    clipped_edges: set[str] = field(default_factory=set, compare=False)
 
 
 _model_lock = Lock()
@@ -241,8 +242,8 @@ def _box_union(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> tu
 # substantially on the perpendicular axis (see _is_tile_fragment_pair). 20 px
 # absorbs YOLO's per-tile bbox imprecision near the seam without merging two
 # birds perched 30+ px apart on the same branch.
-TILE_SEAM_GAP_PX = 20
-TILE_SEAM_OVERLAP_FRAC = 0.5
+TILE_SEAM_GAP_PX = 40
+TILE_SEAM_OVERLAP_FRAC = 0.25
 
 
 def _is_tile_fragment_pair(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:
@@ -297,6 +298,7 @@ def _nmm(dets: list[BirdDetection], iou_thresh: float) -> list[BirdDetection]:
                     bbox=_box_union(k.bbox, d.bbox),
                     confidence=k.confidence,   # higher of the two (k was kept first)
                     frame_index=k.frame_index,
+                    clipped_edges=(k.clipped_edges | d.clipped_edges),
                 )
                 merged = True
                 break
@@ -412,18 +414,29 @@ def detect_birds(
             stats["torch_threads"] = torch.get_num_threads()
 
     raw: list[BirdDetection] = []
-    for (tile_x, tile_y, _, _), boxes in zip(tiles, per_tile, strict=True):
+    for (tile_x, tile_y, tile_w, tile_h), boxes in zip(tiles, per_tile, strict=True):
         for x1, y1, x2, y2, conf in boxes:
             # Translate tile-local coords back to full-frame coords.
             w = int(x2 - x1)
             h = int(y2 - y1)
             if w <= 0 or h <= 0:
                 continue
+            clipped: set[str] = set()
+            if y1 <= 4.0 and tile_y > 0:
+                clipped.add("top")
+            if y2 >= tile_h - 4.0 and tile_y + tile_h < height:
+                clipped.add("bottom")
+            if x1 <= 4.0 and tile_x > 0:
+                clipped.add("left")
+            if x2 >= tile_w - 4.0 and tile_x + tile_w < width:
+                clipped.add("right")
+
             raw.append(
                 BirdDetection(
                     bbox=(int(x1) + tile_x, int(y1) + tile_y, w, h),
                     confidence=float(conf),
                     frame_index=frame_index,
+                    clipped_edges=clipped,
                 )
             )
 

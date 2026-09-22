@@ -469,12 +469,34 @@ def process_visit(visit: Visit, db: Session) -> int:
             # below is acted on. See Detection.nab_p_served for why.
             with timer.stage("binary_filter_shadow"):
                 nab_p_single, nab_p_polished = _score_crop_variants(best, filter_crop, nab_p)
-            if nab_p is not None and nab_p >= settings.bird_binary_nab_threshold:
+
+            # Effective NAB probability considers both fused and sharp single-frame crops.
+            # Multi-frame fusion blurs fast-moving animals (e.g. squirrels on fences),
+            # causing fused P(NAB) to dip even when the sharp single crop is confidently NAB.
+            valid_nab_ps = [p for p in (nab_p, nab_p_single) if p is not None]
+            effective_nab_p = max(valid_nab_ps) if valid_nab_ps else None
+
+            top_visual_p = averaged[0].probability if averaged else 0.0
+            is_audio_confirmed = bool(getattr(top, "audio_confirmed", False))
+
+            should_override_nab = False
+            if effective_nab_p is not None:
+                if effective_nab_p >= settings.bird_binary_nab_threshold:
+                    should_override_nab = True
+                elif not is_audio_confirmed:
+                    # Moderate NAB score + weak visual conviction = non-bird false positive (squirrel/debris)
+                    if effective_nab_p >= 0.40 and top_visual_p < 0.35:
+                        should_override_nab = True
+                    # Any non-trivial NAB score + very weak visual conviction = non-bird false positive
+                    elif effective_nab_p >= 0.30 and top_visual_p < 0.20:
+                        should_override_nab = True
+
+            if should_override_nab:
                 log.info(
-                    "track %d: binary filter override → NAB (was %s @ %.2f; NAB P=%.2f)",
-                    track.track_id, top.species, top.probability, nab_p,
+                    "track %d: binary filter override → NAB (was %s @ %.2f visual=%.2f; NAB P=%.2f/eff=%.2f)",
+                    track.track_id, top.species, top.probability, top_visual_p, nab_p or 0.0, effective_nab_p or 0.0,
                 )
-                nab_override_p = nab_p
+                nab_override_p = effective_nab_p
                 # Replace the top entry's species with NAB but keep the
                 # original raw_predictions intact for transparency —
                 # users can see what was overridden via the feed card.
@@ -486,7 +508,21 @@ def process_visit(visit: Visit, db: Session) -> int:
                 # filter fired, crashing the visit).
                 top = FusedPrediction(
                     species=NOT_A_BIRD_LABEL,
-                    probability=nab_p,
+                    probability=effective_nab_p or 1.0,
+                    audio_confirmed=False,
+                    seasonal_boost=1.0,
+                )
+            elif not is_audio_confirmed and top_visual_p < 0.20:
+                # When the visual classifier has <20% confidence on its top guess
+                # and audio did not confirm, do not hallucinate a specific species.
+                # Mark as Unidentified (species=None) so the user feed is not polluted.
+                log.info(
+                    "track %d: weak visual confidence (%.2f < 0.20) without audio; marking as Unidentified",
+                    track.track_id, top_visual_p,
+                )
+                top = FusedPrediction(
+                    species=None,
+                    probability=0.0,
                     audio_confirmed=False,
                     seasonal_boost=1.0,
                 )
@@ -741,8 +777,18 @@ def _extract_crop_from_image(det, image: "cv2.Mat", padding: float = 0.30) -> "c
       - Tightly-fit YOLO bboxes (which often clip wings/tails) still show
         a visually complete bird in the saved feed crop.
       - Even if NMM in detect.py misses a tile-split fragment, the extra
-        30 % around the (partial) detection often catches the rest of the
-        bird in the image data we save to disk.
+        context around the detection catches the rest of the bird in the
+        image data we save to disk.
+
+    Tile-seam boundary expansion:
+      Large birds (like pigeons on the feeder or birds spanning tile rows)
+      often straddle an internal 1024-px tile boundary (e.g. y = 820 or 1640,
+      x = 820, 1640, 2460, 3280). When YOLO only detects the portion inside
+      one tile, the detection bbox is pinned against that seam. Rather than
+      padding a severed stub (e.g. 17 px on a 58-px tail), we detect the seam
+      contact and extend across the seam into the full frame by at least
+      max(pad, 0.9 * perpendicular_dim, 200) px. This fully restores the head
+      and body of pigeons feeding at the feeder.
 
     Aspect-ratio cap: if the padded crop is more than _CROP_ASPECT_CAP×
     longer on one axis than the other, the short axis is extended
@@ -753,10 +799,28 @@ def _extract_crop_from_image(det, image: "cv2.Mat", padding: float = 0.30) -> "c
     x, y, w, h = det.bbox
     fh, fw = image.shape[:2]
     pad_w, pad_h = int(w * padding), int(h * padding)
-    x0 = max(0, x - pad_w)
-    y0 = max(0, y - pad_h)
-    x1 = min(fw, x + w + pad_w)
-    y1 = min(fh, y + h + pad_h)
+
+    # Check for tile seam clipping (both explicit clipped_edges and seam coordinates).
+    clipped = getattr(det, "clipped_edges", set()) or set()
+    # Internal horizontal seams: row 1 & 2 start at 820, 1640; row 0 & 1 end at 1024, 1844
+    touches_top_seam = "top" in clipped or (y > 0 and (abs(y - 820) <= 5 or abs(y - 1640) <= 5))
+    touches_bottom_seam = "bottom" in clipped or (y + h < fh and (abs(y + h - 1024) <= 5 or abs(y + h - 1844) <= 5))
+    # Internal vertical seams: col 1..4 start at 820, 1640, 2460, 3280; col 0..3 end at 1024, 1844, 2664, 3484
+    touches_left_seam = "left" in clipped or (x > 0 and any(abs(x - s) <= 5 for s in (820, 1640, 2460, 3280)))
+    touches_right_seam = "right" in clipped or (x + w < fw and any(abs(x + w - s) <= 5 for s in (1024, 1844, 2664, 3484)))
+
+    seam_ext_y = max(pad_h, int(w * 0.9), 200)
+    seam_ext_x = max(pad_w, int(h * 0.9), 200)
+
+    pad_top = seam_ext_y if touches_top_seam else pad_h
+    pad_bottom = seam_ext_y if touches_bottom_seam else pad_h
+    pad_left = seam_ext_x if touches_left_seam else pad_w
+    pad_right = seam_ext_x if touches_right_seam else pad_w
+
+    x0 = max(0, x - pad_left)
+    y0 = max(0, y - pad_top)
+    x1 = min(fw, x + w + pad_right)
+    y1 = min(fh, y + h + pad_bottom)
 
     # Aspect-cap pass: pad the *short* axis until the crop is at most
     # _CROP_ASPECT_CAP×1 in either direction. Clipped at frame edges, so

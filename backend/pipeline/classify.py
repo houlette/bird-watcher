@@ -118,6 +118,7 @@ NA_BACKYARD_ALLOWLIST: frozenset[str] = frozenset({
     "HERMIT THRUSH",
     "MOURNING DOVE",
     "ROCK DOVE",
+    "ROCK PIGEON",
     "EUROPEAN STARLING",
     # Blackbirds, orioles, grackles
     "COMMON GRACKLE",

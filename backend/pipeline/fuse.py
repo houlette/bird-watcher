@@ -119,6 +119,23 @@ def _seasonal_multiplier(species: str, month: int) -> float:
     return _SEASONAL_PRIORS.get(species, {}).get(month, 1.0)
 
 
+_curated_species_normalized: set[str] | None = None
+
+
+def _is_known_or_curated_species(species: str) -> bool:
+    """True if species is known to this yard (calibrated) or in curated NA_BIRD_SPECIES."""
+    calibrated = calibration.get_allowlist()
+    if calibrated is not None and species in calibrated:
+        return True
+    global _curated_species_normalized
+    if _curated_species_normalized is None:
+        from na_birds import NA_BIRD_SPECIES
+        from pipeline.classify import _hyphen_insensitive
+        _curated_species_normalized = {_hyphen_insensitive(s) for s in NA_BIRD_SPECIES}
+    from pipeline.classify import _hyphen_insensitive
+    return _hyphen_insensitive(species) in _curated_species_normalized
+
+
 def fuse(
     predictions: Iterable[tuple[str, float]],
     *,
@@ -149,7 +166,11 @@ def fuse(
         audio_mult = AUDIO_BOOST if species in audio_heard else AUDIO_FLOOR
         seasonal_mult = _seasonal_multiplier(species, month)
         size_mult = size_prior.size_multiplier(species, bbox_for_prior) if bbox_for_prior else 1.0
-        posterior = p_visual * audio_mult * seasonal_mult * size_mult
+        # Exotic / vagrant downweight: species not in the curated regional bird list
+        # or yard calibration (e.g. Phainopepla, Pelagic Cormorant) get downweighted
+        # unless audio-confirmed.
+        vagrant_mult = 1.0 if (species in audio_heard or _is_known_or_curated_species(species)) else 0.20
+        posterior = p_visual * audio_mult * seasonal_mult * size_mult * vagrant_mult
         scored.append(
             FusedPrediction(
                 species=species,
