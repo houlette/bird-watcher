@@ -175,10 +175,10 @@ def _run_mock_visit(db, monkeypatch, tmp_path, species_preds, nab_fused, nab_sin
 
 
 def test_squirrel_overridden_when_single_crop_confident_nab(db, monkeypatch, tmp_path):
-    """When fusion blurs moving squirrel (nab_fused=0.52), but sharp single crop is 0.85 (>0.65),
-    effective NAB overrides to Not a bird."""
+    """When fusion blurs moving squirrel (nab_fused=0.52), but sharp single crop is 0.85 (effective NAB >= 0.40)
+    and visual confidence is weak (<0.30), joint rule overrides to Not a bird."""
     from pipeline.classify import SpeciesPrediction
-    species_preds = [SpeciesPrediction(species="House Sparrow", probability=0.40, raw_label="House Sparrow")]
+    species_preds = [SpeciesPrediction(species="House Sparrow", probability=0.25, raw_label="House Sparrow")]
     d, sp = _run_mock_visit(db, monkeypatch, tmp_path, species_preds, nab_fused=0.52, nab_single=0.85)
     assert sp == NOT_A_BIRD_LABEL
 

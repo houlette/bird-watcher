@@ -480,16 +480,19 @@ def process_visit(visit: Visit, db: Session) -> int:
             is_audio_confirmed = bool(getattr(top, "audio_confirmed", False))
 
             should_override_nab = False
-            if effective_nab_p is not None:
-                if effective_nab_p >= settings.bird_binary_nab_threshold:
+            # 1. Primary fused crop is overwhelmingly NAB (>= settings.bird_binary_nab_threshold, default 0.75).
+            # We evaluate nab_p here because a single frame can have transient wing-motion blur
+            # on real birds that spikes nab_p_single.
+            if nab_p is not None and nab_p >= settings.bird_binary_nab_threshold:
+                should_override_nab = True
+            elif not is_audio_confirmed and effective_nab_p is not None:
+                # 2. Joint rule: elevated NAB evidence combined with weak visual conviction.
+                # Catches non-bird false positives (squirrels, debris) without threatening
+                # legitimate birds (which have high visual confidence or audio confirmation).
+                if effective_nab_p >= 0.40 and top_visual_p < 0.30:
                     should_override_nab = True
-                elif not is_audio_confirmed:
-                    # Moderate NAB score + weak visual conviction = non-bird false positive (squirrel/debris)
-                    if effective_nab_p >= 0.40 and top_visual_p < 0.35:
-                        should_override_nab = True
-                    # Any non-trivial NAB score + very weak visual conviction = non-bird false positive
-                    elif effective_nab_p >= 0.30 and top_visual_p < 0.20:
-                        should_override_nab = True
+                elif effective_nab_p >= 0.30 and top_visual_p < 0.20:
+                    should_override_nab = True
 
             if should_override_nab:
                 log.info(

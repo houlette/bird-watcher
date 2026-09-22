@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     # birds suppressed). 0.75 matches the best-epoch validation point
     # where leak-rate and miss-rate were roughly balanced.
     bird_binary_nab_threshold: float = float(
-        os.getenv("BIRD_BINARY_NAB_THRESHOLD", "0.65")
+        os.getenv("BIRD_BINARY_NAB_THRESHOLD", "0.75")
     )
 
     # The per-hour backdrop filter, off by default. Measured 2026-09-13
