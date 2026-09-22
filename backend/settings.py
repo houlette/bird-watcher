@@ -93,6 +93,11 @@ class Settings(BaseSettings):
     sisr_scale: int = int(os.getenv("SISR_SCALE", "2"))
     sisr_max_crop_size: int = int(os.getenv("SISR_MAX_CROP_SIZE", "180"))
 
+    # Synthetic bokeh / background defocus: realistic optical lens defocus blur
+    # on background clutter outside the edge-guided bird subject mask.
+    bokeh_enabled: bool = os.getenv("BOKEH_ENABLED", "0") in ("1", "true", "True", "yes")
+    bokeh_strength: float = float(os.getenv("BOKEH_STRENGTH", "1.0"))
+
     # Web Push (VAPID). The public key is sent to the browser at subscription
     # time; the private key signs the JWT in each push request. Generate both
     # via scripts/generate_vapid_keys.py.

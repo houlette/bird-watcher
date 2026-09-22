@@ -72,6 +72,7 @@ export function getCropVariantUrl(
     sharpen?: boolean;
     sr?: boolean;
     sisr?: boolean;
+    bokeh?: boolean;
     preset?: string;
     source?: "lucky" | "initial";
   } = {},
@@ -86,6 +87,7 @@ export function getCropVariantUrl(
     if (options.sharpen !== undefined) params.set("sharpen", options.sharpen ? "1" : "0");
     if (options.sr !== undefined) params.set("sr", options.sr ? "1" : "0");
     if (options.sisr !== undefined) params.set("sisr", options.sisr ? "1" : "0");
+    if (options.bokeh !== undefined) params.set("bokeh", options.bokeh ? "1" : "0");
   }
   if (options.source && options.source !== "lucky") {
     params.set("source", options.source);

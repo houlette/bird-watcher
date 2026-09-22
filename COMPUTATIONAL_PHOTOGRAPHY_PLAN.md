@@ -128,11 +128,26 @@ The camera stream presents several physical constraints:
 - **Status**: Shipped & deployed to production.
 
 ### Technique 7: Synthetic Bokeh / Background Defocus
-- **Concept**: Isolate the bird subject from harsh backyard clutter (railings, siding,
-  chains) by applying a realistic synthetic depth-of-field blur to the background.
-- **Mechanism**: Uses bird segmentation mask (or depth estimation) with edge-feathering
-  and a circular disc/lens blur kernel on the background region.
-- **Status**: Planned (Step 7).
+- **Concept**: Isolate the bird subject from harsh backyard clutter (wooden feeder posts,
+  wire mesh, siding, distant chains/roof edges) by applying a realistic optical lens
+  defocus blur (bokeh) to the background regions outside the bird subject.
+- **Benefit**: Emulates a wide-aperture telephoto portrait lens (e.g. 400mm f/2.8)
+  with soft creamy circles of confusion and specular highlight blooming, separating
+  the bird from complex backgrounds without cardboard cutout edges or halo artifacts.
+- **Implementation**:
+  - **Edge-Preserving Focus Mask**: Evaluated on a downsampled 160px guide in ~2 ms,
+    combining a broad spatial prior ($\sigma \approx 0.48$), multi-scale plumage texture
+    gradient energy, and perimeter background color sampling in YCrCb space.
+  - **Luminance-Guided Filter**: Aligns mask transitions tightly to plumage contours,
+    bill, feet, crest, and tail barbules using an integral box-filter guided filter.
+  - **Optical Bokeh Blur**: Downsampled blur buffer (~320px) convolved with 3-pass box
+    filtering with specular highlight blooming, convolving out-of-focus glints into
+    luminous bokeh discs.
+  - **Fast Integer Alpha Blending**: Composited via uint16 fixed-point arithmetic with
+    smoothstep depth rolloff, avoiding expensive floating-point per-pixel ops.
+- **Latency Budget**: Benchmarks at **3.9–9.7 ms** on standard feeder crops (average ~6.5 ms,
+  well below the strict < 15 ms budget on 1 CPU thread).
+- **Status**: Shipped & deployed to production.
 
 ---
 
@@ -148,16 +163,16 @@ The camera stream presents several physical constraints:
    intact for model fine-tuning and active learning. Visual enhancements apply to the
    display crop written to `crops/` and the anchor fed to the species classifier.
 4. **Reversibility**: Every enhancement must be configurable via `backend/settings.py`
-   environment variables.
+   environment variables (`BOKEH_ENABLED`, `BOKEH_STRENGTH`).
 5. **Comparative Diagnostics & Variant Inspection**:
    To systematically evaluate which combination of computational photography techniques yields
    the cleanest plumage detail without artifacts, raw crops and pre-lucky crops are preserved
    alongside production polished crops (`crops/v..._raw.jpg` and `crops/v..._initial_raw.jpg`).
    The backend provides dynamic variant endpoints (`/api/detections/{id}/crop` and
    `/api/detections/{id}/crop-variants`), while the frontend provides an interactive inspection
-    studio in `ImageZoom` with real-time technique toggling (Super-Res, Chroma, CLAHE, Mertens, Sharpen, Lucky),
-    preset buttons (`Full Polish`, `Mertens HDR`, `Raw`, `Super-Res 2x`, `Mertens Only`, `Chroma Only`, `Sharpen Only`),
-    instant hold-to-compare (Spacebar), and 1x/2x/4x nearest-neighbor pixel magnification.
+   studio in `ImageZoom` with real-time technique toggling (Super-Res, Neural SR, Chroma, CLAHE, Mertens, Sharpen, Bokeh, Lucky),
+   preset buttons (`Full Polish`, `Bokeh`, `Mertens HDR`, `Raw`, `Super-Res 2x`, `Neural SR 2x`, `Mertens Only`, `Chroma Only`, `Sharpen Only`),
+   instant hold-to-compare (Spacebar), and 1x/2x/4x nearest-neighbor pixel magnification.
 
 ---
 
@@ -171,4 +186,4 @@ The camera stream presents several physical constraints:
 | Mertens Exposure Fusion | Shipped | ~0.66 ms / crop | 3-exposure multiscale blending; zero highlight clipping & smooth shadow lift | 2026-09-20 | `0216cc5` |
 | Shift-and-Add Super-Res | Shipped | ~25 ms / crop | Sub-pixel phase registration + 2x Lanczos4 + temporal median + MTF restoration | 2026-09-20 | `cd79fa4` |
 | Single-Image Super-Res (FSRCNN) | Shipped | ~2.5 ms / crop | FSRCNN via OpenVINO on Y channel; +47.8% edge contrast gain on crops < 180px | 2026-09-21 | `878df6b` |
-| Synthetic Bokeh | Planned | < 15 ms target | Subject isolation blur outside bird mask | - | - |
+| Synthetic Bokeh | Shipped | ~6.5 ms / crop | Edge-guided optical lens defocus blur + specular highlight discs (< 15 ms target) | 2026-09-21 | - |

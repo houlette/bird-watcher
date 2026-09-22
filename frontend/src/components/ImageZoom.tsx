@@ -20,6 +20,8 @@ type Props = {
 
 type PresetId =
   | "polish"
+  | "bokeh"
+  | "bokeh_only"
   | "mertens_hdr"
   | "raw"
   | "super_res"
@@ -44,6 +46,7 @@ type ZoomMode = "fit" | "1x" | "2x" | "4x";
  *   - Mertens multiscale exposure fusion: natural dynamic range recovery without halos
  *   - CLAHE: dynamic range lighting normalization on L channel
  *   - Bilateral unsharp masking: plumage edge sharpening without halos
+ *   - Synthetic bokeh defocus: edge-preserving background optical blur
  *   - Lucky imaging frame compare (when lucky imaging improved the detection)
  *   - Instant A/B hold-to-compare with Raw (via Spacebar or on-screen button)
  *   - 1x/2x/4x magnification with pixelated rendering for barbule-level inspection
@@ -68,6 +71,7 @@ export default function ImageZoom({
   const [mertens, setMertens] = useState(true);
   const [clahe, setClahe] = useState(true);
   const [sharpen, setSharpen] = useState(true);
+  const [bokeh, setBokeh] = useState(false);
   const [source, setSource] = useState<"lucky" | "initial">("lucky");
   const [hasInitial, setHasInitial] = useState(hasLucky ?? false);
   const [hasSrState, setHasSrState] = useState(hasSr ?? false);
@@ -83,17 +87,19 @@ export default function ImageZoom({
 
   // Determine active preset
   let activePreset: PresetId = "custom";
-  if (sr && chroma && mertens && clahe && sharpen) activePreset = "super_res";
-  else if (sr && !chroma && !mertens && !clahe && !sharpen) activePreset = "super_res_only";
-  else if (sisr && chroma && mertens && clahe && sharpen) activePreset = "neural_sr";
-  else if (sisr && !chroma && !mertens && !clahe && !sharpen) activePreset = "neural_sr_only";
-  else if (!sr && !sisr && chroma && mertens && clahe && sharpen) activePreset = "polish";
-  else if (!sr && !sisr && chroma && mertens && !clahe && sharpen) activePreset = "mertens_hdr";
-  else if (!sr && !sisr && !chroma && !mertens && !clahe && !sharpen) activePreset = "raw";
-  else if (!sr && !sisr && !chroma && mertens && !clahe && !sharpen) activePreset = "mertens_only";
-  else if (!sr && !sisr && chroma && !mertens && !clahe && !sharpen) activePreset = "chroma_only";
-  else if (!sr && !sisr && !chroma && !mertens && clahe && !sharpen) activePreset = "clahe_only";
-  else if (!sr && !sisr && !chroma && !mertens && !clahe && sharpen) activePreset = "sharpen_only";
+  if (sr && chroma && mertens && clahe && sharpen && !bokeh) activePreset = "super_res";
+  else if (sr && !chroma && !mertens && !clahe && !sharpen && !bokeh) activePreset = "super_res_only";
+  else if (sisr && chroma && mertens && clahe && sharpen && !bokeh) activePreset = "neural_sr";
+  else if (sisr && !chroma && !mertens && !clahe && !sharpen && !bokeh) activePreset = "neural_sr_only";
+  else if (!sr && !sisr && chroma && mertens && clahe && sharpen && bokeh) activePreset = "bokeh";
+  else if (!sr && !sisr && !chroma && !mertens && !clahe && !sharpen && bokeh) activePreset = "bokeh_only";
+  else if (!sr && !sisr && chroma && mertens && clahe && sharpen && !bokeh) activePreset = "polish";
+  else if (!sr && !sisr && chroma && mertens && !clahe && sharpen && !bokeh) activePreset = "mertens_hdr";
+  else if (!sr && !sisr && !chroma && !mertens && !clahe && !sharpen && !bokeh) activePreset = "raw";
+  else if (!sr && !sisr && !chroma && mertens && !clahe && !sharpen && !bokeh) activePreset = "mertens_only";
+  else if (!sr && !sisr && chroma && !mertens && !clahe && !sharpen && !bokeh) activePreset = "chroma_only";
+  else if (!sr && !sisr && !chroma && !mertens && clahe && !sharpen && !bokeh) activePreset = "clahe_only";
+  else if (!sr && !sisr && !chroma && !mertens && !clahe && sharpen && !bokeh) activePreset = "sharpen_only";
 
   // Pre-fetch metadata & standard presets into browser cache
   useEffect(() => {
@@ -104,7 +110,7 @@ export default function ImageZoom({
         if (meta.has_sr) setHasSrState(true);
         if (meta.has_sisr) setHasSisrState(true);
         // Preload standard preset images so toggling is 100% instantaneous
-        ["polish", "mertens_hdr", "raw", "super_res", "neural_sr", "mertens_only", "chroma_only", "clahe_only", "sharpen_only"].forEach((p) => {
+        ["polish", "bokeh", "mertens_hdr", "raw", "super_res", "neural_sr", "mertens_only", "chroma_only", "clahe_only", "sharpen_only", "bokeh_only"].forEach((p) => {
           const img = new Image();
           img.src = getCropVariantUrl(detectionId, { preset: p });
         });
@@ -170,6 +176,8 @@ export default function ImageZoom({
         applyPreset("sharpen_only");
       } else if (e.key === "8") {
         applyPreset("neural_sr");
+      } else if (e.key === "9") {
+        applyPreset("bokeh");
       } else if (e.key.toLowerCase() === "p") {
         setPixelated((v) => !v);
       } else if (e.key.toLowerCase() === "z") {
@@ -212,7 +220,7 @@ export default function ImageZoom({
     if (isComparing) {
       currentImageUrl = getCropVariantUrl(detectionId, { preset: "raw", source });
     } else {
-      currentImageUrl = getCropVariantUrl(detectionId, { chroma, mertens, clahe, sharpen, sr, sisr, source });
+      currentImageUrl = getCropVariantUrl(detectionId, { chroma, mertens, clahe, sharpen, sr, sisr, bokeh, source });
     }
   }
 
@@ -224,6 +232,7 @@ export default function ImageZoom({
       setMertens(true);
       setClahe(true);
       setSharpen(true);
+      setBokeh(false);
     } else if (p === "super_res_only") {
       setSr(true);
       setSisr(false);
@@ -231,6 +240,7 @@ export default function ImageZoom({
       setMertens(false);
       setClahe(false);
       setSharpen(false);
+      setBokeh(false);
     } else if (p === "neural_sr") {
       setSr(false);
       setSisr(true);
@@ -238,6 +248,7 @@ export default function ImageZoom({
       setMertens(true);
       setClahe(true);
       setSharpen(true);
+      setBokeh(false);
     } else if (p === "neural_sr_only") {
       setSr(false);
       setSisr(true);
@@ -245,6 +256,23 @@ export default function ImageZoom({
       setMertens(false);
       setClahe(false);
       setSharpen(false);
+      setBokeh(false);
+    } else if (p === "bokeh") {
+      setSr(false);
+      setSisr(false);
+      setChroma(true);
+      setMertens(true);
+      setClahe(true);
+      setSharpen(true);
+      setBokeh(true);
+    } else if (p === "bokeh_only") {
+      setSr(false);
+      setSisr(false);
+      setChroma(false);
+      setMertens(false);
+      setClahe(false);
+      setSharpen(false);
+      setBokeh(true);
     } else if (p === "polish") {
       setSr(false);
       setSisr(false);
@@ -252,6 +280,7 @@ export default function ImageZoom({
       setMertens(true);
       setClahe(true);
       setSharpen(true);
+      setBokeh(false);
     } else if (p === "mertens_hdr") {
       setSr(false);
       setSisr(false);
@@ -259,6 +288,7 @@ export default function ImageZoom({
       setMertens(true);
       setClahe(false);
       setSharpen(true);
+      setBokeh(false);
     } else if (p === "raw") {
       setSr(false);
       setSisr(false);
@@ -266,6 +296,7 @@ export default function ImageZoom({
       setMertens(false);
       setClahe(false);
       setSharpen(false);
+      setBokeh(false);
     } else if (p === "mertens_only") {
       setSr(false);
       setSisr(false);
@@ -273,6 +304,7 @@ export default function ImageZoom({
       setMertens(true);
       setClahe(false);
       setSharpen(false);
+      setBokeh(false);
     } else if (p === "chroma_only") {
       setSr(false);
       setSisr(false);
@@ -280,6 +312,7 @@ export default function ImageZoom({
       setMertens(false);
       setClahe(false);
       setSharpen(false);
+      setBokeh(false);
     } else if (p === "clahe_only") {
       setSr(false);
       setSisr(false);
@@ -287,6 +320,7 @@ export default function ImageZoom({
       setMertens(false);
       setClahe(true);
       setSharpen(false);
+      setBokeh(false);
     } else if (p === "sharpen_only") {
       setSr(false);
       setSisr(false);
@@ -294,6 +328,7 @@ export default function ImageZoom({
       setMertens(false);
       setClahe(false);
       setSharpen(true);
+      setBokeh(false);
     }
   };
 
@@ -410,6 +445,17 @@ export default function ImageZoom({
               title="All enhancements active (production default) [Press 1]"
             >
               Full Polish
+            </button>
+            <button
+              className={`px-2.5 py-1 text-xs rounded font-medium transition-all ${
+                activePreset === "bokeh"
+                  ? "bg-rose-600 text-white shadow-sm font-semibold"
+                  : "text-muted hover:text-ink hover:bg-surface/60"
+              }`}
+              onClick={() => applyPreset("bokeh")}
+              title="Full polish + synthetic optical bokeh background defocus [Press 9]"
+            >
+              Bokeh
             </button>
             <button
               className={`px-2.5 py-1 text-xs rounded font-medium transition-all ${
@@ -581,6 +627,14 @@ export default function ImageZoom({
               <span className="px-2.5 py-1 text-xs font-medium rounded-md bg-black/60 text-white/90 backdrop-blur-md border border-white/10">
                 Full Polish (Chroma + Mertens + CLAHE + Sharpen)
               </span>
+            ) : activePreset === "bokeh" ? (
+              <span className="px-2.5 py-1 text-xs font-medium rounded-md bg-rose-900/80 text-rose-100 backdrop-blur-md border border-rose-500/30">
+                Full Polish + Synthetic Bokeh Defocus
+              </span>
+            ) : activePreset === "bokeh_only" ? (
+              <span className="px-2.5 py-1 text-xs font-medium rounded-md bg-rose-900/80 text-rose-100 backdrop-blur-md border border-rose-500/30">
+                Synthetic Bokeh Defocus Only
+              </span>
             ) : activePreset === "mertens_hdr" ? (
               <span className="px-2.5 py-1 text-xs font-medium rounded-md bg-teal-900/80 text-teal-100 backdrop-blur-md border border-teal-500/30">
                 Mertens HDR Fusion (No Halos)
@@ -598,6 +652,7 @@ export default function ImageZoom({
                   mertens && "Mertens HDR",
                   clahe && "CLAHE",
                   sharpen && "Sharpen",
+                  bokeh && "Bokeh",
                 ]
                   .filter(Boolean)
                   .join(" + ")}
@@ -711,6 +766,20 @@ export default function ImageZoom({
             >
               <i className={`w-2 h-2 rounded-full ${sharpen ? "bg-leaf" : "bg-muted"}`} />
               Plumage Sharpen
+            </button>
+
+            {/* Synthetic Bokeh / Defocus */}
+            <button
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-all ${
+                bokeh
+                  ? "bg-rose-500/20 border-rose-500/50 text-ink font-semibold"
+                  : "bg-panel border-line text-muted line-through opacity-70"
+              }`}
+              onClick={() => setBokeh((v) => !v)}
+              title="Synthetic Bokeh: edge-guided optical lens defocus blur isolating bird from background clutter"
+            >
+              <i className={`w-2 h-2 rounded-full ${bokeh ? "bg-rose-500" : "bg-muted"}`} />
+              Bokeh Defocus
             </button>
 
             {/* Lucky Imaging Source Toggle (if available) */}

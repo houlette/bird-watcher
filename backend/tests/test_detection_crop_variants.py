@@ -365,5 +365,97 @@ def test_crop_variants_single_image_super_res(client, db, monkeypatch, tmp_path)
     assert decoded_presaved.shape == (80, 100, 3)
 
 
+def test_apply_synthetic_bokeh_direct():
+    """Verify _apply_synthetic_bokeh and render_crop_variant(..., bokeh=True) directly."""
+    from pipeline.process import _apply_synthetic_bokeh, render_crop_variant
+
+    # 1. Gracefully handles empty or tiny inputs
+    assert _apply_synthetic_bokeh(None) is None
+    empty = np.zeros((0, 0, 3), dtype=np.uint8)
+    assert _apply_synthetic_bokeh(empty).size == 0
+
+    tiny = np.ones((16, 16, 3), dtype=np.uint8) * 100
+    out_tiny = _apply_synthetic_bokeh(tiny)
+    assert np.array_equal(out_tiny, tiny)
+
+    # 2. Renders on standard crop and produces valid image with bokeh background defocus
+    img = np.full((120, 100, 3), 40, dtype=np.uint8)
+    # High-contrast background noise / edges on outer perimeter
+    img[:20, :] = 220
+    img[-20:, :] = 220
+    img[:, :15] = 220
+    img[:, -15:] = 220
+    # Central bird-like subject
+    img[40:80, 30:70] = [35, 120, 210]
+
+    out_bokeh = _apply_synthetic_bokeh(img, strength=1.0)
+    assert out_bokeh.shape == img.shape
+    assert out_bokeh.dtype == np.uint8
+
+    # Background sharp boundary should be softened/blurred by bokeh
+    assert not np.array_equal(out_bokeh, img)
+
+    # 3. render_crop_variant with bokeh=True
+    rendered = render_crop_variant(img, bokeh=True)
+    assert rendered.shape == img.shape
+    assert rendered.dtype == np.uint8
+
+
+def test_crop_variants_synthetic_bokeh(client, db, monkeypatch, tmp_path):
+    """Test synthetic bokeh crop variant presets, query params, and metadata."""
+    import pipeline.process as proc
+
+    crops_dir = tmp_path / "crops"
+    crops_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(proc, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(proc, "CROPS_DIR", crops_dir)
+
+    v = Visit(clip_path="clips/dummy6.mp4")
+    db.add(v)
+    db.flush()
+
+    raw_img = np.full((100, 100, 3), 90, dtype=np.uint8)
+    raw_img[30:70, 30:70] = [20, 160, 230]
+    raw_path = crops_dir / f"v{v.id:08d}_t0006_raw.jpg"
+    cv2.imwrite(str(raw_path), raw_img)
+
+    det = Detection(
+        visit_id=v.id,
+        track_id=6,
+        confidence=0.94,
+        crop_path=f"crops/v{v.id:08d}_t0006.jpg",
+        bbox=[20, 20, 80, 80],
+    )
+    db.add(det)
+    db.commit()
+
+    # 1. Verify variants metadata contains bokeh presets
+    res_meta = client.get(f"/api/detections/{det.id}/crop-variants")
+    assert res_meta.status_code == 200
+    meta = res_meta.json()
+    assert "bokeh" in meta["variants"]
+    assert "bokeh_only" in meta["variants"]
+
+    # 2. Query bokeh preset
+    res_bokeh = client.get(f"/api/detections/{det.id}/crop?preset=bokeh")
+    assert res_bokeh.status_code == 200
+    assert res_bokeh.headers["content-type"] == "image/jpeg"
+    decoded_bokeh = cv2.imdecode(np.frombuffer(res_bokeh.content, np.uint8), cv2.IMREAD_COLOR)
+    assert decoded_bokeh.shape == (100, 100, 3)
+
+    # 3. Query bokeh_only preset
+    res_only = client.get(f"/api/detections/{det.id}/crop?preset=bokeh_only")
+    assert res_only.status_code == 200
+    decoded_only = cv2.imdecode(np.frombuffer(res_only.content, np.uint8), cv2.IMREAD_COLOR)
+    assert decoded_only.shape == (100, 100, 3)
+
+    # 4. Query bokeh query param
+    res_param = client.get(f"/api/detections/{det.id}/crop?bokeh=1&chroma=1&sharpen=1")
+    assert res_param.status_code == 200
+    decoded_param = cv2.imdecode(np.frombuffer(res_param.content, np.uint8), cv2.IMREAD_COLOR)
+    assert decoded_param.shape == (100, 100, 3)
+
+
 
 

@@ -338,7 +338,8 @@ async def get_detection_crop(
     sharpen: bool | None = Query(None, description="Apply edge-preserving bilateral unsharp masking"),
     sr: bool | None = Query(None, description="Apply 2x multi-frame shift-and-add super-resolution"),
     sisr: bool | None = Query(None, description="Apply 2x single-image neural super-resolution (FSRCNN)"),
-    preset: str | None = Query(None, description="Convenience preset: 'raw', 'polish', 'mertens_hdr', 'mertens_only', 'super_res', 'super_res_only', 'neural_sr', 'neural_sr_only', 'chroma_only', 'clahe_only', 'sharpen_only'"),
+    bokeh: bool | None = Query(None, description="Apply synthetic bokeh background defocus"),
+    preset: str | None = Query(None, description="Convenience preset: 'raw', 'polish', 'bokeh', 'bokeh_only', 'mertens_hdr', 'mertens_only', 'super_res', 'super_res_only', 'neural_sr', 'neural_sr_only', 'chroma_only', 'clahe_only', 'sharpen_only'"),
     source: str = Query("lucky", description="'lucky' (default) or 'initial' (pre-lucky 3fps frame)"),
     db: Session = Depends(get_db),
 ):
@@ -358,27 +359,31 @@ async def get_detection_crop(
 
     # Map presets
     if preset == "raw":
-        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen = False, False, False, False, False, False
+        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen, use_bokeh = False, False, False, False, False, False, False
     elif preset == "polish":
-        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen = False, False, True, True, True, True
+        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen, use_bokeh = False, False, True, True, True, True, False
+    elif preset == "bokeh":
+        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen, use_bokeh = False, False, True, True, True, True, True
+    elif preset == "bokeh_only":
+        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen, use_bokeh = False, False, False, False, False, False, True
     elif preset == "mertens_hdr":
-        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen = False, False, True, False, True, True
+        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen, use_bokeh = False, False, True, False, True, True, False
     elif preset == "mertens_only":
-        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen = False, False, False, False, True, False
+        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen, use_bokeh = False, False, False, False, True, False, False
     elif preset == "super_res":
-        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen = True, False, True, True, True, True
+        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen, use_bokeh = True, False, True, True, True, True, False
     elif preset == "super_res_only":
-        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen = True, False, False, False, False, False
+        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen, use_bokeh = True, False, False, False, False, False, False
     elif preset == "neural_sr":
-        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen = False, True, True, True, True, True
+        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen, use_bokeh = False, True, True, True, True, True, False
     elif preset == "neural_sr_only":
-        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen = False, True, False, False, False, False
+        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen, use_bokeh = False, True, False, False, False, False, False
     elif preset == "chroma_only":
-        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen = False, False, True, False, False, False
+        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen, use_bokeh = False, False, True, False, False, False, False
     elif preset == "clahe_only":
-        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen = False, False, False, True, False, False
+        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen, use_bokeh = False, False, False, True, False, False, False
     elif preset == "sharpen_only":
-        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen = False, False, False, False, False, True
+        use_sr, use_sisr, use_chroma, use_clahe, use_mertens, use_sharpen, use_bokeh = False, False, False, False, False, True, False
     else:
         use_sr = sr if sr is not None else False
         use_sisr = sisr if sisr is not None else False
@@ -386,6 +391,7 @@ async def get_detection_crop(
         use_clahe = clahe if clahe is not None else True
         use_mertens = mertens if mertens is not None else True
         use_sharpen = sharpen if sharpen is not None else True
+        use_bokeh = bokeh if bokeh is not None else False
 
     raw_crop = None
     vid = detection.visit_id
@@ -465,6 +471,7 @@ async def get_detection_crop(
         clahe=use_clahe,
         mertens=use_mertens,
         sharpen=use_sharpen,
+        bokeh=use_bokeh,
     )
 
     ok, buf = cv2.imencode(".jpg", rendered, [cv2.IMWRITE_JPEG_QUALITY, 92])
@@ -503,6 +510,8 @@ async def get_detection_crop_variants(
     base = f"/api/detections/{detection_id}/crop"
     variants = {
         "polish": f"{base}?preset=polish",
+        "bokeh": f"{base}?preset=bokeh",
+        "bokeh_only": f"{base}?preset=bokeh_only",
         "mertens_hdr": f"{base}?preset=mertens_hdr",
         "super_res": f"{base}?preset=super_res",
         "super_res_only": f"{base}?preset=super_res_only",
