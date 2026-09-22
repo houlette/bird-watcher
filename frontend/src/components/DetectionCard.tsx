@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useRef, useEffect, useLayoutEffect } from "react";
+import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
@@ -12,7 +13,7 @@ import AudioBadge from "./AudioBadge";
 import ImageZoom from "./ImageZoom";
 import SpeciesPicker, { NOT_A_BIRD, POOR_QUALITY } from "./SpeciesPicker";
 import { useToast } from "./Toast";
-import { BanIcon, CheckIcon, EditIcon, FogIcon, ZoomIcon } from "./FieldIcons";
+import { BanIcon, CheckIcon, CloseIcon, EditIcon, FogIcon, InfoIcon, ZoomIcon } from "./FieldIcons";
 
 type DetectionCardProps = {
   detection: Detection;
@@ -54,7 +55,107 @@ export default function DetectionCard({
   const time = new Date(detection.captured_at + "Z").toLocaleString();
   const [pickerOpen, setPickerOpen] = useState(false);
   const [zoomOpen, setZoomOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [detailsHovered, setDetailsHovered] = useState(false);
+  const [coords, setCoords] = useState<{ top: number; left: number; width: number } | null>(null);
+
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const tooltipRef = useRef<HTMLDivElement | null>(null);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const queryClient = useQueryClient();
+
+  const isDetailsVisible = detailsOpen || detailsHovered;
+
+  const startCloseTimer = () => {
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+    closeTimerRef.current = setTimeout(() => {
+      setDetailsHovered(false);
+    }, 150);
+  };
+
+  const clearCloseTimer = () => {
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  };
+
+  useLayoutEffect(() => {
+    if (!isDetailsVisible || !triggerRef.current) {
+      setCoords(null);
+      return;
+    }
+
+    const updatePosition = () => {
+      if (!triggerRef.current) return;
+      const triggerRect = triggerRef.current.getBoundingClientRect();
+      const tooltipWidth = Math.min(264, window.innerWidth - 24);
+      const tooltipHeight = tooltipRef.current?.offsetHeight ?? 220;
+
+      let top = triggerRect.bottom + 6;
+      if (top + tooltipHeight > window.innerHeight - 8 && triggerRect.top - tooltipHeight - 6 > 8) {
+        top = triggerRect.top - tooltipHeight - 6;
+      }
+
+      let left = triggerRect.right - tooltipWidth;
+      if (left < 12) left = 12;
+      if (left + tooltipWidth > window.innerWidth - 12) {
+        left = window.innerWidth - 12 - tooltipWidth;
+      }
+
+      setCoords({ top, left, width: tooltipWidth });
+    };
+
+    updatePosition();
+  }, [isDetailsVisible]);
+
+  useEffect(() => {
+    if (!isDetailsVisible) return;
+
+    const onScrollOrResize = () => {
+      setDetailsOpen(false);
+      setDetailsHovered(false);
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target as Node;
+      if (
+        triggerRef.current &&
+        !triggerRef.current.contains(target) &&
+        tooltipRef.current &&
+        !tooltipRef.current.contains(target)
+      ) {
+        setDetailsOpen(false);
+        setDetailsHovered(false);
+      }
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setDetailsOpen(false);
+        setDetailsHovered(false);
+      }
+    };
+
+    window.addEventListener("scroll", onScrollOrResize, { passive: true });
+    window.addEventListener("resize", onScrollOrResize, { passive: true });
+    document.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+
+    return () => {
+      window.removeEventListener("scroll", onScrollOrResize);
+      window.removeEventListener("resize", onScrollOrResize);
+      document.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [isDetailsVisible]);
+
+  useEffect(() => {
+    return () => {
+      if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+    };
+  }, []);
 
   const identified = detection.species !== null;
   const pct = Math.round(detection.confidence * 100);
@@ -123,7 +224,7 @@ export default function DetectionCard({
 
   return (
     <div
-      className={`fg-card fg-liftable overflow-hidden flex flex-col relative ${ringClass}`}
+      className={`fg-card fg-liftable flex flex-col relative ${ringClass}`}
     >
       {selectable && (
         <label
@@ -144,7 +245,7 @@ export default function DetectionCard({
           object-contain on top so tall/wide birds aren't clipped. A leaf/rust
           confidence ribbon runs along the bottom edge. */}
       <div
-        className={`group relative w-full aspect-[4/3] overflow-hidden bg-panel ${
+        className={`group relative w-full aspect-[4/3] overflow-hidden rounded-t-[calc(var(--radius)-1px)] bg-panel ${
           selectable ? "cursor-pointer" : "cursor-zoom-in"
         }`}
         title={selectable ? undefined : "Click to inspect & compare processing variants (Raw, Chroma, CLAHE, Sharpen)"}
@@ -207,38 +308,61 @@ export default function DetectionCard({
         )}
 
       <div className={`p-3 flex flex-col flex-1 ${compact ? "text-xs" : "text-sm"}`}>
-        <div className="leading-tight">
-          {/* Identified species link to their plate page (all sightings of
-              that species); sentinels and Unidentified stay plain text. */}
-          {identified && detection.species_id != null ? (
-            <Link
-              to={`/species/${detection.species_id}`}
-              className={`font-serif text-ink font-medium hover:text-leaf hover:underline underline-offset-2 transition-colors inline ${
-                compact ? "text-sm" : "text-[16px]"
-              }`}
-            >
-              {detection.species}
-            </Link>
-          ) : (
-            <span
-              className={`font-serif inline ${
-                identified ? "text-ink font-medium" : "text-muted italic"
-              } ${compact ? "text-sm" : "text-[16px]"}`}
-            >
-              {detection.species ?? "Unidentified"}
-            </span>
-          )}
-          {detection.audio_confirmed && (
-            <span className="inline-block ml-1.5 align-middle -translate-y-px">
-              <AudioBadge />
-            </span>
-          )}
+        <div className="flex items-start justify-between gap-1 leading-tight">
+          <div className="min-w-0 flex-1">
+            {/* Identified species link to their plate page (all sightings of
+                that species); sentinels and Unidentified stay plain text. */}
+            {identified && detection.species_id != null ? (
+              <Link
+                to={`/species/${detection.species_id}`}
+                className={`font-serif text-ink font-medium hover:text-leaf hover:underline underline-offset-2 transition-colors inline ${
+                  compact ? "text-sm" : "text-[16px]"
+                }`}
+              >
+                {detection.species}
+              </Link>
+            ) : (
+              <span
+                className={`font-serif inline ${
+                  identified ? "text-ink font-medium" : "text-muted italic"
+                } ${compact ? "text-sm" : "text-[16px]"}`}
+              >
+                {detection.species ?? "Unidentified"}
+              </span>
+            )}
+          </div>
+          <button
+            type="button"
+            ref={triggerRef}
+            onClick={(e) => {
+              e.stopPropagation();
+              clearCloseTimer();
+              setDetailsOpen((prev) => !prev);
+            }}
+            onMouseEnter={() => {
+              clearCloseTimer();
+              setDetailsHovered(true);
+            }}
+            onMouseLeave={startCloseTimer}
+            onFocus={() => {
+              clearCloseTimer();
+              setDetailsHovered(true);
+            }}
+            onBlur={startCloseTimer}
+            aria-label="Detection details"
+            aria-expanded={isDetailsVisible}
+            title="View details & metadata"
+            className={`p-1 -mr-1 -mt-0.5 rounded transition-colors shrink-0 ${
+              isDetailsVisible
+                ? "text-leaf bg-panel"
+                : "text-muted hover:text-ink focus-visible:text-leaf"
+            }`}
+          >
+            <InfoIcon size={15} />
+          </button>
         </div>
 
-        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-muted">
-          {/* A 0% chip is noise: it means the classifier rejected every
-              crop and the label came from elsewhere (LLM, user). Show the
-              provenance instead. */}
+        <div className="mt-1 flex items-center gap-1.5 text-xs text-muted">
           {pct > 0 ? (
             <span
               className={`inline-flex items-center gap-1 font-semibold tnum ${
@@ -264,93 +388,7 @@ export default function DetectionCard({
             </span>
           ) : null}
           <span className="text-faint tnum">{time}</span>
-          {detection.has_lucky && (
-            <span
-              className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-800 dark:text-amber-300 border border-amber-600/25 dark:border-amber-500/35 bg-amber-500/10 leading-none align-middle"
-              title="Lucky Imaging: sharpest micro-pause frame selected from video burst"
-            >
-              ★ lucky
-            </span>
-          )}
-          {detection.has_sr && (
-            <span
-              className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-purple-800 dark:text-purple-300 border border-purple-600/25 dark:border-purple-500/35 bg-purple-500/10 leading-none align-middle"
-              title="Super-Res: 2x multi-frame shift-and-add reconstruction"
-            >
-              2× sr
-            </span>
-          )}
-          {detection.has_sisr && (
-            <span
-              className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-indigo-800 dark:text-indigo-300 border border-indigo-600/25 dark:border-indigo-500/35 bg-indigo-500/10 leading-none align-middle"
-              title="Neural Super-Res: 2x FSRCNN deep learning single-image reconstruction"
-            >
-              2× neural
-            </span>
-          )}
         </div>
-
-        {/* Quality footer — only when all three metrics are populated. Each
-            turns rust when it crosses the "bad" threshold (80 / 30 / 30). */}
-        {detection.crop_area_px != null &&
-          detection.brightness != null &&
-          detection.sharpness != null &&
-          (() => {
-            const maxDim = Math.round(Math.sqrt(detection.crop_area_px!));
-            const isSmall = maxDim < 80;
-            const isDark = detection.brightness! < 30;
-            const isBlurry = detection.sharpness! < 30;
-            const anyBad = isSmall || isDark || isBlurry;
-            const cls = (bad: boolean) =>
-              bad ? "text-rust font-semibold" : "text-faint";
-            // flex-wrap + nowrap spans: at narrow card widths a whole
-            // "label value" unit wraps to the next line, instead of the
-            // label and its value tearing apart mid-metric.
-            return (
-              <div
-                className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[10px] tnum"
-                title="Per-crop quality: pixel size · mean brightness 0-255 · Laplacian-variance sharpness. Rust = below the 'bad' threshold (80 / 30 / 30)."
-              >
-                {anyBad && (
-                  <span
-                    className="w-1.5 h-1.5 rounded-full"
-                    style={{ background: "var(--rust)" }}
-                    aria-hidden
-                  />
-                )}
-                <span className={`whitespace-nowrap ${cls(isSmall)}`}>{maxDim}px</span>
-                <span className="text-line">·</span>
-                <span className={`whitespace-nowrap ${cls(isDark)}`}>lum {Math.round(detection.brightness!)}</span>
-                <span className="text-line">·</span>
-                <span className={`whitespace-nowrap ${cls(isBlurry)}`}>shp {Math.round(detection.sharpness!)}</span>
-              </div>
-            );
-          })()}
-
-        {/* LLM rationale for backlog-classifier labels. */}
-        {detection.correction_source === "llm-claude" &&
-          detection.correction_rationale && (
-            <div
-              className="mt-1.5 flex gap-1.5 text-xs text-muted italic"
-              title="LLM rationale — open the species picker if it's wrong"
-            >
-              <span className="not-italic fg-overline shrink-0 mt-px text-leaf">AI</span>
-              <span>{detection.correction_rationale}</span>
-            </div>
-          )}
-
-        {/* Classifier's next-best guesses (top-1 excluded). */}
-        {(() => {
-          const alts = (detection.raw_predictions ?? [])
-            .filter((p) => p.species && p.species !== detection.species && p.p >= 0.02)
-            .slice(0, 2);
-          if (alts.length === 0) return null;
-          return (
-            <div className="mt-1 text-xs text-faint line-clamp-2 tnum">
-              {alts.map((a) => `${a.species} ${Math.round(a.p * 100)}%`).join(" · ")}
-            </div>
-          );
-        })()}
 
         {/* Quick-review row: Confirm / NAB / Poor quality / Change.
             Four columns. Poor quality retires the crop from any review
@@ -402,7 +440,7 @@ export default function DetectionCard({
 
         {/* Default row: Wrong species? + one-tap NAB. */}
         {!compact && !isAwaitingClassifierReview && (
-          <div className="mt-2.5 flex items-center justify-between gap-2 text-xs">
+          <div className="mt-auto pt-2.5 flex items-center justify-between gap-2 text-xs">
             <button
               className="text-muted hover:text-leaf underline underline-offset-2 disabled:opacity-50 transition-colors"
               onClick={() => setPickerOpen(true)}
@@ -433,6 +471,177 @@ export default function DetectionCard({
           </p>
         )}
       </div>
+
+      {isDetailsVisible &&
+        createPortal(
+          <div
+            ref={tooltipRef}
+            role="tooltip"
+            onMouseEnter={clearCloseTimer}
+            onMouseLeave={startCloseTimer}
+            style={
+              coords
+                ? {
+                    position: "fixed",
+                    top: `${coords.top}px`,
+                    left: `${coords.left}px`,
+                    width: `${coords.width}px`,
+                  }
+                : {
+                    position: "fixed",
+                    top: "-9999px",
+                    left: "-9999px",
+                    opacity: 0,
+                  }
+            }
+            className="z-50 p-3 rounded-card bg-surface/95 backdrop-blur-md border border-line shadow-pop text-ink flex flex-col gap-2.5 select-none animate-in fade-in duration-150"
+          >
+            {/* Header with Title and close button */}
+            <div className="flex items-center justify-between border-b border-line/60 pb-1.5">
+              <span className="fg-overline text-muted">Detection Details</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setDetailsOpen(false);
+                  setDetailsHovered(false);
+                }}
+                className="text-muted hover:text-ink p-0.5 -mr-1 rounded"
+                aria-label="Close details"
+              >
+                <CloseIcon size={12} />
+              </button>
+            </div>
+
+            {/* Audio Confirmation */}
+            {detection.audio_confirmed && (
+              <div className="flex items-center gap-2 text-leaf font-medium text-xs">
+                <AudioBadge />
+                <span className="text-[11px] text-muted">Heard by Haikubox within 90s</span>
+              </div>
+            )}
+
+            {/* Enhancements / Computational Photography */}
+            {(detection.has_lucky || detection.has_sr || detection.has_sisr) && (
+              <div className="space-y-1">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-muted">
+                  Enhancement
+                </div>
+                <div className="flex flex-col gap-1 text-[11px]">
+                  {detection.has_lucky && (
+                    <div className="flex items-center gap-1.5">
+                      <span className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-800 dark:text-amber-300 border border-amber-600/25 dark:border-amber-500/35 bg-amber-500/10 leading-none shrink-0">
+                        ★ lucky
+                      </span>
+                      <span className="text-muted">Sharpest burst frame selected</span>
+                    </div>
+                  )}
+                  {detection.has_sr && (
+                    <div className="flex items-center gap-1.5">
+                      <span className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-purple-800 dark:text-purple-300 border border-purple-600/25 dark:border-purple-500/35 bg-purple-500/10 leading-none shrink-0">
+                        2× sr
+                      </span>
+                      <span className="text-muted">Multi-frame super-resolution</span>
+                    </div>
+                  )}
+                  {detection.has_sisr && (
+                    <div className="flex items-center gap-1.5">
+                      <span className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-indigo-800 dark:text-indigo-300 border border-indigo-600/25 dark:border-indigo-500/35 bg-indigo-500/10 leading-none shrink-0">
+                        2× neural
+                      </span>
+                      <span className="text-muted">FSRCNN neural reconstruction</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Quality Metrics */}
+            {detection.crop_area_px != null &&
+              detection.brightness != null &&
+              detection.sharpness != null &&
+              (() => {
+                const maxDim = Math.round(Math.sqrt(detection.crop_area_px!));
+                const isSmall = maxDim < 80;
+                const isDark = detection.brightness! < 30;
+                const isBlurry = detection.sharpness! < 30;
+                const anyBad = isSmall || isDark || isBlurry;
+                const cls = (bad: boolean) => (bad ? "text-rust font-semibold" : "text-ink");
+                return (
+                  <div>
+                    <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-muted mb-1">
+                      <span>Crop Quality</span>
+                      {anyBad && (
+                        <span className="text-rust normal-case font-normal text-[10px]">
+                          Below threshold
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-x-2 text-[11px] tnum text-muted">
+                      <span className={cls(isSmall)}>{maxDim}px</span>
+                      <span className="text-line">·</span>
+                      <span className={cls(isDark)}>lum {Math.round(detection.brightness!)}</span>
+                      <span className="text-line">·</span>
+                      <span className={cls(isBlurry)}>shp {Math.round(detection.sharpness!)}</span>
+                    </div>
+                  </div>
+                );
+              })()}
+
+            {/* Alternative Predictions */}
+            {(() => {
+              const alts = (detection.raw_predictions ?? [])
+                .filter((p) => p.species && p.species !== detection.species && p.p >= 0.02)
+                .slice(0, 3);
+              if (alts.length === 0) return null;
+              return (
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wider text-muted mb-1">
+                    Alternative Predictions
+                  </div>
+                  <div className="space-y-1">
+                    {alts.map((a) => (
+                      <div key={a.species} className="flex justify-between items-center text-[11px]">
+                        <span className="truncate text-ink mr-2">{a.species}</span>
+                        <span className="text-muted tnum shrink-0 font-medium">
+                          {Math.round(a.p * 100)}%
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* AI Rationale / Provenance */}
+            {detection.correction_source === "llm-claude" && detection.correction_rationale && (
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-muted mb-0.5">
+                  <span className="text-leaf">AI Rationale</span>
+                </div>
+                <p className="text-[11px] text-ink italic leading-snug">
+                  {detection.correction_rationale}
+                </p>
+              </div>
+            )}
+
+            {/* NAB override filter score */}
+            {detection.nab_override_p != null && (
+              <div className="flex items-center justify-between text-[11px] text-muted">
+                <span>NAB filter score:</span>
+                <span className="text-rust font-semibold tnum">
+                  {Math.round(detection.nab_override_p * 100)}%
+                </span>
+              </div>
+            )}
+
+            {/* Footer with visit and track IDs */}
+            <div className="text-[10px] text-faint flex justify-between items-center pt-1.5 border-t border-line/60 tnum">
+              <span>Visit #{detection.visit_id}</span>
+              <span>Track #{detection.track_id}</span>
+            </div>
+          </div>,
+          document.body
+        )}
 
       <SpeciesPicker
         open={pickerOpen}

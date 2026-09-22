@@ -125,105 +125,6 @@ export default function ImageZoom({
     modalRef.current?.focus();
   }, []);
 
-  // Keyboard navigation & spacebar compare
-  useEffect(() => {
-    const isSpaceKey = (e: KeyboardEvent) =>
-      e.code === "Space" ||
-      e.key === " " ||
-      e.key === "Spacebar" ||
-      e.keyCode === 32 ||
-      e.which === 32;
-
-    const isBackslash = (e: KeyboardEvent) =>
-      e.key === "\\" ||
-      e.code === "Backslash" ||
-      e.keyCode === 220 ||
-      e.which === 220;
-
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" || e.keyCode === 27) {
-        e.preventDefault();
-        e.stopPropagation();
-        onClose();
-        return;
-      }
-
-      if (isSpaceKey(e) || isBackslash(e)) {
-        // Unconditionally prevent default and stop propagation so spacebar
-        // NEVER scrolls the page or triggers button clicks
-        e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation?.();
-        if (!e.repeat) {
-          setIsComparing(true);
-        }
-        return;
-      }
-
-      if (e.key === "1") {
-        applyPreset("polish");
-      } else if (e.key === "2") {
-        applyPreset("mertens_hdr");
-      } else if (e.key === "3") {
-        applyPreset("raw");
-      } else if (e.key === "4") {
-        applyPreset("super_res");
-      } else if (e.key === "5") {
-        applyPreset("mertens_only");
-      } else if (e.key === "6") {
-        applyPreset("chroma_only");
-      } else if (e.key === "7") {
-        applyPreset("sharpen_only");
-      } else if (e.key === "8") {
-        applyPreset("neural_sr");
-      } else if (e.key === "9") {
-        applyPreset("bokeh");
-      } else if (e.key.toLowerCase() === "p") {
-        setPixelated((v) => !v);
-      } else if (e.key.toLowerCase() === "z") {
-        setZoomMode((curr) => {
-          if (curr === "fit") return "1x";
-          if (curr === "1x") return "2x";
-          if (curr === "2x") return "4x";
-          return "fit";
-        });
-      }
-    };
-
-    const onKeyUp = (e: KeyboardEvent) => {
-      if (isSpaceKey(e) || isBackslash(e)) {
-        e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation?.();
-        setIsComparing(false);
-      }
-    };
-
-    // Attach in capture phase on both window and document to intercept before
-    // browser default action, target elements, or scroll containers.
-    window.addEventListener("keydown", onKeyDown, { capture: true });
-    window.addEventListener("keyup", onKeyUp, { capture: true });
-    document.addEventListener("keydown", onKeyDown, { capture: true });
-    document.addEventListener("keyup", onKeyUp, { capture: true });
-
-    return () => {
-      window.removeEventListener("keydown", onKeyDown, { capture: true });
-      window.removeEventListener("keyup", onKeyUp, { capture: true });
-      document.removeEventListener("keydown", onKeyDown, { capture: true });
-      document.removeEventListener("keyup", onKeyUp, { capture: true });
-    };
-  }, [onClose]);
-
-  // Compute active image URL
-  let currentImageUrl = src;
-  if (detectionId) {
-    if (isComparing) {
-      currentImageUrl = getCropVariantUrl(detectionId, { preset: "raw", source });
-    } else {
-      currentImageUrl = getCropVariantUrl(detectionId, { chroma, mertens, clahe, sharpen, sr, sisr, bokeh, source });
-    }
-  }
-
   const applyPreset = (p: PresetId) => {
     if (p === "super_res") {
       setSr(true);
@@ -331,6 +232,107 @@ export default function ImageZoom({
       setBokeh(false);
     }
   };
+
+  // Keyboard navigation & spacebar compare
+  useEffect(() => {
+    const isSpaceKey = (e: KeyboardEvent) =>
+      e.code === "Space" ||
+      e.key === " " ||
+      e.key === "Spacebar" ||
+      e.keyCode === 32 ||
+      e.which === 32;
+
+    const isBackslash = (e: KeyboardEvent) =>
+      e.key === "\\" ||
+      e.code === "Backslash" ||
+      e.keyCode === 220 ||
+      e.which === 220;
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" || e.keyCode === 27) {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+        return;
+      }
+
+      if (isSpaceKey(e) || isBackslash(e)) {
+        // Unconditionally prevent default and stop propagation so spacebar
+        // NEVER scrolls the page or triggers button clicks
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation?.();
+        if (!e.repeat) {
+          setIsComparing(true);
+        }
+        return;
+      }
+
+      if (e.key === "1") {
+        applyPreset("polish");
+      } else if (e.key === "2") {
+        applyPreset("mertens_hdr");
+      } else if (e.key === "3") {
+        applyPreset("raw");
+      } else if (e.key === "4") {
+        applyPreset("super_res");
+      } else if (e.key === "5") {
+        applyPreset("mertens_only");
+      } else if (e.key === "6") {
+        applyPreset("chroma_only");
+      } else if (e.key === "7") {
+        applyPreset("sharpen_only");
+      } else if (e.key === "8") {
+        applyPreset("neural_sr");
+      } else if (e.key === "9") {
+        applyPreset("bokeh");
+      } else if (e.key.toLowerCase() === "p") {
+        setPixelated((v) => !v);
+      } else if (e.key.toLowerCase() === "z") {
+        setZoomMode((curr) => {
+          if (curr === "fit") return "1x";
+          if (curr === "1x") return "2x";
+          if (curr === "2x") return "4x";
+          return "fit";
+        });
+      }
+    };
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (isSpaceKey(e) || isBackslash(e)) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation?.();
+        setIsComparing(false);
+      }
+    };
+
+    // Attach in capture phase on both window and document to intercept before
+    // browser default action, target elements, or scroll containers.
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    window.addEventListener("keyup", onKeyUp, { capture: true });
+    document.addEventListener("keydown", onKeyDown, { capture: true });
+    document.addEventListener("keyup", onKeyUp, { capture: true });
+
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
+      window.removeEventListener("keyup", onKeyUp, { capture: true });
+      document.removeEventListener("keydown", onKeyDown, { capture: true });
+      document.removeEventListener("keyup", onKeyUp, { capture: true });
+    };
+  }, [onClose]);
+
+  // Compute active image URL
+  let currentImageUrl = src;
+  if (detectionId) {
+    if (isComparing) {
+      currentImageUrl = getCropVariantUrl(detectionId, { preset: "raw", source });
+    } else {
+      currentImageUrl = getCropVariantUrl(detectionId, { chroma, mertens, clahe, sharpen, sr, sisr, bokeh, source });
+    }
+  }
+
+
 
   // Compute rendered dimensions
   const getRenderStyle = () => {
