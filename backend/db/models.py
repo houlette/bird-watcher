@@ -1,7 +1,7 @@
 """SQLAlchemy ORM models."""
 from datetime import date as _date, datetime
 
-from sqlalchemy import JSON, Date, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.session import Base
@@ -228,6 +228,12 @@ class PushSubscription(Base):
     # Default 30: a typical Baltimore Oriole arriving in May after winter
     # absence pings; a House Sparrow showing up for the hundredth time doesn't.
     notify_window_days: Mapped[int] = mapped_column(Integer, default=30)
+    # Mute common resident species (Mourning Dove, Rock Pigeon, House Sparrow, generic Sparrow)
+    # to eliminate alert fatigue. Enabled by default.
+    mute_residents: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Alert on the first visit of the day for feeder regulars (e.g. Cardinal,
+    # Blue Jay) before quieting down for the rest of the day.
+    notify_daily_first: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

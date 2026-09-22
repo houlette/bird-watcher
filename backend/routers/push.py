@@ -64,6 +64,8 @@ class SubscribeRequest(BaseModel):
     endpoint: str = Field(..., max_length=2048)
     keys: SubscriptionKeys
     notify_window_days: int = Field(30, ge=1, le=365)
+    mute_residents: bool = True
+    notify_daily_first: bool = True
 
 
 @router.get("/vapid_public_key")
@@ -76,6 +78,20 @@ async def vapid_public_key() -> dict:
     return {"public_key": settings.vapid_public_key}
 
 
+@router.get("/subscription")
+async def get_subscription(endpoint: str, db: Session = Depends(get_db)) -> dict:
+    validate_push_endpoint(endpoint)
+    sub = db.query(PushSubscription).filter_by(endpoint=endpoint).one_or_none()
+    if not sub:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    return {
+        "endpoint": sub.endpoint,
+        "notify_window_days": sub.notify_window_days,
+        "mute_residents": sub.mute_residents if sub.mute_residents is not None else True,
+        "notify_daily_first": sub.notify_daily_first if sub.notify_daily_first is not None else True,
+    }
+
+
 @router.post("/subscribe")
 async def subscribe(req: SubscribeRequest, db: Session = Depends(get_db)) -> dict:
     validate_push_endpoint(req.endpoint)
@@ -84,6 +100,8 @@ async def subscribe(req: SubscribeRequest, db: Session = Depends(get_db)) -> dic
         existing.p256dh = req.keys.p256dh
         existing.auth = req.keys.auth
         existing.notify_window_days = req.notify_window_days
+        existing.mute_residents = req.mute_residents
+        existing.notify_daily_first = req.notify_daily_first
     else:
         db.add(
             PushSubscription(
@@ -91,6 +109,8 @@ async def subscribe(req: SubscribeRequest, db: Session = Depends(get_db)) -> dic
                 p256dh=req.keys.p256dh,
                 auth=req.keys.auth,
                 notify_window_days=req.notify_window_days,
+                mute_residents=req.mute_residents,
+                notify_daily_first=req.notify_daily_first,
             )
         )
     db.commit()
@@ -99,6 +119,7 @@ async def subscribe(req: SubscribeRequest, db: Session = Depends(get_db)) -> dic
 
 @router.delete("/subscribe")
 async def unsubscribe(endpoint: str, db: Session = Depends(get_db)) -> dict:
+    validate_push_endpoint(endpoint)
     db.query(PushSubscription).filter_by(endpoint=endpoint).delete()
     db.commit()
     return {"ok": True}

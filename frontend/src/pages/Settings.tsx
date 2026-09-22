@@ -24,13 +24,19 @@ function Code({ children }: { children: React.ReactNode }) {
 export default function Settings() {
   const [state, setState] = useState<PushState | null>(null);
   const [windowDays, setWindowDays] = useState(30);
+  const [muteResidents, setMuteResidents] = useState(true);
+  const [notifyDailyFirst, setNotifyDailyFirst] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     getState().then((s) => {
       setState(s);
-      if (s.kind === "subscribed") setWindowDays(s.notify_window_days);
+      if (s.kind === "subscribed") {
+        setWindowDays(s.notify_window_days);
+        setMuteResidents(s.mute_residents);
+        setNotifyDailyFirst(s.notify_daily_first);
+      }
     });
   }, []);
 
@@ -38,7 +44,7 @@ export default function Settings() {
     setBusy(true);
     setError(null);
     try {
-      const next = await subscribe(windowDays);
+      const next = await subscribe(windowDays, muteResidents, notifyDailyFirst);
       setState(next);
     } catch (e) {
       setError((e as Error).message);
@@ -69,7 +75,7 @@ export default function Settings() {
           Notifications
         </h2>
         <p className="text-sm text-muted mt-1">
-          A push alert when a rarely-seen species shows up at the feeder.
+          Smart notification tiers for rare arrivals and daily visits without alert fatigue.
         </p>
       </div>
 
@@ -97,34 +103,71 @@ export default function Settings() {
 
         {(state.kind === "subscribed" || state.kind === "unsubscribed") && (
           <>
-            <div className="fg-card p-4">
-              <label className="block text-sm font-semibold text-ink">
-                Notify on first sighting within the last{" "}
-                <span className="font-serif text-leaf text-lg tnum">{windowDays}</span> days
-              </label>
-              <input
-                type="range"
-                min={1}
-                max={90}
-                value={windowDays}
-                onChange={(e) => setWindowDays(Number(e.target.value))}
-                className="fg-range w-full mt-3"
-                disabled={busy}
-              />
-              <div className="flex justify-between text-[11px] text-faint mt-1 tnum">
-                <span>1 day · chatty</span>
-                <span>90 days · only memorable arrivals</span>
+            <div className="fg-card p-4 space-y-4">
+              <div>
+                <label className="flex items-center justify-between cursor-pointer">
+                  <span className="text-sm font-semibold text-ink">
+                    Mute common resident birds
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={muteResidents}
+                    onChange={(e) => setMuteResidents(e.target.checked)}
+                    disabled={busy}
+                    className="h-4 w-4 rounded border-line accent-[var(--accent)] cursor-pointer"
+                  />
+                </label>
+                <p className="text-xs text-muted mt-1">
+                  Silences real-time alerts for Mourning Doves, Rock Pigeons, and House Sparrows to eliminate notification fatigue.
+                </p>
               </div>
-              <p className="text-xs text-muted mt-3">
-                A bird species that hasn't been seen in this many days triggers a push.
-                Larger = quieter; smaller = chattier.
-              </p>
+
+              <div className="border-t border-line/60 pt-4">
+                <label className="flex items-center justify-between cursor-pointer">
+                  <span className="text-sm font-semibold text-ink">
+                    Notify on first arrival of the day
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={notifyDailyFirst}
+                    onChange={(e) => setNotifyDailyFirst(e.target.checked)}
+                    disabled={busy}
+                    className="h-4 w-4 rounded border-line accent-[var(--accent)] cursor-pointer"
+                  />
+                </label>
+                <p className="text-xs text-muted mt-1">
+                  Sends an alert the first time each feeder regular (Cardinals, Blue Jays, Woodpeckers) arrives each morning, then quiets down for subsequent visits.
+                </p>
+              </div>
+
+              <div className="border-t border-line/60 pt-4">
+                <label className="block text-sm font-semibold text-ink">
+                  Rarity threshold: first sighting within{" "}
+                  <span className="font-serif text-leaf text-lg tnum">{windowDays}</span> days
+                </label>
+                <input
+                  type="range"
+                  min={1}
+                  max={90}
+                  value={windowDays}
+                  onChange={(e) => setWindowDays(Number(e.target.value))}
+                  className="fg-range w-full mt-3"
+                  disabled={busy}
+                />
+                <div className="flex justify-between text-[11px] text-faint mt-1 tnum">
+                  <span>1 day · chatty</span>
+                  <span>90 days · only memorable arrivals</span>
+                </div>
+                <p className="text-xs text-muted mt-2">
+                  A bird species that hasn't been seen in this many days triggers a rare visitor alert.
+                </p>
+              </div>
             </div>
 
             {state.kind === "subscribed" ? (
               <div className="flex flex-wrap gap-2.5">
                 <button onClick={onSubscribe} disabled={busy} className="fg-btn-primary px-4 py-2 text-sm">
-                  {busy ? "Updating…" : "Save window setting"}
+                  {busy ? "Updating…" : "Save notification preferences"}
                 </button>
                 <button onClick={onUnsubscribe} disabled={busy} className="fg-btn-ghost px-4 py-2 text-sm">
                   Turn off notifications

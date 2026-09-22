@@ -8,7 +8,13 @@ export type PushState =
   | { kind: "unsupported" }
   | { kind: "not_configured" }    // server returned no VAPID public key
   | { kind: "denied" }             // browser permission denied
-  | { kind: "subscribed"; endpoint: string; notify_window_days: number }
+  | {
+      kind: "subscribed";
+      endpoint: string;
+      notify_window_days: number;
+      mute_residents: boolean;
+      notify_daily_first: boolean;
+    }
   | { kind: "unsubscribed" };
 
 export function isPushSupported(): boolean {
@@ -47,16 +53,40 @@ export async function getState(): Promise<PushState> {
   if (Notification.permission === "denied") return { kind: "denied" };
   const sub = await getCurrentSubscription();
   if (sub) {
-    // We can't query notify_window_days from the browser subscription itself.
-    // The backend is authoritative; for UI display we just stash the last
-    // requested window in localStorage.
+    try {
+      const res = await fetch(`/api/push/subscription?endpoint=${encodeURIComponent(sub.endpoint)}`);
+      if (res.ok) {
+        const data = await res.json();
+        return {
+          kind: "subscribed",
+          endpoint: sub.endpoint,
+          notify_window_days: Number(data.notify_window_days ?? 30),
+          mute_residents: data.mute_residents ?? true,
+          notify_daily_first: data.notify_daily_first ?? true,
+        };
+      }
+    } catch {
+      // Fall back to localStorage if network or server fails
+    }
     const stored = Number(localStorage.getItem("notify_window_days") ?? "30");
-    return { kind: "subscribed", endpoint: sub.endpoint, notify_window_days: stored };
+    const storedMute = localStorage.getItem("mute_residents") !== "false";
+    const storedDaily = localStorage.getItem("notify_daily_first") !== "false";
+    return {
+      kind: "subscribed",
+      endpoint: sub.endpoint,
+      notify_window_days: stored,
+      mute_residents: storedMute,
+      notify_daily_first: storedDaily,
+    };
   }
   return { kind: "unsubscribed" };
 }
 
-export async function subscribe(notify_window_days: number): Promise<PushState> {
+export async function subscribe(
+  notify_window_days: number,
+  mute_residents: boolean = true,
+  notify_daily_first: boolean = true,
+): Promise<PushState> {
   if (!isPushSupported()) return { kind: "unsupported" };
 
   const publicKey = await fetchVapidPublicKey();
@@ -86,11 +116,21 @@ export async function subscribe(notify_window_days: number): Promise<PushState> 
       endpoint: json.endpoint,
       keys: { p256dh: json.keys?.p256dh, auth: json.keys?.auth },
       notify_window_days,
+      mute_residents,
+      notify_daily_first,
     }),
   });
   if (!r.ok) throw new Error(`subscribe failed: ${r.status}`);
   localStorage.setItem("notify_window_days", String(notify_window_days));
-  return { kind: "subscribed", endpoint: sub.endpoint, notify_window_days };
+  localStorage.setItem("mute_residents", String(mute_residents));
+  localStorage.setItem("notify_daily_first", String(notify_daily_first));
+  return {
+    kind: "subscribed",
+    endpoint: sub.endpoint,
+    notify_window_days,
+    mute_residents,
+    notify_daily_first,
+  };
 }
 
 export async function unsubscribe(): Promise<PushState> {

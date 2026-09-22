@@ -106,6 +106,9 @@ _ADDITIVE_COLUMNS = [
     ("visits", "timings", "JSON"),
     # Number of failed processing attempts to prevent infinite retry loops.
     ("visits", "retry_count", "INTEGER"),
+    # Notification preferences for PushSubscription.
+    ("push_subscriptions", "mute_residents", "BOOLEAN DEFAULT 1"),
+    ("push_subscriptions", "notify_daily_first", "BOOLEAN DEFAULT 1"),
 ]
 
 

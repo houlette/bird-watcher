@@ -141,3 +141,38 @@ def test_subscribe_rejects_ssrf_and_invalid_endpoints(client):
             },
         )
         assert res.status_code == 400, f"Expected 400 for {ep}, got {res.status_code}"
+
+
+def test_subscribe_with_smart_tier_preferences(client, db_session):
+    """POST /api/push/subscribe sets mute_residents and notify_daily_first."""
+    payload = {
+        "endpoint": "https://push.example.com/sub/tiers",
+        "keys": {"p256dh": "k1", "auth": "a1"},
+        "notify_window_days": 15,
+        "mute_residents": False,
+        "notify_daily_first": False,
+    }
+    res = client.post("/api/push/subscribe", json=payload)
+    assert res.status_code == 200
+
+    sub = db_session.query(PushSubscription).filter_by(endpoint=payload["endpoint"]).one()
+    assert sub.mute_residents is False
+    assert sub.notify_daily_first is False
+    assert sub.notify_window_days == 15
+
+    # Test GET /api/push/subscription returns the saved preferences
+    get_res = client.get("/api/push/subscription", params={"endpoint": payload["endpoint"]})
+    assert get_res.status_code == 200
+    assert get_res.json() == {
+        "endpoint": payload["endpoint"],
+        "notify_window_days": 15,
+        "mute_residents": False,
+        "notify_daily_first": False,
+    }
+
+
+def test_get_subscription_not_found(client):
+    """GET /api/push/subscription returns 404 for unknown endpoint."""
+    res = client.get("/api/push/subscription", params={"endpoint": "https://push.example.com/sub/unknown"})
+    assert res.status_code == 404
+
