@@ -6,7 +6,7 @@ A correction also updates the Detection.species_id in-place so the feed
 immediately shows the user's choice rather than the stale prediction.
 """
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from db.models import Correction, Detection, Species
@@ -14,10 +14,25 @@ from db.session import get_db
 
 router = APIRouter()
 
+MAX_SPECIES_NAME_LEN = 100
+MAX_BULK_DETECTION_IDS = 500
+
+
+def _validate_species_name(name: str) -> str:
+    cleaned = name.strip()
+    if not cleaned:
+        raise HTTPException(400, "correct_species_name cannot be empty")
+    if len(cleaned) > MAX_SPECIES_NAME_LEN:
+        raise HTTPException(400, f"Species name exceeds maximum length of {MAX_SPECIES_NAME_LEN}")
+    if any(ord(c) < 32 or ord(c) == 127 for c in cleaned):
+        raise HTTPException(400, "Species name contains invalid control characters")
+    return cleaned
+
 
 def _resolve_species(db: Session, name: str) -> Species:
     """Get-or-create a Species row by display name. Caller has already
-    stripped whitespace."""
+    validated and stripped whitespace."""
+    name = _validate_species_name(name)
     species = db.query(Species).filter(Species.common_name == name).one_or_none()
     if species is None:
         species = Species(common_name=name, scientific_name="", is_rare=False)
@@ -30,7 +45,7 @@ class CorrectionRequest(BaseModel):
     detection_id: int
     # Picker emits the human-readable species name (matched against the
     # yard_priors allow-list); the backend handles get-or-create on Species.
-    correct_species_name: str
+    correct_species_name: str = Field(..., max_length=MAX_SPECIES_NAME_LEN)
 
 
 def _retire_stale_review_queue_rows(db: Session, detection_id: int) -> None:
@@ -228,8 +243,8 @@ async def confirm_llm_correction(detection_id: int, db: Session = Depends(get_db
 
 
 class BulkCorrectionRequest(BaseModel):
-    detection_ids: list[int]
-    correct_species_name: str
+    detection_ids: list[int] = Field(..., max_length=MAX_BULK_DETECTION_IDS)
+    correct_species_name: str = Field(..., max_length=MAX_SPECIES_NAME_LEN)
 
 
 @router.post("/bulk")
@@ -252,7 +267,9 @@ async def submit_bulk_correction(req: BulkCorrectionRequest, db: Session = Depen
     """
     if not req.detection_ids:
         raise HTTPException(400, "detection_ids cannot be empty")
-    name = req.correct_species_name.strip()
+    if len(req.detection_ids) > MAX_BULK_DETECTION_IDS:
+        raise HTTPException(400, f"Too many detection_ids in bulk request (max {MAX_BULK_DETECTION_IDS})")
+    name = _validate_species_name(req.correct_species_name)
     if not name:
         raise HTTPException(400, "correct_species_name cannot be empty")
 

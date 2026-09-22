@@ -71,3 +71,14 @@ def test_safe_static_files_allows_valid_media(client, tmp_path):
     res_mp4 = client.get("/media/clips/Birdfeeder_test.mp4")
     assert res_mp4.status_code == 200
     assert res_mp4.content == valid_mp4
+
+
+def test_security_headers():
+    """Verify that main app responses include standard security headers."""
+    from main import app
+    c = TestClient(app)
+    res = c.get("/api/health")
+    assert res.status_code == 200
+    assert res.headers.get("X-Content-Type-Options") == "nosniff"
+    assert res.headers.get("X-Frame-Options") == "SAMEORIGIN"
+    assert res.headers.get("Referrer-Policy") == "strict-origin-when-cross-origin"

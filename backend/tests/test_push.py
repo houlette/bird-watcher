@@ -118,3 +118,26 @@ def test_unsubscribe(client, db_session):
     res2 = client.delete("/api/push/subscribe", params={"endpoint": "https://push.example.com/sub/to_delete"})
     assert res2.status_code == 200
     assert res2.json() == {"ok": True}
+
+
+def test_subscribe_rejects_ssrf_and_invalid_endpoints(client):
+    """POST /api/push/subscribe rejects non-https, localhost, and private IP endpoints."""
+    bad_endpoints = [
+        "http://push.example.com/sub/123",  # Non-HTTPS
+        "https://localhost/push",           # Localhost
+        "https://127.0.0.1/push",           # Loopback IP
+        "https://169.254.169.254/latest",   # AWS/GCP Link-local metadata
+        "https://10.0.0.1/push",            # RFC 1918 10.x.x.x
+        "https://192.168.1.1/push",         # RFC 1918 192.168.x.x
+        "https://172.16.0.1/push",          # RFC 1918 172.16.x.x
+        "https://internal.local/push",      # .local internal domain
+    ]
+    for ep in bad_endpoints:
+        res = client.post(
+            "/api/push/subscribe",
+            json={
+                "endpoint": ep,
+                "keys": {"p256dh": "key", "auth": "auth"},
+            },
+        )
+        assert res.status_code == 400, f"Expected 400 for {ep}, got {res.status_code}"

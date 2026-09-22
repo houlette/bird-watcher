@@ -81,7 +81,7 @@ services:
     environment:
       PUBLICHOST: birdwatcher.ryanhoulette.com
       FTP_USER_NAME: birdcam
-      FTP_USER_PASS: ${SFTP_PASSWORD:-changeme}
+      FTP_USER_PASS: ${SFTP_PASSWORD:?SFTP_PASSWORD must be configured in .env}
       FTP_USER_UID: "1000"
       FTP_USER_GID: "1000"
       FTP_USER_HOME: /home/birdcam

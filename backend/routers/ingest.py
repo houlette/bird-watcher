@@ -19,6 +19,7 @@ persisted unless a file actually arrived.
 """
 import logging
 from pathlib import Path
+import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
@@ -69,7 +70,7 @@ def _check_ingest_auth(request: Request) -> None:
         token = auth_header[7:].strip()
     elif "token" in request.query_params:
         token = request.query_params["token"]
-    if token != expected_token:
+    if not secrets.compare_digest(token or "", expected_token):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
@@ -106,14 +107,15 @@ async def receive_motion(
         )
         return {"ok": True, "kind": "ping"}
 
-    orig_name = upload.filename or "clip.mp4"
+    orig_name = Path(upload.filename or "clip.mp4").name
     ext = Path(orig_name).suffix.lower()
     if ext not in ALLOWED_INGEST_EXTS:
         raise HTTPException(status_code=400, detail=f"Unsupported file extension: {ext}")
 
     now = utcnow()
-    safe_orig = orig_name.replace("/", "_").replace("\\", "_")
-    filename = f"{now:%Y%m%d_%H%M%S_%f}_{safe_orig}"
+    stem = Path(orig_name).stem[:64]
+    safe_stem = "".join(c if c.isalnum() or c in "._-" else "_" for c in stem)
+    filename = f"{now:%Y%m%d_%H%M%S_%f}_{safe_stem}{ext}"
     dest = CLIPS_DIR / filename
 
     total_bytes = 0

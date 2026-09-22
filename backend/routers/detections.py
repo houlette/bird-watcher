@@ -41,7 +41,7 @@ def _parse_cursor(cursor: str) -> tuple[datetime, int]:
 
 @router.get("")
 async def list_detections(
-    limit: int = Query(50, le=200),
+    limit: int = Query(50, ge=1, le=200),
     species_id: int | None = Query(None, description="Filter to one species (by id)"),
     species_name: str | None = Query(None, description="Filter to one species (by common name — convenience for the picker which speaks names)"),
     include_not_a_bird: bool = Query(False, description="Include detections corrected to 'Not a bird'"),
