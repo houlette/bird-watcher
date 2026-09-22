@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useLayoutEffect } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -71,6 +71,10 @@ export default function DetectionCard({
     if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
     closeTimerRef.current = setTimeout(() => {
       setDetailsHovered(false);
+      setDetailsOpen((open) => {
+        if (!open) setCoords(null);
+        return open;
+      });
     }, 150);
   };
 
@@ -81,41 +85,62 @@ export default function DetectionCard({
     }
   };
 
-  useLayoutEffect(() => {
-    if (!isDetailsVisible || !triggerRef.current) {
-      setCoords(null);
-      return;
+  const computeCoords = () => {
+    if (!triggerRef.current) return null;
+    const triggerRect = triggerRef.current.getBoundingClientRect();
+    const tooltipWidth = Math.min(264, window.innerWidth - 24);
+    let top = triggerRect.bottom + 6;
+    if (top + 240 > window.innerHeight - 8 && triggerRect.top - 240 - 6 > 8) {
+      top = triggerRect.top - 240 - 6;
     }
+    let left = triggerRect.right - tooltipWidth;
+    if (left < 12) left = 12;
+    if (left + tooltipWidth > window.innerWidth - 12) {
+      left = window.innerWidth - 12 - tooltipWidth;
+    }
+    return { top, left, width: tooltipWidth };
+  };
 
-    const updatePosition = () => {
-      if (!triggerRef.current) return;
-      const triggerRect = triggerRef.current.getBoundingClientRect();
-      const tooltipWidth = Math.min(264, window.innerWidth - 24);
-      const tooltipHeight = tooltipRef.current?.offsetHeight ?? 220;
+  const showDetails = (pinned = false) => {
+    clearCloseTimer();
+    const calculated = computeCoords();
+    if (calculated) {
+      setCoords(calculated);
+    }
+    if (pinned) {
+      setDetailsOpen(true);
+    } else {
+      setDetailsHovered(true);
+    }
+  };
 
-      let top = triggerRect.bottom + 6;
-      if (top + tooltipHeight > window.innerHeight - 8 && triggerRect.top - tooltipHeight - 6 > 8) {
-        top = triggerRect.top - tooltipHeight - 6;
+  const closeDetails = useCallback(() => {
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+    setDetailsOpen(false);
+    setDetailsHovered(false);
+    setCoords(null);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!isDetailsVisible || !coords || !triggerRef.current || !tooltipRef.current) return;
+    const tooltipHeight = tooltipRef.current.offsetHeight;
+    const triggerRect = triggerRef.current.getBoundingClientRect();
+    if (coords.top + tooltipHeight > window.innerHeight - 8 && triggerRect.top - tooltipHeight - 6 > 8) {
+      const flippedTop = triggerRect.top - tooltipHeight - 6;
+      if (Math.abs(flippedTop - coords.top) > 2) {
+        setCoords((prev) => (prev ? { ...prev, top: flippedTop } : null));
       }
-
-      let left = triggerRect.right - tooltipWidth;
-      if (left < 12) left = 12;
-      if (left + tooltipWidth > window.innerWidth - 12) {
-        left = window.innerWidth - 12 - tooltipWidth;
-      }
-
-      setCoords({ top, left, width: tooltipWidth });
-    };
-
-    updatePosition();
-  }, [isDetailsVisible]);
+    }
+  }, [isDetailsVisible, coords]);
 
   useEffect(() => {
     if (!isDetailsVisible) return;
 
     const onScrollOrResize = () => {
-      setDetailsOpen(false);
-      setDetailsHovered(false);
+      closeDetails();
     };
 
     const onPointerDown = (e: PointerEvent) => {
@@ -126,15 +151,13 @@ export default function DetectionCard({
         tooltipRef.current &&
         !tooltipRef.current.contains(target)
       ) {
-        setDetailsOpen(false);
-        setDetailsHovered(false);
+        closeDetails();
       }
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        setDetailsOpen(false);
-        setDetailsHovered(false);
+        closeDetails();
       }
     };
 
@@ -149,7 +172,7 @@ export default function DetectionCard({
       document.removeEventListener("pointerdown", onPointerDown);
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [isDetailsVisible]);
+  }, [isDetailsVisible, closeDetails]);
 
   useEffect(() => {
     return () => {
@@ -336,17 +359,18 @@ export default function DetectionCard({
             ref={triggerRef}
             onClick={(e) => {
               e.stopPropagation();
-              clearCloseTimer();
-              setDetailsOpen((prev) => !prev);
+              if (detailsOpen) {
+                closeDetails();
+              } else {
+                showDetails(true);
+              }
             }}
             onMouseEnter={() => {
-              clearCloseTimer();
-              setDetailsHovered(true);
+              showDetails(false);
             }}
             onMouseLeave={startCloseTimer}
             onFocus={() => {
-              clearCloseTimer();
-              setDetailsHovered(true);
+              showDetails(false);
             }}
             onBlur={startCloseTimer}
             aria-label="Detection details"
@@ -473,38 +497,27 @@ export default function DetectionCard({
       </div>
 
       {isDetailsVisible &&
+        coords &&
         createPortal(
           <div
             ref={tooltipRef}
             role="tooltip"
             onMouseEnter={clearCloseTimer}
             onMouseLeave={startCloseTimer}
-            style={
-              coords
-                ? {
-                    position: "fixed",
-                    top: `${coords.top}px`,
-                    left: `${coords.left}px`,
-                    width: `${coords.width}px`,
-                  }
-                : {
-                    position: "fixed",
-                    top: "-9999px",
-                    left: "-9999px",
-                    opacity: 0,
-                  }
-            }
-            className="z-50 p-3 rounded-card bg-surface/95 backdrop-blur-md border border-line shadow-pop text-ink flex flex-col gap-2.5 select-none animate-in fade-in duration-150"
+            style={{
+              position: "fixed",
+              top: `${coords.top}px`,
+              left: `${coords.left}px`,
+              width: `${coords.width}px`,
+            }}
+            className="z-50 p-3 rounded-card bg-surface/95 backdrop-blur-md border border-line shadow-pop text-ink flex flex-col gap-2.5 select-none"
           >
             {/* Header with Title and close button */}
             <div className="flex items-center justify-between border-b border-line/60 pb-1.5">
               <span className="fg-overline text-muted">Detection Details</span>
               <button
                 type="button"
-                onClick={() => {
-                  setDetailsOpen(false);
-                  setDetailsHovered(false);
-                }}
+                onClick={closeDetails}
                 className="text-muted hover:text-ink p-0.5 -mr-1 rounded"
                 aria-label="Close details"
               >
