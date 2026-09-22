@@ -134,14 +134,8 @@ def upsert_detections(db: Session, raw: list[dict[str, Any]]) -> int:
     if not raw:
         return 0
 
-    # Track which (species, timestamp) pairs we already have to avoid duplicate
-    # inserts when the API returns overlapping windows on each poll.
-    seen = {
-        (s, t)
-        for s, t in db.query(HaikuboxDetection.species_common_name, HaikuboxDetection.detected_at).all()
-    }
-
-    inserted = 0
+    parsed_items = []
+    timestamps = []
     for item in raw:
         if not isinstance(item, dict):
             continue
@@ -149,19 +143,39 @@ def upsert_detections(db: Session, raw: list[dict[str, Any]]) -> int:
         when = _parse_timestamp(_pick(item, _TIMESTAMP_KEYS))
         if not species or not when:
             continue
-        species = str(species).strip()
-        key = (species, when.replace(tzinfo=None))
-        if key in seen:
-            continue
+        dt_naive = when.replace(tzinfo=None)
+        timestamps.append(dt_naive)
         conf_raw = _pick(item, _CONFIDENCE_KEYS)
         try:
             confidence = float(conf_raw) if conf_raw is not None else None
         except (TypeError, ValueError):
             confidence = None
+        parsed_items.append((str(species).strip(), dt_naive, confidence))
+
+    if not parsed_items:
+        return 0
+
+    # Scope deduplication query to the timestamp window of incoming batch
+    # instead of loading the entire historical table into memory on every poll.
+    min_ts = min(timestamps) - timedelta(minutes=5)
+    max_ts = max(timestamps) + timedelta(minutes=5)
+    seen = {
+        (s, t)
+        for s, t in db.query(HaikuboxDetection.species_common_name, HaikuboxDetection.detected_at)
+        .filter(HaikuboxDetection.detected_at >= min_ts, HaikuboxDetection.detected_at <= max_ts)
+        .all()
+    }
+
+    inserted = 0
+    for species, dt_naive, confidence in parsed_items:
+        key = (species, dt_naive)
+        if key in seen:
+            continue
+        seen.add(key)
         db.add(
             HaikuboxDetection(
                 species_common_name=species,
-                detected_at=when.replace(tzinfo=None),
+                detected_at=dt_naive,
                 confidence=confidence,
             )
         )

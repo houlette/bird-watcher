@@ -3,6 +3,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy import and_, desc, or_, select
 from sqlalchemy.orm import Session, joinedload
 
@@ -120,6 +121,7 @@ async def list_detections(
     if only_unidentified:
         # The "show me the queue I need to label" filter.
         q = q.filter(Detection.species_id.is_(None))
+    species_joined = False
     if only_not_a_bird:
         # NAB-review mode: show ONLY 'Not a bird'-labeled detections so the
         # user can scan past mistakes and re-correct them. include_not_a_bird
@@ -127,6 +129,7 @@ async def list_detections(
         q = q.join(Species, Detection.species_id == Species.id).filter(
             Species.common_name == NOT_A_BIRD_LABEL
         )
+        species_joined = True
     elif not include_not_a_bird and not binary_nab:
         # Default feed: hide NAB and Poor-Quality detections so the feed
         # shows only real, identifiable birds. The rows still exist in
@@ -138,15 +141,17 @@ async def list_detections(
             (Species.common_name.is_(None))
             | (~Species.common_name.in_(HIDDEN_FROM_FEED))
         )
+        species_joined = True
     if interesting:
         # "Interesting birds" feed: screen out the high-volume feeder regulars
         # the user considers junk. Substring matches on the common name so we
         # catch every sparrow species (and the 'Sparrow' family label) and any
         # pigeon without enumerating them. Rows with no species yet
         # (Unidentified) have a NULL common_name and are kept — an unlabeled
-        # crop could be anything. Relies on the Species outerjoin the default
-        # NAB-hide branch above already added (this filter only runs on the
-        # everyday feed, where that branch always executes).
+        # crop could be anything.
+        if not species_joined:
+            q = q.outerjoin(Species, Detection.species_id == Species.id)
+            species_joined = True
         junk = or_(
             Species.common_name.ilike("%sparrow%"),
             Species.common_name.ilike("%pigeon%"),
@@ -392,94 +397,102 @@ async def get_detection_crop(
         use_mertens = mertens if mertens is not None else True
         use_sharpen = sharpen if sharpen is not None else True
         use_bokeh = bokeh if bokeh is not None else False
+    def _render() -> bytes:
+        raw_crop = None
+        sr_path = None
+        sisr_path = None
 
-    raw_crop = None
+        # 0. If super_res requested and pre-saved _sr.jpg exists on disk, use it directly
+        if use_sr:
+            sr_path = CROPS_DIR / f"v{vid:08d}_t{tid:04d}_sr.jpg"
+            if sr_path.exists():
+                raw_crop = cv2.imread(str(sr_path))
+        elif use_sisr:
+            sisr_path = CROPS_DIR / f"v{vid:08d}_t{tid:04d}_sisr.jpg"
+            if sisr_path.exists():
+                raw_crop = cv2.imread(str(sisr_path))
+
+        # 1. If source == "initial", check if pre-lucky initial raw crop exists
+        if source == "initial":
+            init_path = CROPS_DIR / f"v{vid:08d}_t{tid:04d}_initial_raw.jpg"
+            if init_path.exists():
+                raw_crop = cv2.imread(str(init_path))
+
+        # 2. Check standard raw crop file on disk
+        if raw_crop is None:
+            raw_path = CROPS_DIR / f"v{vid:08d}_t{tid:04d}_raw.jpg"
+            if raw_path.exists():
+                raw_crop = cv2.imread(str(raw_path))
+
+        # 3. Check source frame to extract raw crop on-demand
+        if raw_crop is None:
+            frame_path = FRAMES_DIR / f"v{vid:08d}_t{tid:04d}.jpg"
+            if frame_path.exists() and bbox:
+                frame = cv2.imread(str(frame_path))
+                if frame is not None:
+                    class _BboxHolder:
+                        def __init__(self, b):
+                            self.bbox = b
+
+                    raw_crop = _extract_crop_from_image(_BboxHolder(bbox), frame)
+                    if raw_crop is not None and raw_crop.size > 0:
+                        # Cache to crops/ so future variant requests never re-decode 4K frames
+                        cv2.imwrite(str(CROPS_DIR / f"v{vid:08d}_t{tid:04d}_raw.jpg"), raw_crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
+
+        # 4. Fallback to existing saved crop
+        if raw_crop is None and crop_path_val:
+            saved_crop_path = DATA_DIR / crop_path_val
+            if saved_crop_path.exists():
+                raw_crop = cv2.imread(str(saved_crop_path))
+
+        if raw_crop is None or raw_crop.size == 0:
+            return b""
+
+        # If super_res was requested but no pre-saved _sr.jpg existed, compute 2x super-res on the fly
+        if use_sr and (sr_path is None or not sr_path.exists()):
+            raw_crop = render_crop_variant(
+                raw_crop,
+                super_res=True,
+                chroma=False,
+                clahe=False,
+                mertens=False,
+                sharpen=False,
+            )
+        elif use_sisr and (sisr_path is None or not sisr_path.exists()):
+            raw_crop = render_crop_variant(
+                raw_crop,
+                sisr=True,
+                chroma=False,
+                clahe=False,
+                mertens=False,
+                sharpen=False,
+            )
+
+        rendered = render_crop_variant(
+            raw_crop,
+            chroma=use_chroma,
+            clahe=use_clahe,
+            mertens=use_mertens,
+            sharpen=use_sharpen,
+            bokeh=use_bokeh,
+        )
+
+        ok, buf = cv2.imencode(".jpg", rendered, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        if not ok:
+            return b""
+        return buf.tobytes()
+
     vid = detection.visit_id
     tid = detection.track_id
-    sr_path = None
-    sisr_path = None
+    bbox = detection.bbox
+    crop_path_val = detection.crop_path
 
-    # 0. If super_res requested and pre-saved _sr.jpg exists on disk, use it directly
-    if use_sr:
-        sr_path = CROPS_DIR / f"v{vid:08d}_t{tid:04d}_sr.jpg"
-        if sr_path.exists():
-            raw_crop = cv2.imread(str(sr_path))
-    elif use_sisr:
-        sisr_path = CROPS_DIR / f"v{vid:08d}_t{tid:04d}_sisr.jpg"
-        if sisr_path.exists():
-            raw_crop = cv2.imread(str(sisr_path))
-
-    # 1. If source == "initial", check if pre-lucky initial raw crop exists
-    if source == "initial":
-        init_path = CROPS_DIR / f"v{vid:08d}_t{tid:04d}_initial_raw.jpg"
-        if init_path.exists():
-            raw_crop = cv2.imread(str(init_path))
-
-    # 2. Check standard raw crop file on disk
-    if raw_crop is None:
-        raw_path = CROPS_DIR / f"v{vid:08d}_t{tid:04d}_raw.jpg"
-        if raw_path.exists():
-            raw_crop = cv2.imread(str(raw_path))
-
-    # 3. Check source frame to extract raw crop on-demand
-    if raw_crop is None:
-        frame_path = FRAMES_DIR / f"v{vid:08d}_t{tid:04d}.jpg"
-        if frame_path.exists() and detection.bbox:
-            frame = cv2.imread(str(frame_path))
-            if frame is not None:
-                class _BboxHolder:
-                    def __init__(self, b):
-                        self.bbox = b
-
-                raw_crop = _extract_crop_from_image(_BboxHolder(detection.bbox), frame)
-                if raw_crop is not None and raw_crop.size > 0:
-                    # Cache to crops/ so future variant requests never re-decode 4K frames
-                    cv2.imwrite(str(CROPS_DIR / f"v{vid:08d}_t{tid:04d}_raw.jpg"), raw_crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
-
-    # 4. Fallback to existing saved crop
-    if raw_crop is None and detection.crop_path:
-        saved_crop_path = DATA_DIR / detection.crop_path
-        if saved_crop_path.exists():
-            raw_crop = cv2.imread(str(saved_crop_path))
-
-    if raw_crop is None or raw_crop.size == 0:
-        raise HTTPException(status_code=404, detail="Crop image file not found")
-
-    # If super_res was requested but no pre-saved _sr.jpg existed, compute 2x super-res on the fly
-    if use_sr and (sr_path is None or not sr_path.exists()):
-        raw_crop = render_crop_variant(
-            raw_crop,
-            super_res=True,
-            chroma=False,
-            clahe=False,
-            mertens=False,
-            sharpen=False,
-        )
-    elif use_sisr and (sisr_path is None or not sisr_path.exists()):
-        raw_crop = render_crop_variant(
-            raw_crop,
-            sisr=True,
-            chroma=False,
-            clahe=False,
-            mertens=False,
-            sharpen=False,
-        )
-
-    rendered = render_crop_variant(
-        raw_crop,
-        chroma=use_chroma,
-        clahe=use_clahe,
-        mertens=use_mertens,
-        sharpen=use_sharpen,
-        bokeh=use_bokeh,
-    )
-
-    ok, buf = cv2.imencode(".jpg", rendered, [cv2.IMWRITE_JPEG_QUALITY, 92])
-    if not ok:
-        raise HTTPException(status_code=500, detail="Failed to encode crop variant")
+    content = await run_in_threadpool(_render)
+    if not content:
+        raise HTTPException(status_code=404, detail="Crop image file not found or failed to render")
 
     return Response(
-        content=buf.tobytes(),
+        content=content,
         media_type="image/jpeg",
         headers={"Cache-Control": "public, max-age=86400, immutable"},
     )

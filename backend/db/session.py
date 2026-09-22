@@ -104,6 +104,8 @@ _ADDITIVE_COLUMNS = [
     # Per-stage wall-clock seconds for each processed visit; see
     # pipeline/timing.py.
     ("visits", "timings", "JSON"),
+    # Number of failed processing attempts to prevent infinite retry loops.
+    ("visits", "retry_count", "INTEGER"),
 ]
 
 

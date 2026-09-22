@@ -245,14 +245,20 @@ def _box_union(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> tu
 TILE_SEAM_GAP_PX = 40
 TILE_SEAM_OVERLAP_FRAC = 0.25
 
+# Internal tile boundary coordinates where adjacent 1024px tiles start or end (step = 820 px).
+VERTICAL_TILE_SEAMS = (820, 1024, 1640, 1844, 2460, 2664, 3280, 3484)
+HORIZONTAL_TILE_SEAMS = (820, 1024, 1640, 1844)
+SEAM_PROXIMITY_TOLERANCE_PX = 60
+
 
 def _is_tile_fragment_pair(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:
     """True if `a` and `b` look like two fragments of one bird across a tile seam.
 
     Tile-seam fragments share an edge: their gap on one axis is tiny while
     they line up almost completely on the perpendicular axis (same bird's
-    top/bottom or left/right). Two distinct birds perched near each other
-    have a real gap on both axes OR a misalignment on the perpendicular.
+    top/bottom or left/right), AND their dividing line coincides with an
+    actual internal tile seam coordinate. Two distinct birds perched near each
+    other away from seams are not merged.
     """
     ax, ay, aw, ah = a
     bx, by, bw, bh = b
@@ -260,12 +266,18 @@ def _is_tile_fragment_pair(a: tuple[int, int, int, int], b: tuple[int, int, int,
     x_gap = max(0, max(ax, bx) - min(ax + aw, bx + bw))
     y_overlap = max(0, min(ay + ah, by + bh) - max(ay, by))
     if x_gap <= TILE_SEAM_GAP_PX and y_overlap >= TILE_SEAM_OVERLAP_FRAC * min(ah, bh):
-        return True
+        split_x = (min(ax + aw, bx + bw) + max(ax, bx)) / 2.0
+        if any(abs(split_x - s) <= SEAM_PROXIMITY_TOLERANCE_PX for s in VERTICAL_TILE_SEAMS):
+            return True
+
     # Horizontal seam (boxes stacked, small y-gap, large x-overlap).
     y_gap = max(0, max(ay, by) - min(ay + ah, by + bh))
     x_overlap = max(0, min(ax + aw, bx + bw) - max(ax, bx))
     if y_gap <= TILE_SEAM_GAP_PX and x_overlap >= TILE_SEAM_OVERLAP_FRAC * min(aw, bw):
-        return True
+        split_y = (min(ay + ah, by + bh) + max(ay, by)) / 2.0
+        if any(abs(split_y - s) <= SEAM_PROXIMITY_TOLERANCE_PX for s in HORIZONTAL_TILE_SEAMS):
+            return True
+
     return False
 
 

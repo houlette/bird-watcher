@@ -460,6 +460,9 @@ def process_visit(visit: Visit, db: Session) -> int:
         # (or best candidate when fusion is off) so the binary head sees
         # the same pixels the species classifier did.
         nab_p_single = nab_p_polished = None
+        top_visual_p = averaged[0].probability if averaged else 0.0
+        is_audio_confirmed = bool(getattr(top, "audio_confirmed", False))
+
         if binary_filter_enabled() and top.species != NOT_A_BIRD_LABEL:
             filter_crop = fused_crop_image if _USE_MULTI_FRAME_FUSION else best.crop
             with timer.stage("binary_filter"):
@@ -475,9 +478,6 @@ def process_visit(visit: Visit, db: Session) -> int:
             # causing fused P(NAB) to dip even when the sharp single crop is confidently NAB.
             valid_nab_ps = [p for p in (nab_p, nab_p_single) if p is not None]
             effective_nab_p = max(valid_nab_ps) if valid_nab_ps else None
-
-            top_visual_p = averaged[0].probability if averaged else 0.0
-            is_audio_confirmed = bool(getattr(top, "audio_confirmed", False))
 
             should_override_nab = False
             # 1. Primary fused crop is overwhelmingly NAB (>= settings.bird_binary_nab_threshold, default 0.75).
@@ -503,32 +503,27 @@ def process_visit(visit: Visit, db: Session) -> int:
                 # Replace the top entry's species with NAB but keep the
                 # original raw_predictions intact for transparency —
                 # users can see what was overridden via the feed card.
-                # Must be a FusedPrediction (not SpeciesPrediction): `top`
-                # is consumed below as a fused result — top.audio_confirmed
-                # is read when building the Detection row, and
-                # SpeciesPrediction has neither that field nor accepts it as
-                # a kwarg (it raised TypeError here every time the binary
-                # filter fired, crashing the visit).
                 top = FusedPrediction(
                     species=NOT_A_BIRD_LABEL,
                     probability=effective_nab_p or 1.0,
                     audio_confirmed=False,
                     seasonal_boost=1.0,
                 )
-            elif not is_audio_confirmed and top_visual_p < 0.20:
-                # When the visual classifier has <20% confidence on its top guess
-                # and audio did not confirm, do not hallucinate a specific species.
-                # Mark as Unidentified (species=None) so the user feed is not polluted.
-                log.info(
-                    "track %d: weak visual confidence (%.2f < 0.20) without audio; marking as Unidentified",
-                    track.track_id, top_visual_p,
-                )
-                top = FusedPrediction(
-                    species=None,
-                    probability=0.0,
-                    audio_confirmed=False,
-                    seasonal_boost=1.0,
-                )
+
+        # Confidence floor: when visual classifier has <20% confidence on its top guess
+        # and audio did not confirm, do not hallucinate a specific species.
+        # Mark as Unidentified (species=None) so the user feed is not polluted.
+        if top.species != NOT_A_BIRD_LABEL and not is_audio_confirmed and top_visual_p < 0.20:
+            log.info(
+                "track %d: weak visual confidence (%.2f < 0.20) without audio; marking as Unidentified",
+                track.track_id, top_visual_p,
+            )
+            top = FusedPrediction(
+                species=None,
+                probability=0.0,
+                audio_confirmed=False,
+                seasonal_boost=1.0,
+            )
 
         pending.append({
             "species_name": top.species,
@@ -1661,7 +1656,8 @@ def _save_crop(det, *, visit_id: int, track_id: int) -> Path:
     and any pre-lucky crop, and return the display crop path relative to DATA_DIR.
     """
     crop = det.crop
-    assert crop is not None and crop.size > 0, "crop must be populated at detection time"
+    if crop is None or crop.size == 0:
+        raise SkipFile(f"Empty or degenerate crop for visit {visit_id} track {track_id}")
     polished = _polish_for_display(crop)
     filename = f"v{visit_id:08d}_t{track_id:04d}.jpg"
     out_path = CROPS_DIR / filename

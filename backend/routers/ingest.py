@@ -20,13 +20,15 @@ persisted unless a file actually arrived.
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Request, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from db.models import Visit
 from db.session import get_db
 from db.utils import utcnow
+from pipeline.frames import IMAGE_EXTS, VIDEO_EXTS
+from settings import settings
 
 log = logging.getLogger(__name__)
 
@@ -34,6 +36,9 @@ router = APIRouter()
 
 CLIPS_DIR = Path(__file__).parent.parent / "data" / "clips"
 CLIPS_DIR.mkdir(parents=True, exist_ok=True)
+
+MAX_INGEST_BYTES = 25 * 1024 * 1024  # 25 MB ceiling protects against disk exhaustion
+ALLOWED_INGEST_EXTS = IMAGE_EXTS | VIDEO_EXTS
 
 
 async def _first_uploaded_file(request: Request) -> UploadFile | None:
@@ -54,12 +59,27 @@ async def _first_uploaded_file(request: Request) -> UploadFile | None:
     return None
 
 
+def _check_ingest_auth(request: Request) -> None:
+    expected_token = settings.ingest_auth_token
+    if not expected_token:
+        return
+    auth_header = request.headers.get("authorization", "")
+    token = None
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+    elif "token" in request.query_params:
+        token = request.query_params["token"]
+    if token != expected_token:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
 @router.post("/motion")
 @router.get("/motion")
 async def receive_motion(
     request: Request,
     db: Session = Depends(get_db),
 ) -> dict:
+    _check_ingest_auth(request)
     upload = await _first_uploaded_file(request) if request.method == "POST" else None
 
     if upload is None:
@@ -86,14 +106,30 @@ async def receive_motion(
         )
         return {"ok": True, "kind": "ping"}
 
+    orig_name = upload.filename or "clip.mp4"
+    ext = Path(orig_name).suffix.lower()
+    if ext not in ALLOWED_INGEST_EXTS:
+        raise HTTPException(status_code=400, detail=f"Unsupported file extension: {ext}")
+
     now = utcnow()
-    safe_orig = (upload.filename or "clip.mp4").replace("/", "_").replace("\\", "_")
+    safe_orig = orig_name.replace("/", "_").replace("\\", "_")
     filename = f"{now:%Y%m%d_%H%M%S_%f}_{safe_orig}"
     dest = CLIPS_DIR / filename
 
-    with dest.open("wb") as out:
-        while chunk := await upload.read(1 << 20):
-            out.write(chunk)
+    total_bytes = 0
+    try:
+        with dest.open("wb") as out:
+            while chunk := await upload.read(1 << 20):
+                total_bytes += len(chunk)
+                if total_bytes > MAX_INGEST_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Upload exceeds {MAX_INGEST_BYTES // (1024 * 1024)}MB limit",
+                    )
+                out.write(chunk)
+    except Exception:
+        dest.unlink(missing_ok=True)
+        raise
 
     visit = Visit(started_at=now, clip_path=str(dest.relative_to(CLIPS_DIR.parent)))
     db.add(visit)

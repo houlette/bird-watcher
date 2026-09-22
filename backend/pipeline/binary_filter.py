@@ -133,7 +133,7 @@ def nab_probability(crop_bgr: np.ndarray) -> float | None:
     import torch
 
     # The HF AutoImageProcessor expects RGB; OpenCV gives BGR.
-    crop_rgb = crop_bgr[..., ::-1]
+    crop_rgb = np.ascontiguousarray(crop_bgr[..., ::-1])
     inputs = _processor(images=crop_rgb, return_tensors="pt").to(_device)
     with torch.no_grad():
         logits = _model(**inputs).logits

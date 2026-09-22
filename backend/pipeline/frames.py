@@ -38,6 +38,8 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 # A future refactor that streams frames through processing (rather than
 # caching them in a dict) can lift this cap.
 MAX_VIDEO_BYTES = 15 * 1024 * 1024
+MAX_IMAGE_BYTES = 15 * 1024 * 1024
+MAX_IMAGE_DIMENSION = 8192
 
 # Cap the wall-clock duration we sample from any one clip. Reolink's
 # "Video & Image" FTP setting emits 24-second MP4s, but a typical feeder
@@ -60,8 +62,8 @@ def extract_frames(clip_path: Path, target_fps: float = 3.0, stats: dict | None 
     """Yield Frames decoded from `clip_path`.
 
     Dispatches on file extension. Video files are sampled at ~`target_fps`;
-    image files yield a single Frame. Raises ValueError if the file can't
-    be decoded.
+    image files yield a single Frame. Raises SkipFile if the file can't
+    be decoded or exceeds size limits.
 
     If `stats` is given it receives `source_frames_read`, `source_fps`,
     `width` and `height`. `cap.read()` fully decodes every source frame,
@@ -71,9 +73,16 @@ def extract_frames(clip_path: Path, target_fps: float = 3.0, stats: dict | None 
     ext = clip_path.suffix.lower()
 
     if ext in IMAGE_EXTS:
+        size = clip_path.stat().st_size
+        if size > MAX_IMAGE_BYTES:
+            raise SkipFile(
+                f"image too large to process: {size / 1e6:.1f} MB > {MAX_IMAGE_BYTES / 1e6:.0f} MB cap"
+            )
         image = cv2.imread(str(clip_path))
         if image is None:
-            raise ValueError(f"Could not decode image: {clip_path}")
+            raise SkipFile(f"Could not decode image: {clip_path}")
+        if image.shape[0] > MAX_IMAGE_DIMENSION or image.shape[1] > MAX_IMAGE_DIMENSION:
+            raise SkipFile(f"image dimensions exceed safety limits: {image.shape[:2]}")
         if stats is not None:
             stats.update(source_frames_read=1, height=image.shape[0], width=image.shape[1])
         yield Frame(index=0, timestamp=0.0, image=image)
@@ -89,7 +98,7 @@ def extract_frames(clip_path: Path, target_fps: float = 3.0, stats: dict | None 
 
     cap = cv2.VideoCapture(str(clip_path))
     if not cap.isOpened():
-        raise ValueError(f"Could not open clip: {clip_path}")
+        raise SkipFile(f"Could not open clip: {clip_path}")
 
     try:
         src_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0

@@ -52,6 +52,20 @@ def test_tile_fragment_pair_misaligned_not_merged():
     assert _is_tile_fragment_pair(a, b) is False
 
 
+def test_tile_fragment_pair_away_from_seams_not_merged():
+    """Two birds side-by-side with tiny gap at x=500 (not on a tile seam) should NOT merge."""
+    left_bird = (400, 500, 90, 200)     # x∈[400,490]
+    right_bird = (500, 500, 90, 200)    # x∈[500,590], gap is 10px, aligned in y, but far from seams
+    assert _is_tile_fragment_pair(left_bird, right_bird) is False
+
+
+def test_tile_fragment_pair_vertical_away_from_seams_not_merged():
+    """Two birds stacked with tiny gap at y=500 (not on a tile seam) should NOT merge."""
+    top_bird = (500, 400, 200, 90)      # y∈[400,490]
+    bottom_bird = (500, 500, 200, 90)   # y∈[500,590], gap is 10px, aligned in x, but far from seams
+    assert _is_tile_fragment_pair(top_bird, bottom_bird) is False
+
+
 def test_nmm_merges_overlapping_duplicates_into_union():
     """A fully-detected bird in tile A and a partial duplicate in tile B's overlap zone
     should merge into the union bbox (not just drop the lower-confidence one)."""

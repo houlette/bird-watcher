@@ -223,8 +223,9 @@ def _process_pending() -> None:
                 visit.processing_error = f"skipped: {skip}"[:500]
                 db.commit()
             except Exception as exc:  # noqa: BLE001
-                # Transient error — leave processed_at NULL so the next tick
-                # retries. CRITICAL: roll back first. process_visit adds and
+                # Transient error — retry up to 3 times before abandoning so a poison-pill
+                # clip doesn't deadlock the newest-first queue forever.
+                # CRITICAL: roll back first. process_visit adds and
                 # flushes Detection rows into THIS session mid-loop; without a
                 # rollback, the commit below would persist those partial rows
                 # while processed_at stays NULL, so every retry tick appends a
@@ -233,7 +234,14 @@ def _process_pending() -> None:
                 # detections so only the processing_error is recorded.
                 db.rollback()
                 log.exception("Visit %d failed", visit.id)
-                visit.processing_error = str(exc)[:500]
+                current_retries = (visit.retry_count or 0) + 1
+                visit.retry_count = current_retries
+                if current_retries >= 3:
+                    log.error("Visit %d exceeded retry limit (%d attempts); marking failed and moving on", visit.id, current_retries)
+                    visit.processed_at = utcnow()
+                    visit.processing_error = f"failed after {current_retries} attempts: {exc}"[:500]
+                else:
+                    visit.processing_error = f"attempt {current_retries} failed: {exc}"[:500]
                 db.commit()
             finally:
                 check_and_trim_memory()

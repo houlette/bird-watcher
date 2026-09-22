@@ -101,6 +101,8 @@ class Visit(Base):
     # that ran through process_visit, NULL for skips and for rows processed
     # before 2026-09-14.
     timings: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Failed processing attempts to break deadlocks from poison-pill inputs.
+    retry_count: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
 
     detections: Mapped[list["Detection"]] = relationship(back_populates="visit", cascade="all, delete-orphan")
 

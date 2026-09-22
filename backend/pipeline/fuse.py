@@ -82,14 +82,16 @@ def _audio_species_set(db: Session, when: datetime) -> set[str]:
 #
 # Months are 1-indexed. Keys must match the classifier's label strings; only
 # the species we feel confident about are listed. Unlisted species get 1.0.
+# We use a floor of 0.02 instead of 0.0 so Cromwell's rule holds: overwhelming visual
+# or audio evidence for an unexpected vagrant / overwintering bird is never zeroed out.
 _SEASONAL_PRIORS: dict[str, dict[int, float]] = {
     "Dark-eyed Junco": {
         1: 2.0, 2: 2.0, 3: 1.5, 4: 0.5, 5: 0.1, 6: 0.1,
         7: 0.1, 8: 0.1, 9: 0.5, 10: 1.5, 11: 2.0, 12: 2.0,
     },
     "Ruby-throated Hummingbird": {
-        1: 0.0, 2: 0.0, 3: 0.1, 4: 1.0, 5: 2.0, 6: 2.0,
-        7: 2.0, 8: 2.0, 9: 1.5, 10: 0.3, 11: 0.0, 12: 0.0,
+        1: 0.02, 2: 0.02, 3: 0.1, 4: 1.0, 5: 2.0, 6: 2.0,
+        7: 2.0, 8: 2.0, 9: 1.5, 10: 0.3, 11: 0.02, 12: 0.02,
     },
     "American Goldfinch": {
         1: 1.0, 2: 1.0, 3: 1.0, 4: 1.2, 5: 1.5, 6: 1.5,
@@ -100,8 +102,8 @@ _SEASONAL_PRIORS: dict[str, dict[int, float]] = {
         7: 0.1, 8: 0.1, 9: 0.5, 10: 1.3, 11: 1.5, 12: 1.5,
     },
     "Baltimore Oriole": {
-        1: 0.0, 2: 0.0, 3: 0.1, 4: 1.0, 5: 2.0, 6: 1.5,
-        7: 1.0, 8: 0.5, 9: 0.2, 10: 0.0, 11: 0.0, 12: 0.0,
+        1: 0.02, 2: 0.02, 3: 0.1, 4: 1.0, 5: 2.0, 6: 1.5,
+        7: 1.0, 8: 0.5, 9: 0.2, 10: 0.02, 11: 0.02, 12: 0.02,
     },
 }
 
@@ -185,5 +187,10 @@ def fuse(
     if total > 0:
         for s in scored:
             s.probability /= total
+    elif scored:
+        # Fallback to uniform distribution if all candidates collapsed to zero probability
+        uniform = 1.0 / len(scored)
+        for s in scored:
+            s.probability = uniform
     scored.sort(key=lambda s: s.probability, reverse=True)
     return scored

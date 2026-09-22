@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     haikubox_api_key: str = os.getenv("HAIKUBOX_API_KEY", "")
     haikubox_serial: str = os.getenv("HAIKUBOX_SERIAL", "")
 
+    # Optional pre-shared token for camera HTTP ingest push (/api/ingest/motion).
+    # If empty, ingestion is unauthenticated for backward compatibility.
+    ingest_auth_token: str = os.getenv("INGEST_AUTH_TOKEN", "")
+
     # The classifier is allowed up to this many seconds of look-back into audio
     # detections before visit.started_at to count a bird as "audio-confirmed."
     audio_correlation_window_seconds: int = 90
