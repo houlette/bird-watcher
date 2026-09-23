@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from db.models import Detection, Species, Visit
+from db.models import Detection, HaikuboxDetection, Species, Visit
 from db.session import Base, get_db
 from main import app
 from settings import settings
@@ -227,4 +227,98 @@ def test_daily_story_filters_unconfirmed_low_confidence_rarity(client, db_sessio
     highlight_species = [h["common_name"] for h in data["species_highlights"]]
     assert "Northern Cardinal" in highlight_species
     assert "Inca Dove" not in highlight_species
+
+
+def test_diversity_feed_allows_recent_audio_species_even_if_low_conf(client, db_session, monkeypatch):
+    """If Haikubox heard the species in the past month, it is accepted in Diversity-First mode even if 1-off < 0.60."""
+    monkeypatch.setattr(settings, "camera_timezone", "America/New_York")
+    monkeypatch.setattr(settings, "haikubox_api_key", "fake")
+    monkeypatch.setattr(settings, "haikubox_serial", "fake")
+
+    cardinal = Species(common_name="Northern Cardinal", scientific_name="Cardinalis cardinalis", is_rare=False)
+    inca_dove = Species(common_name="Inca Dove", scientific_name="Columbina inca", is_rare=True)
+    db_session.add_all([cardinal, inca_dove])
+    db_session.commit()
+
+    from db.utils import utcnow
+    t = utcnow()
+    v = Visit(started_at=t, clip_path="clips/v.mp4")
+    db_session.add(v)
+    db_session.commit()
+
+    # Audio detection 2 days before the visit
+    audio = HaikuboxDetection(
+        species_common_name="Inca Dove",
+        detected_at=t - timedelta(days=2),
+        confidence=0.88,
+    )
+    db_session.add(audio)
+    db_session.commit()
+
+    d_card = Detection(
+        visit_id=v.id, species_id=cardinal.id, confidence=0.92,
+        sharpness=300.0, crop_area_px=1500, bbox=[0, 0, 10, 10], track_id=1,
+        crop_path="crops/card.jpg", raw_predictions=[], audio_confirmed=False, created_at=t,
+    )
+    # 1-off Inca Dove with conf 0.45 and synchronous audio_confirmed=False
+    d_inca = Detection(
+        visit_id=v.id, species_id=inca_dove.id, confidence=0.45,
+        sharpness=500.0, crop_area_px=1200, bbox=[0, 0, 10, 10], track_id=2,
+        crop_path="crops/inca.jpg", raw_predictions=[], audio_confirmed=False, created_at=t,
+    )
+    db_session.add_all([d_card, d_inca])
+    db_session.commit()
+
+    res = client.get("/api/detections?diversity=true")
+    assert res.status_code == 200
+    items = res.json()
+    species_in_feed = [item["species"] for item in items]
+    assert "Northern Cardinal" in species_in_feed
+    assert "Inca Dove" in species_in_feed
+
+
+def test_daily_story_allows_recent_audio_species_in_highlights(client, db_session, monkeypatch):
+    """If Haikubox heard the species recently, it is eligible for highlights even with 1-off conf < 0.60."""
+    monkeypatch.setattr(settings, "camera_timezone", "America/New_York")
+    monkeypatch.setattr(settings, "haikubox_api_key", "fake")
+    monkeypatch.setattr(settings, "haikubox_serial", "fake")
+
+    cardinal = Species(common_name="Northern Cardinal", scientific_name="Cardinalis cardinalis", is_rare=False)
+    inca_dove = Species(common_name="Inca Dove", scientific_name="Columbina inca", is_rare=True)
+    db_session.add_all([cardinal, inca_dove])
+    db_session.commit()
+
+    t = datetime(2026, 7, 10, 10, 0, 0)
+    v = Visit(started_at=t, clip_path="clips/v.mp4")
+    db_session.add(v)
+    db_session.commit()
+
+    # Heard yesterday
+    audio = HaikuboxDetection(
+        species_common_name="Inca Dove",
+        detected_at=t - timedelta(days=1),
+        confidence=0.88,
+    )
+    db_session.add(audio)
+    db_session.commit()
+
+    d_card = Detection(
+        visit_id=v.id, species_id=cardinal.id, confidence=0.85,
+        sharpness=300.0, crop_area_px=1500, bbox=[0, 0, 10, 10], track_id=1,
+        crop_path="crops/card.jpg", raw_predictions=[], audio_confirmed=False, created_at=t,
+    )
+    d_inca = Detection(
+        visit_id=v.id, species_id=inca_dove.id, confidence=0.45,
+        sharpness=900.0, crop_area_px=1200, bbox=[0, 0, 10, 10], track_id=2,
+        crop_path="crops/inca.jpg", raw_predictions=[], audio_confirmed=False, created_at=t,
+    )
+    db_session.add_all([d_card, d_inca])
+    db_session.commit()
+
+    res = client.get("/api/detections/daily_story?target_date=2026-07-10")
+    assert res.status_code == 200
+    data = res.json()
+    highlight_species = [h["common_name"] for h in data["species_highlights"]]
+    assert "Inca Dove" in highlight_species
+
 

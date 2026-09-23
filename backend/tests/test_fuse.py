@@ -209,4 +209,44 @@ def test_out_of_range_audio_confirmed_wins(db, monkeypatch):
     fused = fuse([("Inca Dove", 0.45), ("Mourning Dove", 0.35)], db=db, when=now)
     assert fused[0].species == "Inca Dove"
     assert fused[0].audio_confirmed is True
+    assert fused[0].audio_recent is True
+
+
+def test_recent_audio_presence_lifts_vagrant_downweight_without_sync_badge(db, monkeypatch):
+    """If heard 5 days ago (or earlier today), vagrant penalty is lifted (vagrant_mult = 1.0),
+    but audio_confirmed remains False so the UI does not display the 90s audio badge."""
+    monkeypatch.setattr("pipeline.fuse.settings.haikubox_api_key", "fake")
+    monkeypatch.setattr("pipeline.fuse.settings.haikubox_serial", "fake")
+    now = datetime(2026, 5, 10, 12, 0, 0)
+    # Heard 5 days ago by Haikubox
+    db.add(HaikuboxDetection(species_common_name="Inca Dove", detected_at=now - timedelta(days=5)))
+    db.commit()
+
+    fused = fuse([("Inca Dove", 0.45), ("Mourning Dove", 0.35)], db=db, when=now)
+    # Inca Dove @ 0.45 is NOT penalized 20x, so it stays ahead of Mourning Dove @ 0.35
+    assert fused[0].species == "Inca Dove"
+    assert fused[0].probability > fused[1].probability
+    # UI badge is strictly synchronous (False here)
+    assert fused[0].audio_confirmed is False
+    # But broad audio presence is True
+    assert fused[0].audio_recent is True
+
+
+def test_get_recent_audio_species_window(db, monkeypatch):
+    from pipeline.fuse import get_recent_audio_species
+    monkeypatch.setattr("pipeline.fuse.settings.haikubox_api_key", "fake")
+    monkeypatch.setattr("pipeline.fuse.settings.haikubox_serial", "fake")
+    now = datetime(2026, 5, 15, 12, 0, 0)
+    # Within 30 days
+    db.add(HaikuboxDetection(species_common_name="Blue Jay", detected_at=now - timedelta(days=2)))
+    db.add(HaikuboxDetection(species_common_name="Scarlet Tanager", detected_at=now - timedelta(days=29)))
+    # Beyond 30 days
+    db.add(HaikuboxDetection(species_common_name="Snowy Owl", detected_at=now - timedelta(days=35)))
+    db.commit()
+
+    recent = get_recent_audio_species(db, when=now, days=30)
+    assert "Blue Jay" in recent
+    assert "Scarlet Tanager" in recent
+    assert "Snowy Owl" not in recent
+
 

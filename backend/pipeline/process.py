@@ -461,7 +461,12 @@ def process_visit(visit: Visit, db: Session) -> int:
         # the same pixels the species classifier did.
         nab_p_single = nab_p_polished = None
         top_visual_p = averaged[0].probability if averaged else 0.0
-        is_audio_confirmed = bool(getattr(top, "audio_confirmed", False))
+        is_audio_sync = bool(getattr(top, "audio_confirmed", False))
+        is_audio_recent = bool(getattr(top, "audio_recent", False))
+        # Liberal audio confirmation for gating & confidence floor:
+        # any species heard today or in the past month counts as confirmed.
+        # The 90s window is preserved for the synchronous UI badge on this specific crop.
+        is_audio_confirmed = is_audio_sync or is_audio_recent
 
         if binary_filter_enabled() and top.species != NOT_A_BIRD_LABEL:
             filter_crop = fused_crop_image if _USE_MULTI_FRAME_FUSION else best.crop
@@ -524,7 +529,7 @@ def process_visit(visit: Visit, db: Session) -> int:
                     should_demote = True
                     demote_reason = f"weak visual confidence with audio confirmation ({top_visual_p:.2f} < 0.20)"
             else:
-                regional = is_regional_species(top.species)
+                regional = is_regional_species(top.species, db=db, when=visit.started_at)
                 if regional and top_visual_p < 0.35:
                     should_demote = True
                     demote_reason = f"weak visual confidence for regional species {top.species} ({top_visual_p:.2f} < 0.35) without audio"
@@ -551,6 +556,7 @@ def process_visit(visit: Visit, db: Session) -> int:
                     "raw": raw_labels.get(f.species, ""),
                     "p": f.probability,
                     "audio": f.audio_confirmed,
+                    "audio_recent": f.audio_recent,
                 }
                 for f in fused
             ],

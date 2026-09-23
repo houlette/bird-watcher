@@ -415,6 +415,26 @@ def test_tiered_confidence_floor_demotions(db, tmp_path, monkeypatch):
         assert d5.species is not None
         assert d5.species.common_name == "Inca Dove"
         assert bool(d5.audio_confirmed) is True
+
+        # 6. Broad audio presence (heard today/month, audio_recent=True) without sync match (audio_confirmed=False)
+        # Accepted down to 0.20 floor, but audio_confirmed column remains False (no 90s badge).
+        session.query(Detection).delete()
+        session.commit()
+        monkeypatch.setattr(
+            process_module, "classify_bird",
+            lambda _img: [SpeciesPrediction(species="Inca Dove", probability=0.25, raw_label="Inca Dove")],
+        )
+        monkeypatch.setattr(
+            process_module, "fuse",
+            lambda preds, **_k: [FusedPrediction(species=preds[0][0], probability=preds[0][1], audio_confirmed=False, seasonal_boost=1.0, audio_recent=True)],
+        )
+        process_module.process_visit(visit, session)
+        d6 = session.query(Detection).filter_by(visit_id=visit.id).first()
+        assert d6.species is not None
+        assert d6.species.common_name == "Inca Dove"
+        assert d6.confidence == 0.25
+        assert bool(d6.audio_confirmed) is False
     finally:
         session.close()
+
 

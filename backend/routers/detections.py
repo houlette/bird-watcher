@@ -19,6 +19,7 @@ from db.models import (
     Visit,
 )
 from db.session import get_db
+from pipeline.fuse import get_recent_audio_species
 from pipeline.process import CROPS_DIR
 from settings import settings
 
@@ -161,11 +162,23 @@ async def list_detections(
         )
         if species_id is None and species_name is None:
             # Diversity-First feed guard: suppress 1-off unconfirmed sightings
-            # with low confidence (< 0.60) from dominating the feed
+            # with low confidence (< 0.60) from dominating the feed.
+            # Liberal audio confirmation: species heard today or in the past
+            # month count as confirmed and are included.
+            recent_audio = get_recent_audio_species(db)
+            recent_sp_ids = (
+                {row[0] for row in db.query(Species.id).filter(Species.common_name.in_(recent_audio)).all()}
+                if recent_audio
+                else set()
+            )
+            audio_cond = Detection.audio_confirmed.is_(True)
+            if recent_sp_ids:
+                audio_cond = or_(audio_cond, Detection.species_id.in_(recent_sp_ids))
+
             q = q.filter(
                 or_(
                     ranked_sub.c.daily_count > 1,
-                    Detection.audio_confirmed.is_(True),
+                    audio_cond,
                     Detection.confidence >= 0.60,
                 )
             )
@@ -413,6 +426,7 @@ async def get_daily_story(
             if fallback_target != target:
                 fallback_date = fallback_target.isoformat()
                 fb_start, fb_end = _local_day_bounds(fallback_target)
+                start_utc, end_utc = fb_start, fb_end
                 dets = (
                     db.query(Detection)
                     .join(Visit, Detection.visit_id == Visit.id)
@@ -444,13 +458,16 @@ async def get_daily_story(
             species_map[d.species_id].append(d)
 
     resident_names = {"Mourning Dove", "Rock Pigeon", "House Sparrow", "Sparrow"}
+    recent_audio = get_recent_audio_species(db, when=end_utc)
 
     def _score_det(d: Detection) -> float:
         conf = d.confidence or 0.0
         sharp_norm = min((d.sharpness or 0.0) / 1000.0, 1.0)
-        is_res = bool(d.species and d.species.common_name in resident_names)
+        sp_name = d.species.common_name if d.species else ""
+        is_res = bool(sp_name in resident_names)
+        is_audio = bool(d.audio_confirmed) or (sp_name in recent_audio)
         # Rarity bonus is only earned by reliable sightings (high confidence or audio confirmed)
-        if not is_res and (conf >= 0.70 or d.audio_confirmed):
+        if not is_res and (conf >= 0.70 or is_audio):
             rarity_bonus = 0.20
         elif is_res:
             rarity_bonus = 0.05
@@ -461,7 +478,7 @@ async def get_daily_story(
     # Eligible hero candidate pool: require confidence >= 0.60 or audio confirmation to be eligible
     eligible_hero_dets = [
         d for d in dets
-        if d.audio_confirmed or (d.confidence or 0.0) >= 0.60
+        if d.audio_confirmed or ((d.species.common_name if d.species else "") in recent_audio) or (d.confidence or 0.0) >= 0.60
     ]
     hero_det = max(eligible_hero_dets or dets, key=_score_det)
 
@@ -470,7 +487,7 @@ async def get_daily_story(
         best = max(group, key=lambda d: (d.confidence, (d.sharpness or 0) * (d.crop_area_px or 0)))
         sp_name = best.species.common_name if best.species else "Unknown"
         is_res = sp_name in resident_names
-        is_audio = any(d.audio_confirmed for d in group)
+        is_audio = any(d.audio_confirmed for d in group) or (sp_name in recent_audio)
         # Guard against 1-off unconfirmed non-resident low confidence sightings in the highlights gallery
         if not is_res and not is_audio and len(group) == 1 and (best.confidence or 0.0) < 0.60:
             continue

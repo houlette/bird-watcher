@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     # the visit and immediate departure, as well as minor camera NTP clock skew.
     audio_correlation_lookahead_seconds: int = 30
 
+    # Look-back days for liberal Haikubox presence confirmation (e.g. heard in past month).
+    # Species heard calling in the yard within this window are treated as confirmed yard visitors.
+    audio_presence_window_days: int = int(os.getenv("AUDIO_PRESENCE_WINDOW_DAYS", "30"))
+
     # Bird species classifier (HuggingFace transformers image-classification).
     # Default: dennisjooo/Birds-Classifier-EfficientNetB2 (525-class gpiosenka
     # dataset), post-filtered to an eastern-NA backyard species allow-list

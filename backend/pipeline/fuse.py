@@ -50,17 +50,19 @@ AUDIO_FLOOR = 1.0
 class FusedPrediction:
     species: str
     probability: float
-    audio_confirmed: bool
+    audio_confirmed: bool  # Simultaneous match (90s window) for UI badge
     seasonal_boost: float  # 1.0 means no effect
     size_mult: float = 1.0  # 1.0 means no effect (no size calibration / unknown species)
+    audio_recent: bool = False  # Heard today or in past month (liberal presence confirmation)
 
 
 def _audio_species_set(db: Session, when: datetime) -> set[str]:
-    """Common names heard by the Haikubox within the correlation window.
+    """Common names heard by the Haikubox within the synchronous correlation window.
 
     Spans [when - lookback, when + lookahead]. Covers pre-visit approach, the
     duration of the video clip (~20s), immediate post-visit departure, and
     minor clock drift between camera NTP and Haikubox cloud clock.
+    This window determines the UI audio badge on the detection card.
     """
     window_start = when - timedelta(seconds=settings.audio_correlation_window_seconds)
     window_end = when + timedelta(seconds=settings.audio_correlation_lookahead_seconds)
@@ -72,6 +74,40 @@ def _audio_species_set(db: Session, when: datetime) -> set[str]:
         .all()
     )
     return {row[0] for row in rows}
+
+
+_recent_audio_cache: dict[tuple[int, int, str], tuple[float, set[str]]] = {}
+
+
+def get_recent_audio_species(db: Session, when: datetime | None = None, days: int | None = None) -> set[str]:
+    """Common names heard by the Haikubox today or in the past `days` (default 30).
+
+    Spans [when - days, when + 1 hour]. This is our liberal audio confirmation window:
+    if a species has called in the yard recently (e.g. today or in the past month),
+    it is confirmed present in the immediate habitat and treated as an in-range yard visitor.
+    """
+    if not (settings.haikubox_serial and settings.haikubox_api_key):
+        return set()
+    days = days if days is not None else getattr(settings, "audio_presence_window_days", 30)
+    when = when or utcnow()
+    since = when - timedelta(days=days)
+    cache_key = (id(db), days, when.date().isoformat())
+    import time
+    now_mono = time.monotonic()
+    cached = _recent_audio_cache.get(cache_key)
+    if cached is not None and (now_mono - cached[0] < 60.0):
+        return cached[1]
+
+    rows = (
+        db.query(HaikuboxDetection.species_common_name)
+        .filter(HaikuboxDetection.detected_at >= since)
+        .filter(HaikuboxDetection.detected_at <= when + timedelta(hours=1))
+        .distinct()
+        .all()
+    )
+    result = {row[0] for row in rows}
+    _recent_audio_cache[cache_key] = (now_mono, result)
+    return result
 
 
 # Seasonal priors: a rough monthly multiplier for common eastern-NA backyard
@@ -184,13 +220,19 @@ def get_regional_species() -> set[str]:
     return res
 
 
-def is_regional_species(species: str | None) -> bool:
-    """True if species is in the yard calibration or curated Eastern-NA baseline."""
+def is_regional_species(species: str | None, db: Session | None = None, when: datetime | None = None) -> bool:
+    """True if species is in the yard calibration, recent audio presence, or curated Eastern-NA baseline."""
     if not species:
         return False
     from pipeline.classify import _hyphen_insensitive
     norm = _hyphen_insensitive(species)
-    return norm in get_regional_species() or norm in COMMON_FAMILY_LABELS
+    if norm in get_regional_species() or norm in COMMON_FAMILY_LABELS:
+        return True
+    if db is not None:
+        recent = get_recent_audio_species(db, when=when)
+        if any(_hyphen_insensitive(s) == norm for s in recent):
+            return True
+    return False
 
 
 # Alias for backward compatibility
@@ -215,7 +257,9 @@ def fuse(
     Returns a list of FusedPrediction sorted by posterior probability desc.
     """
     when = when or utcnow()
-    audio_heard = _audio_species_set(db, when) if (settings.haikubox_serial and settings.haikubox_api_key) else set()
+    has_haikubox = bool(settings.haikubox_serial and settings.haikubox_api_key)
+    audio_heard_sync = _audio_species_set(db, when) if has_haikubox else set()
+    audio_heard_recent = get_recent_audio_species(db, when=when) if has_haikubox else set()
     month = when.month
 
     # `pipeline.size_prior.size_multiplier()` handles aspect-ratio gating
@@ -224,21 +268,26 @@ def fuse(
 
     scored: list[FusedPrediction] = []
     for species, p_visual in predictions:
-        audio_mult = AUDIO_BOOST if species in audio_heard else AUDIO_FLOOR
+        in_sync = species in audio_heard_sync
+        in_recent = species in audio_heard_recent
+        audio_mult = AUDIO_BOOST if in_sync else AUDIO_FLOOR
         seasonal_mult = _seasonal_multiplier(species, month)
         size_mult = size_prior.size_multiplier(species, bbox_for_prior) if bbox_for_prior else 1.0
-        # Exotic / vagrant downweight: species not in the regional baseline or yard calibration
-        # (e.g. Inca Dove, White-winged Dove, Harris's Sparrow, Phainopepla) receive a 20x penalty (0.05)
-        # unless audio-confirmed by Haikubox.
-        vagrant_mult = 1.0 if (species in audio_heard or is_regional_species(species)) else 0.05
+        # Exotic / vagrant downweight: liberal audio confirmation.
+        # If the species was heard synchronously (90s window), OR heard in the yard
+        # today/past month, OR is in the regional baseline: no vagrant downweight (vagrant_mult = 1.0).
+        # Only species that are completely unconfirmed by audio AND out of range receive the 20x penalty.
+        is_allowed = in_sync or in_recent or is_regional_species(species)
+        vagrant_mult = 1.0 if is_allowed else 0.05
         posterior = p_visual * audio_mult * seasonal_mult * size_mult * vagrant_mult
         scored.append(
             FusedPrediction(
                 species=species,
                 probability=posterior,
-                audio_confirmed=species in audio_heard,
+                audio_confirmed=in_sync,  # Synchronous 90s window ONLY for UI badge
                 seasonal_boost=seasonal_mult,
                 size_mult=size_mult,
+                audio_recent=in_recent,  # Heard today or in past month
             )
         )
 
