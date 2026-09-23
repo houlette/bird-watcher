@@ -565,6 +565,122 @@ def compute_species_activity(db: Session) -> dict:
     return {"tz": settings.camera_timezone, "species": species}
 
 
+def compute_feeder_behavior(db: Session) -> dict:
+    """Behavioral and plumage analytics: dwell times, sex ratios, and pair sightings."""
+    from collections import defaultdict
+    import statistics
+    from pipeline.dimorphism import DIMORPHIC_SPECIES
+
+    # Query detections with frames, sex, and visit timestamp
+    rows = (
+        db.query(
+            Detection.id,
+            Detection.visit_id,
+            Detection.species_id,
+            Species.common_name,
+            Species.scientific_name,
+            Detection.sex,
+            Detection.crop_path,
+            Visit.started_at,
+            func.coalesce(func.json_array_length(Detection.track_frames), func.json_array_length(Detection.track_bboxes), 3),
+        )
+        .join(Visit, Detection.visit_id == Visit.id)
+        .join(Species, Detection.species_id == Species.id)
+        .filter(~Species.common_name.in_(SENTINEL_LABELS))
+        .all()
+    )
+
+    species_dwell: dict[str, list[float]] = defaultdict(list)
+    species_info: dict[str, dict] = {}
+    visit_sex_map: dict[tuple[int, str], set[str]] = defaultdict(set)
+    visit_crops: dict[tuple[int, str], list[dict]] = defaultdict(list)
+    dimorphic_counts: dict[str, dict[str, int]] = defaultdict(lambda: {"male": 0, "female": 0, "unspecified": 0})
+
+    for det_id, v_id, sp_id, name, sci, sex, crop_path, started_at, frames in rows:
+        duration_s = max(float(frames) / 3.0, 0.5)
+        species_dwell[name].append(duration_s)
+        if name not in species_info:
+            species_info[name] = {"species_id": sp_id, "common_name": name, "scientific_name": sci}
+
+        if name in DIMORPHIC_SPECIES:
+            if sex in ("male", "female"):
+                dimorphic_counts[name][sex] += 1
+                visit_sex_map[(v_id, name)].add(sex)
+                visit_crops[(v_id, name)].append({
+                    "detection_id": det_id,
+                    "crop_url": f"/media/{crop_path}",
+                    "sex": sex,
+                    "started_at": started_at.isoformat() if started_at else None,
+                })
+            else:
+                dimorphic_counts[name]["unspecified"] += 1
+
+    # Dwell time rankings (species with >= 5 detections)
+    dwell_rankings = []
+    for name, times in species_dwell.items():
+        if len(times) >= 5:
+            avg_d = round(sum(times) / len(times), 1)
+            med_d = round(statistics.median(times), 1)
+            if avg_d < 1.2:
+                style = "Quick Forager"
+            elif avg_d <= 2.0:
+                style = "Active Feeder"
+            else:
+                style = "Tray Sitter"
+            dwell_rankings.append({
+                "species": name,
+                "scientific_name": species_info[name]["scientific_name"],
+                "avg_seconds": avg_d,
+                "median_seconds": med_d,
+                "sample_count": len(times),
+                "style": style,
+            })
+    dwell_rankings.sort(key=lambda d: d["avg_seconds"])
+
+    # Pair sightings
+    pair_counts: dict[str, int] = defaultdict(int)
+    pair_highlights: list[dict] = []
+    for (v_id, sp_name), sexes in visit_sex_map.items():
+        if "male" in sexes and "female" in sexes:
+            pair_counts[sp_name] += 1
+            crops = visit_crops.get((v_id, sp_name), [])
+            started_at = crops[0]["started_at"] if crops else None
+            pair_highlights.append({
+                "visit_id": v_id,
+                "species": sp_name,
+                "started_at": started_at,
+                "crops": crops,
+            })
+    pair_highlights.sort(key=lambda p: p["started_at"] or "", reverse=True)
+    pair_highlights = pair_highlights[:10]
+
+    # Format dimorphic results
+    dimorphic_results = []
+    for sp_name in DIMORPHIC_SPECIES:
+        counts = dimorphic_counts.get(sp_name, {"male": 0, "female": 0, "unspecified": 0})
+        m = counts["male"]
+        f = counts["female"]
+        total_classified = m + f
+        m_pct = round((m / total_classified) * 100) if total_classified > 0 else 0
+        f_pct = round((f / total_classified) * 100) if total_classified > 0 else 0
+        dimorphic_results.append({
+            "species": sp_name,
+            "male": m,
+            "female": f,
+            "unspecified": counts["unspecified"],
+            "male_pct": m_pct,
+            "female_pct": f_pct,
+            "pair_visits": pair_counts.get(sp_name, 0),
+        })
+    dimorphic_results.sort(key=lambda r: -(r["male"] + r["female"] + r["unspecified"]))
+
+    return {
+        "dimorphic_species": dimorphic_results,
+        "dwell_rankings": dwell_rankings,
+        "pair_highlights": pair_highlights,
+    }
+
+
 def serialize_daily(row: PipelineStatsDaily) -> dict:
     """Convert a PipelineStatsDaily row (saved or unsaved) to the JSON
     shape the /api/stats endpoint returns."""

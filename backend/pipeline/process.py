@@ -546,10 +546,20 @@ def process_visit(visit: Visit, db: Session) -> int:
                     seasonal_boost=1.0,
                 )
 
+        # Plumage / sex dimorphism: classify sex for dimorphic species
+        bird_sex = None
+        if top.species and top.species != NOT_A_BIRD_LABEL:
+            from pipeline.dimorphism import classify_sex, is_dimorphic_species
+            if is_dimorphic_species(top.species):
+                target_crop = best.crop if best.crop is not None else fused_crop_image
+                sex_res = classify_sex(target_crop, top.species)
+                bird_sex = sex_res.sex
+
         pending.append({
             "species_name": top.species,
             "confidence": top.probability,
             "yolo_confidence": float(best.confidence),
+            "sex": bird_sex,
             "raw_predictions": [
                 {
                     "species": f.species,

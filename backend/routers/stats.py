@@ -10,6 +10,7 @@ from db.models import PipelineStatsDaily
 from db.session import get_db
 from pipeline.stats import (
     compute_daily_stats,
+    compute_feeder_behavior,
     compute_global_stats,
     compute_species_activity,
     serialize_daily,
@@ -84,3 +85,18 @@ async def get_species_activity(db: Session = Depends(get_db)) -> dict:
     data = compute_species_activity(db)
     data["as_of"] = datetime.now(timezone.utc).isoformat()
     return data
+
+
+@router.get("/behavior")
+async def get_feeder_behavior(db: Session = Depends(get_db)) -> dict:
+    """Feeder science: plumage dimorphism (sex ratios), pair visits, and dwell times.
+
+    Computes:
+      - Male vs. Female ratios for dimorphic species (Cardinals, Finches, Woodpeckers).
+      - Pair visits (instances where male and female co-occurred at the feeder).
+      - Feeder dwell time rankings (quick grab-and-go vs. long tray sitters).
+    """
+    data = compute_feeder_behavior(db)
+    data["as_of"] = datetime.now(timezone.utc).isoformat()
+    return data
+

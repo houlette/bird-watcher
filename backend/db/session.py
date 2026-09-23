@@ -109,6 +109,8 @@ _ADDITIVE_COLUMNS = [
     # Notification preferences for PushSubscription.
     ("push_subscriptions", "mute_residents", "BOOLEAN DEFAULT 1"),
     ("push_subscriptions", "notify_daily_first", "BOOLEAN DEFAULT 1"),
+    # Plumage / sex dimorphism classification for dimorphic species ("male", "female", or NULL).
+    ("detections", "sex", "VARCHAR"),
 ]
 
 

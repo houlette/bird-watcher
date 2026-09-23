@@ -165,6 +165,11 @@ class Detection(Base):
     # roughly; calibration depends on crop size.
     sharpness: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # Biological sex for sexually dimorphic species ("male", "female", or NULL).
+    # Populated by pipeline.dimorphism.classify_sex() on dimorphic species
+    # (Cardinals, Finches, Woodpeckers, Grosbeaks).
+    sex: Mapped[str | None] = mapped_column(String, nullable=True)
+
     # Non-NULL iff the binary post-filter overrode this detection to
     # "Not a bird", storing the P(NAB) it scored. Lets us audit the
     # filter's precision: this is the cohort of crops it killed, and

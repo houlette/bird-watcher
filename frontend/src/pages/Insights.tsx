@@ -14,6 +14,7 @@ import {
 import { fetchSpeciesActivity, type SpeciesActivity } from "../lib/api";
 import { tip, useTokens } from "../lib/chartTheme";
 import { ChevronIcon } from "../components/FieldIcons";
+import { FeederScience } from "../components/FeederScience";
 
 // ─── Axis label helpers ─────────────────────────────────────────────────────
 // Hour ticks every 3 hours, in friendly 12-hour form ("6a", "12p"). Other
@@ -321,6 +322,8 @@ export default function Insights() {
         <TimeOfDayChart sp={selected} />
         <TimeOfYearChart sp={selected} />
       </div>
+
+      <FeederScience />
 
       <p className="text-xs text-faint">
         Each sighting is one identified bird (a visit with several of the same species counts each

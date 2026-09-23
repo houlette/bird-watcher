@@ -399,7 +399,7 @@ export default function DetectionCard({
           </button>
         </div>
 
-        <div className="mt-1 flex items-center gap-1.5 text-xs text-muted">
+        <div className="mt-1 flex items-center gap-1.5 text-xs text-muted flex-wrap">
           {pct > 0 ? (
             <span
               className={`inline-flex items-center gap-1 font-semibold tnum ${
@@ -424,6 +424,26 @@ export default function DetectionCard({
               AI label
             </span>
           ) : null}
+          {currentDet.sex && (
+            <span
+              className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold leading-none shrink-0 ${
+                currentDet.sex === "male"
+                  ? "bg-sky-500/10 text-sky-700 dark:text-sky-300 border border-sky-500/25"
+                  : "bg-rose-500/10 text-rose-700 dark:text-rose-300 border border-rose-500/25"
+              }`}
+              title={`Plumage classification: ${currentDet.sex === "male" ? "Male" : "Female"}`}
+            >
+              {currentDet.sex === "male" ? "♂ Male" : "♀ Female"}
+            </span>
+          )}
+          {currentDet.is_pair && (
+            <span
+              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold leading-none shrink-0 bg-amber-500/10 text-amber-800 dark:text-amber-300 border border-amber-500/25"
+              title="Pair visit: Both male and female recorded together during this visit"
+            >
+              <span>❤️</span> Pair
+            </span>
+          )}
           <span className="text-faint tnum" title={`Captured: ${captureTime}`}>
             {displayTime}
           </span>
@@ -586,6 +606,29 @@ export default function DetectionCard({
               <div className="flex items-center gap-2 text-leaf font-medium text-xs">
                 <AudioBadge />
                 <span className="text-[11px] text-muted">Heard by Haikubox within 90s</span>
+              </div>
+            )}
+
+            {/* Sex / Plumage Dimorphism */}
+            {currentDet.sex && (
+              <div className="flex items-center justify-between text-xs border-b border-line/40 pb-1.5">
+                <span className="text-[11px] text-muted">Sex / Plumage</span>
+                <span className="font-medium text-ink flex items-center gap-1.5">
+                  <span
+                    className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold leading-none ${
+                      currentDet.sex === "male"
+                        ? "bg-sky-500/10 text-sky-700 dark:text-sky-300 border border-sky-500/25"
+                        : "bg-rose-500/10 text-rose-700 dark:text-rose-300 border border-rose-500/25"
+                    }`}
+                  >
+                    {currentDet.sex === "male" ? "♂ Male" : "♀ Female"}
+                  </span>
+                  {currentDet.is_pair && (
+                    <span className="text-[10px] text-amber-600 dark:text-amber-400 font-semibold">
+                      ❤️ Pair visit
+                    </span>
+                  )}
+                </span>
               </div>
             )}
 

@@ -41,6 +41,9 @@ export type Detection = {
   nab_override_p: number | null;
   // Sighting count when queried in diversity-first mode
   daily_count?: number;
+  // Plumage dimorphism & pair dynamics
+  sex?: "male" | "female" | null;
+  is_pair?: boolean;
   // Computational photography flags
   has_lucky?: boolean;
   has_sr?: boolean;
@@ -358,6 +361,52 @@ export async function fetchSpeciesActivity(): Promise<ActivityResponse> {
   const r = await fetch("/api/stats/activity");
   if (!r.ok) throw new Error(`fetchSpeciesActivity: ${r.status}`);
   return (await r.json()) as ActivityResponse;
+}
+
+export type DimorphicSpeciesStats = {
+  species: string;
+  male: number;
+  female: number;
+  unspecified: number;
+  male_pct: number;
+  female_pct: number;
+  pair_visits: number;
+};
+
+export type DwellRanking = {
+  species: string;
+  scientific_name: string;
+  avg_seconds: number;
+  median_seconds: number;
+  sample_count: number;
+  style: "Quick Forager" | "Active Feeder" | "Tray Sitter";
+};
+
+export type PairCrop = {
+  detection_id: number;
+  crop_url: string;
+  sex: "male" | "female";
+  started_at: string | null;
+};
+
+export type PairHighlight = {
+  visit_id: number;
+  species: string;
+  started_at: string | null;
+  crops: PairCrop[];
+};
+
+export type FeederBehaviorResponse = {
+  dimorphic_species: DimorphicSpeciesStats[];
+  dwell_rankings: DwellRanking[];
+  pair_highlights: PairHighlight[];
+  as_of: string;
+};
+
+export async function fetchFeederBehavior(): Promise<FeederBehaviorResponse> {
+  const r = await fetch("/api/stats/behavior");
+  if (!r.ok) throw new Error(`fetchFeederBehavior: ${r.status}`);
+  return (await r.json()) as FeederBehaviorResponse;
 }
 
 export async function confirmClassifierLabel(detection_id: number) {

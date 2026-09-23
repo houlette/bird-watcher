@@ -313,17 +313,31 @@ async def list_detections(
     corrections_by_det: dict[int, Correction] = {}
     if det_ids:
         for c in db.query(Correction).filter(Correction.detection_id.in_(det_ids)).all():
-            # If a detection somehow has multiple Correction rows (shouldn't
-            # in normal use, but the model allows it), prefer the most
-            # recent — that's what the picker UI would also have written.
-            # Same (created_at, id) ordering as the source-filter subquery
-            # above — the two must agree on which Correction is "current".
             existing = corrections_by_det.get(c.detection_id)
             if existing is None or (
                 (c.created_at or datetime.min, c.id)
                 > (existing.created_at or datetime.min, existing.id)
             ):
                 corrections_by_det[c.detection_id] = c
+
+    # Look up pair sightings (visits with both a male and female of the same species)
+    pair_keys: set[tuple[int, int]] = set()
+    visit_ids = [d.visit_id for d in rows if d.visit_id]
+    if visit_ids:
+        sex_rows = (
+            db.query(Detection.visit_id, Detection.species_id, Detection.sex)
+            .filter(
+                Detection.visit_id.in_(visit_ids),
+                Detection.sex.isnot(None),
+                Detection.species_id.isnot(None),
+            )
+            .all()
+        )
+        visit_sexes: dict[tuple[int, int], set[str]] = defaultdict(set)
+        for vid, spid, s in sex_rows:
+            if s:
+                visit_sexes[(vid, spid)].add(s)
+        pair_keys = {k for k, sexes in visit_sexes.items() if "male" in sexes and "female" in sexes}
 
     return [
         {
@@ -333,6 +347,8 @@ async def list_detections(
             "species_id": d.species_id,
             "species": d.species.common_name if d.species else None,
             "scientific_name": d.species.scientific_name if d.species else None,
+            "sex": d.sex,
+            "is_pair": (d.visit_id, d.species_id) in pair_keys if (d.visit_id and d.species_id) else False,
             # Wikipedia thumbnail surfaced on review-mode cards so the user
             # can compare their crop against a clean reference photo. NULL
             # for sentinels / families / un-fetched species.
@@ -548,6 +564,11 @@ async def get_visit(visit_id: int, db: Session = Depends(get_db)) -> dict:
                 "id": d.id,
                 "species": d.species.common_name if d.species else None,
                 "confidence": d.confidence,
+                "sex": d.sex,
+                "is_pair": any(
+                    o.id != d.id and o.species_id == d.species_id and o.sex and d.sex and o.sex != d.sex
+                    for o in visit.detections
+                ),
                 "audio_confirmed": bool(d.audio_confirmed),
                 "crop_url": f"/media/{d.crop_path}",
                 "track_id": d.track_id,
