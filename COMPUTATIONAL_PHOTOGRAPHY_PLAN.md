@@ -187,3 +187,10 @@ The camera stream presents several physical constraints:
 | Shift-and-Add Super-Res | Shipped | ~25 ms / crop | Sub-pixel phase registration + 2x Lanczos4 + temporal median + MTF restoration | 2026-09-20 | `cd79fa4` |
 | Single-Image Super-Res (FSRCNN) | Shipped | ~2.5 ms / crop | FSRCNN via OpenVINO on Y channel; +47.8% edge contrast gain on crops < 180px | 2026-09-21 | `878df6b` |
 | Synthetic Bokeh | Shipped | ~6.5 ms / crop | Edge-guided optical lens defocus blur + specular highlight discs (< 15 ms target) | 2026-09-21 | - |
+
+---
+
+## 5. Next Frontier
+
+For proposed advanced computational photography, micro-video (cinemagraphs), and behavioral ornithology techniques, see [`FRONTIER_TECHNIQUES.md`](FRONTIER_TECHNIQUES.md).
+
