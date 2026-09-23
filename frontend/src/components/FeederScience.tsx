@@ -1,7 +1,10 @@
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchFeederBehavior, type FeederBehaviorResponse } from "../lib/api";
 
 export function FeederScience() {
+  const [dwellTab, setDwellTab] = useState<"quick" | "sitters">("quick");
+
   const { data, isLoading, error } = useQuery<FeederBehaviorResponse>({
     queryKey: ["feeder-behavior"],
     queryFn: fetchFeederBehavior,
@@ -21,6 +24,19 @@ export function FeederScience() {
   }
 
   const { dimorphic_species, dwell_rankings, pair_highlights } = data;
+
+  const reliableRankings = useMemo(() => {
+    const filtered = dwell_rankings.filter((r) => r.sample_count >= 15);
+    return filtered.length >= 6 ? filtered : dwell_rankings;
+  }, [dwell_rankings]);
+
+  const displayedRankings = useMemo(() => {
+    if (dwellTab === "quick") {
+      return [...reliableRankings].sort((a, b) => a.avg_seconds - b.avg_seconds).slice(0, 7);
+    } else {
+      return [...reliableRankings].sort((a, b) => b.avg_seconds - a.avg_seconds).slice(0, 7);
+    }
+  }, [reliableRankings, dwellTab]);
 
   return (
     <div className="space-y-4 pt-2 border-t border-line/60">
@@ -116,22 +132,54 @@ export function FeederScience() {
               <h3 className="font-serif text-[17px] font-medium text-ink">
                 Feeder Dwell Durations
               </h3>
-              <span className="text-[11px] text-faint">Avg seconds per visit</span>
+              <div className="inline-flex rounded-lg border border-line/60 bg-surface/80 p-0.5 text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => setDwellTab("quick")}
+                  className={`px-2 py-0.5 rounded-md font-medium transition-colors ${
+                    dwellTab === "quick"
+                      ? "bg-leaf/20 text-leaf font-semibold shadow-xs"
+                      : "text-muted hover:text-ink"
+                  }`}
+                >
+                  ⚡ Quickest
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDwellTab("sitters")}
+                  className={`px-2 py-0.5 rounded-md font-medium transition-colors ${
+                    dwellTab === "sitters"
+                      ? "bg-purple-600/20 text-purple-700 dark:text-purple-300 font-semibold shadow-xs"
+                      : "text-muted hover:text-ink"
+                  }`}
+                >
+                  🛋️ Longest
+                </button>
+              </div>
             </div>
             <p className="text-xs text-muted mt-0.5">
-              Measured from video track frames (3 fps clock).
+              {dwellTab === "quick"
+                ? "Fastest grab-and-go foragers (average seconds per visit, ≥15 sightings)."
+                : "Top lingering tray sitters (longest average visit, ≥15 sightings)."}
             </p>
 
             <div className="mt-3 space-y-2">
-              {dwell_rankings.slice(0, 7).map((d) => {
-                const maxDwell = Math.max(...dwell_rankings.map((r) => r.avg_seconds), 3.0);
+              {displayedRankings.map((d) => {
+                const maxDwell = Math.max(...reliableRankings.map((r) => r.avg_seconds), 3.0);
                 const pct = Math.min((d.avg_seconds / maxDwell) * 100, 100);
                 const styleBadgeColor =
                   d.style === "Quick Forager"
                     ? "bg-leaf/10 text-leaf border-leaf/25"
                     : d.style === "Active Feeder"
                       ? "bg-amber-500/10 text-amber-800 dark:text-amber-300 border-amber-500/25"
-                      : "bg-ink/10 text-ink border-ink/20";
+                      : "bg-purple-600/10 text-purple-800 dark:text-purple-300 border-purple-500/25";
+
+                const barColor =
+                  d.style === "Quick Forager"
+                    ? "bg-leaf/70"
+                    : d.style === "Active Feeder"
+                      ? "bg-amber-500/70"
+                      : "bg-purple-600/70 dark:bg-purple-400/70";
 
                 return (
                   <div key={d.species} className="space-y-0.5">
@@ -143,6 +191,9 @@ export function FeederScience() {
                         >
                           {d.style}
                         </span>
+                        <span className="text-[10px] text-faint shrink-0">
+                          ({d.sample_count} visits)
+                        </span>
                       </div>
                       <span className="font-semibold text-ink tnum shrink-0">
                         {d.avg_seconds}s
@@ -151,7 +202,7 @@ export function FeederScience() {
                     <div className="h-1.5 w-full bg-surface rounded-full overflow-hidden border border-line/40">
                       <div
                         style={{ width: `${Math.max(pct, 5)}%` }}
-                        className="h-full bg-leaf/70 rounded-full transition-all duration-500"
+                        className={`h-full ${barColor} rounded-full transition-all duration-500`}
                       />
                     </div>
                   </div>
@@ -161,8 +212,8 @@ export function FeederScience() {
           </div>
 
           <div className="pt-2 border-t border-line/40 text-[11px] text-faint flex justify-between">
-            <span>Darting foragers (&lt;1.2s) vs. Tray sitters (&gt;2.0s)</span>
-            <span className="tnum">{dwell_rankings.length} species profiled</span>
+            <span>Quick (&lt;1.2s) · Active (1.2–2.0s) · Sitter (&gt;2.0s)</span>
+            <span className="tnum">{reliableRankings.length} regular species</span>
           </div>
         </section>
       </div>
