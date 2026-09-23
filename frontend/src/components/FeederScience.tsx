@@ -44,12 +44,10 @@ export function FeederScience() {
     return Array.from(counts.entries()).map(([species, count]) => ({ species, count }));
   })();
 
-  const displayedPairs = (() => {
-    if (pairSpeciesFilter === "all") {
-      return pair_highlights.slice(0, 12);
-    }
-    return pair_highlights.filter((p) => p.species === pairSpeciesFilter);
-  })();
+  const displayedPairs =
+    pairSpeciesFilter === "all"
+      ? pair_highlights
+      : pair_highlights.filter((p) => p.species === pairSpeciesFilter);
 
   return (
     <div className="space-y-4 pt-2 border-t border-line/60">
@@ -244,7 +242,7 @@ export function FeederScience() {
               </p>
             </div>
             <span className="text-xs text-faint tnum">
-              {displayedPairs.length} of {pair_highlights.length} events
+              {displayedPairs.length} event{displayedPairs.length === 1 ? "" : "s"}
             </span>
           </div>
 
