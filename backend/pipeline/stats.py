@@ -644,15 +644,18 @@ def compute_feeder_behavior(db: Session) -> dict:
         if "male" in sexes and "female" in sexes:
             pair_counts[sp_name] += 1
             crops = visit_crops.get((v_id, sp_name), [])
-            started_at = crops[0]["started_at"] if crops else None
+            male_crop = next((c for c in crops if c["sex"] == "male"), None)
+            female_crop = next((c for c in crops if c["sex"] == "female"), None)
+            display_crops = [c for c in (male_crop, female_crop) if c is not None]
+            started_at = display_crops[0]["started_at"] if display_crops else (crops[0]["started_at"] if crops else None)
             pair_highlights.append({
                 "visit_id": v_id,
                 "species": sp_name,
                 "started_at": started_at,
-                "crops": crops,
+                "crops": display_crops,
             })
     pair_highlights.sort(key=lambda p: p["started_at"] or "", reverse=True)
-    pair_highlights = pair_highlights[:10]
+    pair_highlights = pair_highlights[:50]
 
     # Format dimorphic results
     dimorphic_results = []

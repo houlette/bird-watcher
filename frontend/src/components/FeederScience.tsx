@@ -4,6 +4,7 @@ import { fetchFeederBehavior, type FeederBehaviorResponse } from "../lib/api";
 
 export function FeederScience() {
   const [dwellTab, setDwellTab] = useState<"quick" | "sitters">("quick");
+  const [pairSpeciesFilter, setPairSpeciesFilter] = useState<string>("all");
 
   const { data, isLoading, error } = useQuery<FeederBehaviorResponse>({
     queryKey: ["feeder-behavior"],
@@ -34,6 +35,21 @@ export function FeederScience() {
     dwellTab === "quick"
       ? [...reliableRankings].sort((a, b) => a.avg_seconds - b.avg_seconds).slice(0, 7)
       : [...reliableRankings].sort((a, b) => b.avg_seconds - a.avg_seconds).slice(0, 7);
+
+  const pairSpeciesList = (() => {
+    const counts = new Map<string, number>();
+    for (const p of pair_highlights) {
+      counts.set(p.species, (counts.get(p.species) || 0) + 1);
+    }
+    return Array.from(counts.entries()).map(([species, count]) => ({ species, count }));
+  })();
+
+  const displayedPairs = (() => {
+    if (pairSpeciesFilter === "all") {
+      return pair_highlights.slice(0, 12);
+    }
+    return pair_highlights.filter((p) => p.species === pairSpeciesFilter);
+  })();
 
   return (
     <div className="space-y-4 pt-2 border-t border-line/60">
@@ -228,12 +244,42 @@ export function FeederScience() {
               </p>
             </div>
             <span className="text-xs text-faint tnum">
-              {pair_highlights.length} recent event{pair_highlights.length === 1 ? "" : "s"}
+              {displayedPairs.length} of {pair_highlights.length} events
             </span>
           </div>
 
+          {pairSpeciesList.length > 1 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setPairSpeciesFilter("all")}
+                className={`px-2.5 py-0.5 rounded-full text-xs font-medium transition-colors border ${
+                  pairSpeciesFilter === "all"
+                    ? "bg-leaf/20 text-leaf border-leaf/40 font-semibold shadow-xs"
+                    : "border-line/60 bg-surface/50 text-muted hover:text-ink hover:border-line"
+                }`}
+              >
+                All ({pair_highlights.length})
+              </button>
+              {pairSpeciesList.map(({ species, count }) => (
+                <button
+                  key={species}
+                  type="button"
+                  onClick={() => setPairSpeciesFilter(species)}
+                  className={`px-2.5 py-0.5 rounded-full text-xs font-medium transition-colors border ${
+                    pairSpeciesFilter === species
+                      ? "bg-leaf/20 text-leaf border-leaf/40 font-semibold shadow-xs"
+                      : "border-line/60 bg-surface/50 text-muted hover:text-ink hover:border-line"
+                  }`}
+                >
+                  {species} ({count})
+                </button>
+              ))}
+            </div>
+          )}
+
           <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
-            {pair_highlights.map((pair, idx) => (
+            {displayedPairs.map((pair, idx) => (
               <div
                 key={`${pair.visit_id}-${idx}`}
                 className="rounded-lg border border-line/80 bg-surface/60 p-2.5 space-y-2 hover:border-leaf/50 transition-colors"
@@ -246,7 +292,7 @@ export function FeederScience() {
                 </div>
 
                 <div className="grid grid-cols-2 gap-1.5">
-                  {pair.crops.slice(0, 2).map((crop) => (
+                  {pair.crops.map((crop) => (
                     <div
                       key={crop.detection_id}
                       className="relative aspect-square rounded overflow-hidden bg-panel border border-line/60"
