@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchFeederBehavior, type FeederBehaviorResponse } from "../lib/api";
 
@@ -25,18 +25,15 @@ export function FeederScience() {
 
   const { dimorphic_species, dwell_rankings, pair_highlights } = data;
 
-  const reliableRankings = useMemo(() => {
+  const reliableRankings = (() => {
     const filtered = dwell_rankings.filter((r) => r.sample_count >= 15);
     return filtered.length >= 6 ? filtered : dwell_rankings;
-  }, [dwell_rankings]);
+  })();
 
-  const displayedRankings = useMemo(() => {
-    if (dwellTab === "quick") {
-      return [...reliableRankings].sort((a, b) => a.avg_seconds - b.avg_seconds).slice(0, 7);
-    } else {
-      return [...reliableRankings].sort((a, b) => b.avg_seconds - a.avg_seconds).slice(0, 7);
-    }
-  }, [reliableRankings, dwellTab]);
+  const displayedRankings =
+    dwellTab === "quick"
+      ? [...reliableRankings].sort((a, b) => a.avg_seconds - b.avg_seconds).slice(0, 7)
+      : [...reliableRankings].sort((a, b) => b.avg_seconds - a.avg_seconds).slice(0, 7);
 
   return (
     <div className="space-y-4 pt-2 border-t border-line/60">
