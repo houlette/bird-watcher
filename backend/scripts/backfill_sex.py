@@ -7,8 +7,17 @@ populates `sex` with 'male', 'female', or NULL (when ambiguous).
 import argparse
 import logging
 from pathlib import Path
+import sys
+import time
+
+# Ensure backend root is on sys.path for direct script execution
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
 
 import cv2
+from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from db.models import Detection, Species
@@ -18,30 +27,56 @@ from pipeline.dimorphism import DIMORPHIC_SPECIES, classify_sex
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+DATA_DIR = BACKEND_DIR / "data"
 
 
-def backfill_sex(db: Session, dry_run: bool = False, batch_size: int = 200) -> dict[str, int]:
+def commit_updates(db: Session, updates: list[tuple[int, str]]) -> None:
+    if not updates:
+        return
+    for attempt in range(10):
+        try:
+            for det_id, sex in updates:
+                db.execute(
+                    text("UPDATE detections SET sex = :sex WHERE id = :id"),
+                    {"sex": sex, "id": det_id},
+                )
+            db.commit()
+            return
+        except OperationalError as e:
+            db.rollback()
+            if "locked" in str(e).lower() and attempt < 9:
+                time.sleep(0.2 * (attempt + 1))
+                continue
+            raise
+
+
+def backfill_sex(db: Session, dry_run: bool = False, batch_size: int = 100) -> dict[str, int]:
     species_names = list(DIMORPHIC_SPECIES)
     log.info("Querying unclassified detections for dimorphic species: %s", species_names)
 
-    query = (
-        db.query(Detection, Species.common_name)
+    # Fetch rows as plain tuples so no open cursor or ORM session lock is held
+    candidates = (
+        db.query(Detection.id, Species.common_name, Detection.crop_path)
         .join(Species, Detection.species_id == Species.id)
         .filter(Species.common_name.in_(species_names))
         .filter(Detection.sex.is_(None))
         .order_by(Detection.id.desc())
+        .all()
     )
+    # Release read transaction
+    db.commit()
 
-    total_candidates = query.count()
+    total_candidates = len(candidates)
     log.info("Found %d detections awaiting sex classification", total_candidates)
 
     stats = {"male": 0, "female": 0, "ambiguous": 0, "missing_crop": 0, "total": total_candidates}
+    pending_updates: list[tuple[int, str]] = []
     processed = 0
 
-    for det, sp_name in query.yield_per(batch_size):
-        crop_file = DATA_DIR / det.crop_path
-        if not crop_file.exists():
+    for det_id, sp_name, crop_path in candidates:
+        processed += 1
+        crop_file = DATA_DIR / crop_path if crop_path else None
+        if not crop_file or not crop_file.exists():
             stats["missing_crop"] += 1
             continue
 
@@ -54,18 +89,19 @@ def backfill_sex(db: Session, dry_run: bool = False, batch_size: int = 200) -> d
         if res.sex:
             stats[res.sex] += 1
             if not dry_run:
-                det.sex = res.sex
+                pending_updates.append((det_id, res.sex))
         else:
             stats["ambiguous"] += 1
 
-        processed += 1
-        if processed % batch_size == 0:
+        if len(pending_updates) >= batch_size:
             if not dry_run:
-                db.commit()
+                commit_updates(db, pending_updates)
+                pending_updates.clear()
             log.info("Processed %d / %d: %s", processed, total_candidates, stats)
 
-    if not dry_run:
-        db.commit()
+    if not dry_run and pending_updates:
+        commit_updates(db, pending_updates)
+        pending_updates.clear()
 
     log.info("Backfill finished. Result: %s", stats)
     return stats
