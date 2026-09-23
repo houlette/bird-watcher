@@ -39,11 +39,57 @@ export type Detection = {
   // P(NAB) the binary post-filter scored; non-null only when it overrode
   // this crop to "Not a bird". Drives the binary-filter audit feed.
   nab_override_p: number | null;
+  // Sighting count when queried in diversity-first mode
+  daily_count?: number;
   // Computational photography flags
   has_lucky?: boolean;
   has_sr?: boolean;
   has_sisr?: boolean;
 };
+
+export type DailyStoryHero = {
+  id: number;
+  species: string;
+  scientific_name: string;
+  confidence: number;
+  sharpness: number | null;
+  crop_url: string;
+  captured_at: string;
+  reason: string;
+};
+
+export type SpeciesHighlight = {
+  species_id: number;
+  common_name: string;
+  scientific_name: string;
+  count: number;
+  best_detection_id: number;
+  best_crop_url: string;
+  confidence: number;
+  sharpness: number | null;
+  captured_at: string;
+  is_resident: boolean;
+};
+
+export type DailyStory = {
+  date: string;
+  is_today: boolean;
+  has_data: boolean;
+  fallback_date?: string | null;
+  total_visits: number;
+  total_detections: number;
+  species_count: number;
+  hero: DailyStoryHero | null;
+  species_highlights: SpeciesHighlight[];
+};
+
+export async function fetchDailyStory(date?: string): Promise<DailyStory> {
+  const url = new URL("/api/detections/daily_story", window.location.origin);
+  if (date) url.searchParams.set("target_date", date);
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`fetchDailyStory: ${r.status}`);
+  return (await r.json()) as DailyStory;
+}
 
 export type CropVariantsMeta = {
   detection_id: number;
@@ -107,6 +153,7 @@ export async function fetchDetections(params: {
   awaiting_review?: boolean;
   bad_quality?: boolean;
   binary_nab?: boolean;
+  diversity?: boolean;
 } = {}) {
   const url = new URL("/api/detections", window.location.origin);
   if (params.limit) url.searchParams.set("limit", String(params.limit));
@@ -119,6 +166,7 @@ export async function fetchDetections(params: {
   if (params.awaiting_review) url.searchParams.set("awaiting_review", "true");
   if (params.bad_quality) url.searchParams.set("bad_quality", "true");
   if (params.binary_nab) url.searchParams.set("binary_nab", "true");
+  if (params.diversity) url.searchParams.set("diversity", "true");
   const r = await fetch(url);
   if (!r.ok) throw new Error(`fetchDetections: ${r.status}`);
   return (await r.json()) as Detection[];

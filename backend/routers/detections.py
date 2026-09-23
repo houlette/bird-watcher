@@ -1,10 +1,12 @@
 """Read-side API used by the PWA."""
-from datetime import datetime
+from collections import defaultdict
+from datetime import date as _date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from starlette.concurrency import run_in_threadpool
-from sqlalchemy import and_, desc, or_, select
+from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from db.models import (
@@ -16,6 +18,9 @@ from db.models import (
     Species,
     Visit,
 )
+from db.session import get_db
+from pipeline.process import CROPS_DIR
+from settings import settings
 
 # Sentinels we hide from the default feed: things the user has explicitly
 # said are not real-bird-sightings the feed should surface. NAB (false
@@ -24,10 +29,28 @@ from db.models import (
 # IS a real bird, just species-unspecified, and the user wants to see
 # it in the feed.
 HIDDEN_FROM_FEED = frozenset({NOT_A_BIRD_LABEL, POOR_QUALITY_LABEL})
-from db.session import get_db
-from pipeline.process import CROPS_DIR
 
 router = APIRouter()
+
+
+def _tz() -> ZoneInfo:
+    return ZoneInfo(settings.camera_timezone)
+
+
+def _camera_tz_offset_str() -> str:
+    offset = datetime.now(_tz()).strftime("%z")
+    return f"{offset[:3]}:{offset[3:]}"
+
+
+def _local_day_bounds(target: _date) -> tuple[datetime, datetime]:
+    """Naive-UTC half-open bounds [start, end) for one camera-local calendar day."""
+    tz = _tz()
+    start_local = datetime.combine(target, time.min, tzinfo=tz)
+    end_local = start_local + timedelta(days=1)
+    return (
+        start_local.astimezone(timezone.utc).replace(tzinfo=None),
+        end_local.astimezone(timezone.utc).replace(tzinfo=None),
+    )
 
 
 def _parse_cursor(cursor: str) -> tuple[datetime, int]:
@@ -89,6 +112,11 @@ async def list_detections(
         "the standard 'is blurry' threshold of <30, or pass min_sharpness=100 to "
         "see only crisper-than-average crops.",
     ),
+    diversity: bool = Query(
+        False,
+        description="Diversity-First mode: returns the single best crop per species per day, "
+        "with daily_count of sightings for that species on that day.",
+    ),
     before: str | None = Query(
         None,
         description="Cursor for pagination, format: '<captured_at_iso>|<detection_id>'. "
@@ -102,12 +130,43 @@ async def list_detections(
     # these can differ by many hours — an old visit just processed shouldn't pop
     # to the top of the feed. Detection.id desc as a tiebreaker keeps the order
     # deterministic when multiple visits share a started_at second.
-    q = (
-        db.query(Detection)
-        .join(Visit, Detection.visit_id == Visit.id)
-        .options(joinedload(Detection.species), joinedload(Detection.visit))
-        .order_by(desc(Visit.started_at), desc(Detection.id))
-    )
+    daily_counts: dict[int, int] = {}
+    if diversity:
+        tz_offset = _camera_tz_offset_str()
+        day_expr = func.date(Visit.started_at, tz_offset)
+        quality_expr = func.coalesce(Detection.sharpness, 0) * func.coalesce(Detection.crop_area_px, 0)
+
+        ranked_sub = (
+            select(
+                Detection.id.label("det_id"),
+                func.row_number().over(
+                    partition_by=[Detection.species_id, day_expr],
+                    order_by=[Detection.confidence.desc(), quality_expr.desc(), Detection.id.desc()],
+                ).label("rn"),
+                func.count().over(
+                    partition_by=[Detection.species_id, day_expr],
+                ).label("daily_count"),
+            )
+            .join(Visit, Detection.visit_id == Visit.id)
+            .where(Detection.species_id.isnot(None))
+            .subquery()
+        )
+
+        q = (
+            db.query(Detection, ranked_sub.c.daily_count)
+            .join(ranked_sub, Detection.id == ranked_sub.c.det_id)
+            .join(Visit, Detection.visit_id == Visit.id)
+            .options(joinedload(Detection.species), joinedload(Detection.visit))
+            .filter(ranked_sub.c.rn == 1)
+            .order_by(desc(Visit.started_at), desc(Detection.id))
+        )
+    else:
+        q = (
+            db.query(Detection)
+            .join(Visit, Detection.visit_id == Visit.id)
+            .options(joinedload(Detection.species), joinedload(Detection.visit))
+            .order_by(desc(Visit.started_at), desc(Detection.id))
+        )
     if species_id is not None:
         q = q.filter(Detection.species_id == species_id)
     if species_name is not None:
@@ -215,7 +274,12 @@ async def list_detections(
                 and_(Visit.started_at == cur_ts, Detection.id < cur_id),
             )
         )
-    rows = q.limit(limit).all()
+    if diversity:
+        results = q.limit(limit).all()
+        rows = [r[0] for r in results]
+        daily_counts = {r[0].id: int(r[1]) for r in results}
+    else:
+        rows = q.limit(limit).all()
 
     # Look up Correction.{source,rationale} for each detection in the page
     # in one shot — we want to surface a small "✨ Claude says: ..." line
@@ -259,6 +323,7 @@ async def list_detections(
             "captured_at": d.visit.started_at.isoformat() if d.visit else d.created_at.isoformat(),
             "created_at": d.created_at.isoformat(),
             "cursor": f"{(d.visit.started_at if d.visit else d.created_at).isoformat()}|{d.id}",
+            "daily_count": daily_counts.get(d.id, 1),
             # New fields for spot-checking LLM-generated labels. Both
             # null on legacy / user-via-UI corrections.
             "correction_source": (corrections_by_det.get(d.id).source if corrections_by_det.get(d.id) else None),
@@ -290,6 +355,135 @@ async def list_detections(
         }
         for d in rows
     ]
+
+
+@router.get("/daily_story")
+async def get_daily_story(
+    target_date: str | None = Query(None, description="ISO date YYYY-MM-DD (defaults to camera-local today)"),
+    db: Session = Depends(get_db),
+) -> dict:
+    tz = _tz()
+    today_local = datetime.now(tz).date()
+
+    if target_date:
+        try:
+            target = _date.fromisoformat(target_date)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid date format, expected YYYY-MM-DD") from exc
+        is_today = (target == today_local)
+    else:
+        target = today_local
+        is_today = True
+
+    start_utc, end_utc = _local_day_bounds(target)
+
+    # Fetch detections for the day
+    dets = (
+        db.query(Detection)
+        .join(Visit, Detection.visit_id == Visit.id)
+        .join(Species, Detection.species_id == Species.id)
+        .filter(Visit.started_at >= start_utc, Visit.started_at < end_utc)
+        .filter(~Species.common_name.in_(HIDDEN_FROM_FEED))
+        .options(joinedload(Detection.species), joinedload(Detection.visit))
+        .all()
+    )
+
+    fallback_date: str | None = None
+    if not target_date and not dets:
+        latest_visit = (
+            db.query(Visit.started_at)
+            .join(Detection, Detection.visit_id == Visit.id)
+            .join(Species, Detection.species_id == Species.id)
+            .filter(~Species.common_name.in_(HIDDEN_FROM_FEED))
+            .order_by(Visit.started_at.desc())
+            .first()
+        )
+        if latest_visit and latest_visit[0]:
+            fallback_target = latest_visit[0].replace(tzinfo=timezone.utc).astimezone(tz).date()
+            if fallback_target != target:
+                fallback_date = fallback_target.isoformat()
+                fb_start, fb_end = _local_day_bounds(fallback_target)
+                dets = (
+                    db.query(Detection)
+                    .join(Visit, Detection.visit_id == Visit.id)
+                    .join(Species, Detection.species_id == Species.id)
+                    .filter(Visit.started_at >= fb_start, Visit.started_at < fb_end)
+                    .filter(~Species.common_name.in_(HIDDEN_FROM_FEED))
+                    .options(joinedload(Detection.species), joinedload(Detection.visit))
+                    .all()
+                )
+                target = fallback_target
+                is_today = False
+
+    if not dets:
+        return {
+            "date": target.isoformat(),
+            "is_today": is_today,
+            "has_data": False,
+            "fallback_date": fallback_date,
+            "total_visits": 0,
+            "total_detections": 0,
+            "species_count": 0,
+            "hero": None,
+            "species_highlights": [],
+        }
+
+    species_map: dict[int, list[Detection]] = defaultdict(list)
+    for d in dets:
+        if d.species_id:
+            species_map[d.species_id].append(d)
+
+    resident_names = {"Mourning Dove", "Rock Pigeon", "House Sparrow", "Sparrow"}
+
+    def _score_det(d: Detection) -> float:
+        conf = d.confidence or 0.0
+        sharp_norm = min((d.sharpness or 0.0) / 1000.0, 1.0)
+        is_res = (d.species and d.species.common_name in resident_names)
+        rarity_bonus = 0.05 if is_res else 0.20
+        return conf * 0.40 + sharp_norm * 0.40 + rarity_bonus
+
+    hero_det = max(dets, key=_score_det)
+
+    highlights = []
+    for sp_id, group in species_map.items():
+        best = max(group, key=lambda d: (d.confidence, (d.sharpness or 0) * (d.crop_area_px or 0)))
+        highlights.append({
+            "species_id": sp_id,
+            "common_name": best.species.common_name if best.species else "Unknown",
+            "scientific_name": best.species.scientific_name if best.species else "",
+            "count": len(group),
+            "best_detection_id": best.id,
+            "best_crop_url": f"/media/{best.crop_path}",
+            "confidence": best.confidence,
+            "sharpness": best.sharpness,
+            "captured_at": (best.visit.started_at if best.visit else best.created_at).isoformat(),
+            "is_resident": (best.species.common_name in resident_names) if best.species else False,
+        })
+
+    highlights.sort(key=lambda h: (h["is_resident"], -h["count"]))
+
+    hero_dict = {
+        "id": hero_det.id,
+        "species": hero_det.species.common_name if hero_det.species else "Unknown",
+        "scientific_name": hero_det.species.scientific_name if hero_det.species else "",
+        "confidence": hero_det.confidence,
+        "sharpness": hero_det.sharpness,
+        "crop_url": f"/media/{hero_det.crop_path}",
+        "captured_at": (hero_det.visit.started_at if hero_det.visit else hero_det.created_at).isoformat(),
+        "reason": "Highest visual clarity and confidence today",
+    }
+
+    return {
+        "date": target.isoformat(),
+        "is_today": is_today,
+        "has_data": True,
+        "fallback_date": fallback_date,
+        "total_visits": len({d.visit_id for d in dets}),
+        "total_detections": len(dets),
+        "species_count": len(species_map),
+        "hero": hero_dict,
+        "species_highlights": highlights,
+    }
 
 
 @router.get("/visits/{visit_id}")

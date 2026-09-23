@@ -27,8 +27,9 @@ type DetectionCardProps = {
   // "Wrong species?" row for a Confirm / NAB / Change row.
   reviewMode?: boolean;
   // When >1, this card stands in for a collapsed burst of crops from the
-  // same visit (the "Best only" view). Drives a small "1 of N" badge.
+  // same visit (the "Best only" view) or a daily diversity rollup.
   seriesCount?: number;
+  seriesLabel?: string;
 };
 
 // Confidence → tier. Drives the ribbon under the crop and the dot in the
@@ -46,6 +47,7 @@ export default function DetectionCard({
   onToggleSelect,
   reviewMode = false,
   seriesCount = 1,
+  seriesLabel,
 }: DetectionCardProps) {
   const selectable = selected !== undefined && onToggleSelect !== undefined;
   const showToast = useToast();
@@ -294,9 +296,9 @@ export default function DetectionCard({
         {seriesCount > 1 && (
           <span
             className="absolute left-2 bottom-2 z-[3] rounded-full bg-surface/85 px-2 py-0.5 text-[10px] font-semibold text-muted backdrop-blur-sm"
-            title={`Best of ${seriesCount} crops from this visit`}
+            title={seriesLabel ?? `Best of ${seriesCount} crops from this visit`}
           >
-            1 of {seriesCount}
+            {seriesLabel ?? `1 of ${seriesCount}`}
           </span>
         )}
         <div className={`fg-confbar tier-${tier}`} aria-hidden>

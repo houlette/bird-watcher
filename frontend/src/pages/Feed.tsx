@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 
 import BulkActionBar from "../components/BulkActionBar";
+import DailyStoryBulletin from "../components/DailyStoryBulletin";
 import DetectionCard from "../components/DetectionCard";
 import FilterPicker, { type Filter } from "../components/FilterPicker";
 import { fetchDetections, type Detection } from "../lib/api";
@@ -16,38 +17,63 @@ type Props = {
   surface?: "feed" | "review";
 };
 
-// "Best only" collapse: keep one card per (visit, species). A motion burst
-// often yields a dozen near-identical crops of the same bird; this folds
-// them to the single best one. Keyed by species too so a visit that caught
-// two different birds doesn't silently drop one of them.
+// "Best only" scoring: fused confidence first; tie-break on sharpness×area.
 function bestScore(d: Detection): [number, number] {
-  // Fused confidence first; tie-break on sharpness×area (a crisp, large
-  // crop beats a blurry speck at the same confidence).
   return [d.confidence, (d.sharpness ?? 0) * (d.crop_area_px ?? 0)];
 }
 
-function collapseBestPerVisit(
+// Encounter rollup: collapses consecutive sightings of the same species within
+// 15 minutes of each other into a single behavioral encounter story.
+function collapseEncounters(
   dets: Detection[],
-): { det: Detection; count: number }[] {
-  const groups = new Map<string, { best: Detection; count: number }>();
-  const order: string[] = [];
+  windowMinutes: number = 15,
+): { det: Detection; count: number; label?: string }[] {
+  if (dets.length === 0) return [];
+  const windowMs = windowMinutes * 60 * 1000;
+  const encounters: {
+    best: Detection;
+    count: number;
+    firstTime: Date;
+    lastTime: Date;
+    speciesId: number | null;
+  }[] = [];
+
   for (const d of dets) {
-    const key = `${d.visit_id}:${d.species_id ?? "u"}`;
-    const g = groups.get(key);
-    if (!g) {
-      groups.set(key, { best: d, count: 1 });
-      order.push(key);
-    } else {
-      g.count += 1;
+    const curTime = new Date(d.captured_at + "Z");
+    const lastEncounter =
+      encounters.length > 0 ? encounters[encounters.length - 1] : null;
+
+    if (
+      lastEncounter &&
+      lastEncounter.speciesId === d.species_id &&
+      Math.abs(lastEncounter.lastTime.getTime() - curTime.getTime()) <= windowMs
+    ) {
+      lastEncounter.count += 1;
+      if (curTime < lastEncounter.firstTime) lastEncounter.firstTime = curTime;
+      if (curTime > lastEncounter.lastTime) lastEncounter.lastTime = curTime;
+
       const [c1, q1] = bestScore(d);
-      const [c0, q0] = bestScore(g.best);
-      if (c1 > c0 || (c1 === c0 && q1 > q0)) g.best = d;
+      const [c0, q0] = bestScore(lastEncounter.best);
+      if (c1 > c0 || (c1 === c0 && q1 > q0)) lastEncounter.best = d;
+    } else {
+      encounters.push({
+        best: d,
+        count: 1,
+        firstTime: curTime,
+        lastTime: curTime,
+        speciesId: d.species_id,
+      });
     }
   }
-  return order.map((k) => {
-    const g = groups.get(k)!;
-    return { det: g.best, count: g.count };
-  });
+
+  return encounters.map((enc) => ({
+    det: enc.best,
+    count: enc.count,
+    label:
+      enc.count > 1
+        ? `${enc.count} in encounter`
+        : undefined,
+  }));
 }
 
 export default function Feed({ surface = "feed" }: Props = {}) {
@@ -71,15 +97,12 @@ export default function Feed({ surface = "feed" }: Props = {}) {
   // Persisted per surface: Feed unmounts on every tab switch, and losing a
   // species or review-queue filter on each round-trip made multi-page
   // review workflows painful. Feed and Review keep separate filters so they
-  // don't clobber each other. We also validate the stored mode against the
-  // surface's own filter set — a filter from the wrong surface (or a stale
-  // value left by an older build) falls back to the default rather than
-  // showing an option the picker can't even offer.
+  // don't clobber each other.
   const storageKey = isReview ? "bw-review-filter" : "bw-feed-filter";
-  const defaultFilter: Filter = isReview ? { mode: "nab" } : { mode: "all" };
+  const defaultFilter: Filter = isReview ? { mode: "nab" } : { mode: "diversity" };
   const allowedModes = isReview
     ? new Set(["awaiting_review", "nab", "bad_quality", "binary_nab"])
-    : new Set(["all", "interesting", "unidentified", "species"]);
+    : new Set(["diversity", "all", "interesting", "unidentified", "species"]);
   const [filter, setFilter] = useState<Filter>(() => {
     try {
       const raw = sessionStorage.getItem(storageKey);
@@ -117,6 +140,8 @@ export default function Feed({ surface = "feed" }: Props = {}) {
     }
   }, [bestOnly]);
 
+  const isDiversity = filter.mode === "diversity";
+
   const {
     data,
     isLoading,
@@ -131,6 +156,7 @@ export default function Feed({ surface = "feed" }: Props = {}) {
       fetchDetections({
         limit: PAGE_SIZE,
         before: pageParam || undefined,
+        diversity: isDiversity,
         only_not_a_bird: filter.mode === "nab",
         only_unidentified: filter.mode === "unidentified",
         interesting: filter.mode === "interesting",
@@ -171,20 +197,30 @@ export default function Feed({ surface = "feed" }: Props = {}) {
   }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   const rawDetections = useMemo(() => data?.pages.flat() ?? [], [data]);
-  // Best-only collapses across the whole loaded list (a visit's crops are
-  // contiguous in the captured-at ordering, so even one split across a page
-  // boundary regroups once both pages are in).
-  const cards = useMemo(
-    () =>
-      bestOnly && !isReview
-        ? collapseBestPerVisit(rawDetections)
-        : rawDetections.map((det) => ({ det, count: 1 })),
-    [rawDetections, bestOnly, isReview],
-  );
+
+  const cards = useMemo(() => {
+    if (isReview) {
+      return rawDetections.map((det) => ({ det, count: 1, label: undefined }));
+    }
+    if (isDiversity) {
+      return rawDetections.map((det) => ({
+        det,
+        count: det.daily_count ?? 1,
+        label:
+          det.daily_count && det.daily_count > 1
+            ? `Best of ${det.daily_count} today`
+            : undefined,
+      }));
+    }
+    if (bestOnly) {
+      return collapseEncounters(rawDetections, 15);
+    }
+    return rawDetections.map((det) => ({ det, count: 1, label: undefined }));
+  }, [rawDetections, isReview, isDiversity, bestOnly]);
 
   if (error) return <p className="text-rust mt-4">Failed to load detections.</p>;
 
-  const isFiltered = filter.mode !== "all";
+  const isFiltered = filter.mode !== "all" && filter.mode !== "diversity";
 
   // Sticky toolbar — filter (left) + Best-only + Select (right). Negative
   // margins so the blurred sticky background covers the full content width.
@@ -196,7 +232,7 @@ export default function Feed({ surface = "feed" }: Props = {}) {
         surface={surface}
       />
       <div className="flex items-center gap-2">
-        {!isReview && (
+        {!isReview && !isDiversity && (
           <button
             className={`rounded-full px-3.5 py-1.5 text-[12.5px] font-semibold border transition-colors ${
               bestOnly
@@ -206,7 +242,7 @@ export default function Feed({ surface = "feed" }: Props = {}) {
             style={bestOnly ? { background: "var(--accent)" } : undefined}
             onClick={() => setBestOnly((b) => !b)}
             aria-pressed={bestOnly}
-            title="Collapse bursts to the single best crop of each bird per visit"
+            title="Collapse bursts to encounters within 15 minutes"
           >
             Best only
           </button>
@@ -229,6 +265,18 @@ export default function Feed({ surface = "feed" }: Props = {}) {
 
   return (
     <div>
+      {!isReview && (
+        <DailyStoryBulletin
+          selectedSpecies={filter.mode === "species" ? filter.name : undefined}
+          onSelectSpecies={(name) => {
+            if (name) {
+              setFilter({ mode: "species", name });
+            } else {
+              setFilter({ mode: "diversity" });
+            }
+          }}
+        />
+      )}
       {toolbar}
       {filter.mode === "nab" && (
         <div className="mt-3 mb-3 px-3.5 py-2.5 rounded-card border border-[color-mix(in_oklab,var(--rust)_35%,var(--line))] bg-[color-mix(in_oklab,var(--rust)_8%,var(--card))] text-sm text-ink">
@@ -249,7 +297,7 @@ export default function Feed({ surface = "feed" }: Props = {}) {
                 ? "No NAB labels to review."
                 : isFiltered
                   ? "No matches for this filter."
-                  : "No birds yet."}
+                  : "No birds yet today."}
           </p>
           <p className="text-sm text-faint mt-1.5">
             {filter.mode === "nab"
@@ -264,7 +312,7 @@ export default function Feed({ surface = "feed" }: Props = {}) {
           {/* Multi-column grid: shrinking each crop smooths over the feeder-cam's
               motion blur / low resolution. */}
           <div className="mt-3 grid gap-3.5 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-            {cards.map(({ det, count }) => (
+            {cards.map(({ det, count, label }) => (
               <DetectionCard
                 key={det.id}
                 detection={det}
@@ -272,6 +320,7 @@ export default function Feed({ surface = "feed" }: Props = {}) {
                 onToggleSelect={batchMode ? () => toggleSelect(det.id) : undefined}
                 reviewMode={filter.mode === "awaiting_review"}
                 seriesCount={count}
+                seriesLabel={label}
               />
             ))}
           </div>
@@ -288,7 +337,7 @@ export default function Feed({ surface = "feed" }: Props = {}) {
               : hasNextPage
                 ? "Scroll for more"
                 : `— end of feed · ${cards.length} ${
-                    bestOnly ? "bird" : "detection"
+                    isDiversity ? "species" : bestOnly ? "encounter" : "detection"
                   }${cards.length === 1 ? "" : "s"} —`}
           </div>
         </>

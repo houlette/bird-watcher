@@ -11,6 +11,7 @@ import { ChevronIcon } from "./FieldIcons";
  * row closes the modal.
  */
 export type Filter =
+  | { mode: "diversity" } // Today's Story: one best photo per species per day
   | { mode: "all" }
   | { mode: "interesting" } // hides junk feeder regulars (pigeons/doves/sparrows)
   | { mode: "unidentified" }
@@ -31,6 +32,8 @@ type Props = {
 
 export function filterLabel(f: Filter): string {
   switch (f.mode) {
+    case "diversity":
+      return "Today's Story";
     case "all":
       return "All birds";
     case "interesting":
@@ -54,7 +57,12 @@ type PinnedEntry = { filter: Filter; label: string; hint?: string };
 
 // Everyday feed filters.
 const FEED_PINNED: PinnedEntry[] = [
-  { filter: { mode: "all" }, label: "All birds" },
+  {
+    filter: { mode: "diversity" },
+    label: "Today's Story",
+    hint: "diversity view · best of each species",
+  },
+  { filter: { mode: "all" }, label: "All birds", hint: "chronological stream" },
   {
     filter: { mode: "interesting" },
     label: "Interesting birds",
