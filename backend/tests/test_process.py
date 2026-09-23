@@ -300,3 +300,121 @@ def test_process_visit_with_motion_gated_tiles_enabled(db, tmp_path, monkeypatch
         assert detected_tiles[0] == [(0, 0, 100, 100)]
     finally:
         session.close()
+
+
+def test_tiered_confidence_floor_demotions(db, tmp_path, monkeypatch):
+    """Verify tiered confidence floor:
+    - Regional species with visual conf 0.28 (< 0.35) without audio is demoted to Unidentified.
+    - Out-of-range species with visual conf 0.50 (< 0.80) without audio is demoted to Unidentified.
+    - Regional species with visual conf 0.40 (>= 0.35) without audio is accepted.
+    - Out-of-range species with visual conf 0.85 (>= 0.80) without audio is accepted.
+    - Audio-confirmed species with visual conf 0.25 (>= 0.20) is accepted.
+    """
+    from pipeline.classify import SpeciesPrediction
+    from pipeline.fuse import FusedPrediction
+
+    visit, session = _make_visit(db, tmp_path)
+    try:
+        fake_frame_image = np.zeros((100, 100, 3), dtype=np.uint8)
+
+        @dataclass
+        class _Frame:
+            index: int = 0
+            timestamp: float = 0.0
+            image: np.ndarray = None
+
+        tracked_det = _FakeDetection()
+        monkeypatch.setattr(process_module, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(process_module, "extract_frames", lambda _p, **_k: iter([_Frame(image=fake_frame_image)]))
+        monkeypatch.setattr(process_module, "detect_birds", lambda _img, _idx, **_k: [tracked_det])
+        monkeypatch.setattr(process_module, "Tracker", lambda: _FakeTracker([_FakeTrack(track_id=1, detections=[tracked_det])]))
+        monkeypatch.setattr(process_module, "_save_crop", lambda _d, *, visit_id, track_id: Path(f"crops/v{visit_id}_t{track_id}.jpg"))
+        monkeypatch.setattr(process_module, "_rank_detections", lambda track: list(track.detections))
+        monkeypatch.setattr(process_module, "_extract_crop_from_image", lambda _d, _img, padding=0.15: fake_frame_image)
+        monkeypatch.setattr(process_module, "_save_source_frames", lambda *_a, **_k: None)
+        monkeypatch.setattr(process_module, "dispatch_for_detection", lambda *_a, **_k: 0)
+        monkeypatch.setattr(process_module, "binary_filter_enabled", lambda: False)
+
+        # 1. Regional species @ 0.28 (< 0.35) without audio -> demoted to Unidentified
+        monkeypatch.setattr(
+            process_module, "classify_bird",
+            lambda _img: [SpeciesPrediction(species="Song Sparrow", probability=0.28, raw_label="Song Sparrow")],
+        )
+        monkeypatch.setattr(
+            process_module, "fuse",
+            lambda preds, **_k: [FusedPrediction(species=preds[0][0], probability=preds[0][1], audio_confirmed=False, seasonal_boost=1.0)],
+        )
+        process_module.process_visit(visit, session)
+        d1 = session.query(Detection).filter_by(visit_id=visit.id).first()
+        assert d1.species_id is None
+        assert d1.confidence == 0.0
+
+        # 2. Out-of-range species @ 0.50 (< 0.80) without audio -> demoted to Unidentified
+        session.query(Detection).delete()
+        session.commit()
+        monkeypatch.setattr(
+            process_module, "classify_bird",
+            lambda _img: [SpeciesPrediction(species="Inca Dove", probability=0.50, raw_label="Inca Dove")],
+        )
+        monkeypatch.setattr(
+            process_module, "fuse",
+            lambda preds, **_k: [FusedPrediction(species=preds[0][0], probability=preds[0][1], audio_confirmed=False, seasonal_boost=1.0)],
+        )
+        process_module.process_visit(visit, session)
+        d2 = session.query(Detection).filter_by(visit_id=visit.id).first()
+        assert d2.species_id is None
+        assert d2.confidence == 0.0
+
+        # 3. Regional species @ 0.40 (>= 0.35) without audio -> accepted
+        session.query(Detection).delete()
+        session.commit()
+        monkeypatch.setattr(
+            process_module, "classify_bird",
+            lambda _img: [SpeciesPrediction(species="Song Sparrow", probability=0.40, raw_label="Song Sparrow")],
+        )
+        monkeypatch.setattr(
+            process_module, "fuse",
+            lambda preds, **_k: [FusedPrediction(species=preds[0][0], probability=preds[0][1], audio_confirmed=False, seasonal_boost=1.0)],
+        )
+        process_module.process_visit(visit, session)
+        d3 = session.query(Detection).filter_by(visit_id=visit.id).first()
+        assert d3.species is not None
+        assert d3.species.common_name == "Song Sparrow"
+        assert d3.confidence == 0.40
+
+        # 4. Out-of-range species @ 0.85 (>= 0.80) without audio -> accepted
+        session.query(Detection).delete()
+        session.commit()
+        monkeypatch.setattr(
+            process_module, "classify_bird",
+            lambda _img: [SpeciesPrediction(species="Inca Dove", probability=0.85, raw_label="Inca Dove")],
+        )
+        monkeypatch.setattr(
+            process_module, "fuse",
+            lambda preds, **_k: [FusedPrediction(species=preds[0][0], probability=preds[0][1], audio_confirmed=False, seasonal_boost=1.0)],
+        )
+        process_module.process_visit(visit, session)
+        d4 = session.query(Detection).filter_by(visit_id=visit.id).first()
+        assert d4.species is not None
+        assert d4.species.common_name == "Inca Dove"
+        assert d4.confidence == 0.85
+
+        # 5. Audio-confirmed @ 0.25 (>= 0.20) -> accepted
+        session.query(Detection).delete()
+        session.commit()
+        monkeypatch.setattr(
+            process_module, "classify_bird",
+            lambda _img: [SpeciesPrediction(species="Inca Dove", probability=0.25, raw_label="Inca Dove")],
+        )
+        monkeypatch.setattr(
+            process_module, "fuse",
+            lambda preds, **_k: [FusedPrediction(species=preds[0][0], probability=preds[0][1], audio_confirmed=True, seasonal_boost=1.0)],
+        )
+        process_module.process_visit(visit, session)
+        d5 = session.query(Detection).filter_by(visit_id=visit.id).first()
+        assert d5.species is not None
+        assert d5.species.common_name == "Inca Dove"
+        assert bool(d5.audio_confirmed) is True
+    finally:
+        session.close()
+

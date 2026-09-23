@@ -29,7 +29,7 @@ from pipeline.classify import SpeciesPrediction, classify_bird
 from pipeline.detect import BirdDetection, _tile_offsets, detect_birds
 from pipeline.exceptions import SkipFile
 from pipeline.frames import IMAGE_EXTS, extract_frames
-from pipeline.fuse import FusedPrediction, fuse
+from pipeline.fuse import FusedPrediction, fuse, is_regional_species
 from pipeline.motion_tiles import select_active_tiles_hardened
 from pipeline.notify import dispatch_for_detection
 from pipeline.backdrop import filter_detections as _backdrop_filter
@@ -510,20 +510,36 @@ def process_visit(visit: Visit, db: Session) -> int:
                     seasonal_boost=1.0,
                 )
 
-        # Confidence floor: when visual classifier has <20% confidence on its top guess
-        # and audio did not confirm, do not hallucinate a specific species.
-        # Mark as Unidentified (species=None) so the user feed is not polluted.
-        if top.species != NOT_A_BIRD_LABEL and not is_audio_confirmed and top_visual_p < 0.20:
-            log.info(
-                "track %d: weak visual confidence (%.2f < 0.20) without audio; marking as Unidentified",
-                track.track_id, top_visual_p,
-            )
-            top = FusedPrediction(
-                species=None,
-                probability=0.0,
-                audio_confirmed=False,
-                seasonal_boost=1.0,
-            )
+        # Tiered confidence floor:
+        # - Audio confirmed: accept down to 0.20 (multi-modal confirmation of bird in yard).
+        # - Not audio confirmed:
+        #   * Regional / yard species: require visual confidence >= 0.35 (reject weak blurry noise).
+        #   * Non-regional / out-of-range: require visual confidence >= 0.80 (prevent visual hallucination
+        #     of rare vagrants; mark as Unidentified so user can manually review via the picker).
+        if top.species and top.species != NOT_A_BIRD_LABEL:
+            should_demote = False
+            demote_reason = ""
+            if is_audio_confirmed:
+                if top_visual_p < 0.20:
+                    should_demote = True
+                    demote_reason = f"weak visual confidence with audio confirmation ({top_visual_p:.2f} < 0.20)"
+            else:
+                regional = is_regional_species(top.species)
+                if regional and top_visual_p < 0.35:
+                    should_demote = True
+                    demote_reason = f"weak visual confidence for regional species {top.species} ({top_visual_p:.2f} < 0.35) without audio"
+                elif not regional and top_visual_p < 0.80:
+                    should_demote = True
+                    demote_reason = f"non-regional species {top.species} requires >= 0.80 visual confidence without audio (got {top_visual_p:.2f})"
+
+            if should_demote:
+                log.info("track %d: %s; marking as Unidentified", track.track_id, demote_reason)
+                top = FusedPrediction(
+                    species=None,
+                    probability=0.0,
+                    audio_confirmed=False,
+                    seasonal_boost=1.0,
+                )
 
         pending.append({
             "species_name": top.species,

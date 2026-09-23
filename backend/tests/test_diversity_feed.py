@@ -142,3 +142,89 @@ def test_get_daily_story_endpoint(client, db_session, monkeypatch):
     assert data["species_count"] == 2
     assert data["hero"]["species"] == "Northern Cardinal"  # highest score
     assert len(data["species_highlights"]) == 2
+
+
+def test_diversity_feed_filters_unconfirmed_low_confidence_rarity(client, db_session, monkeypatch):
+    """1-off unconfirmed detections with confidence < 0.60 are excluded from diversity feed."""
+    monkeypatch.setattr(settings, "camera_timezone", "America/New_York")
+
+    cardinal = Species(common_name="Northern Cardinal", scientific_name="Cardinalis cardinalis", is_rare=False)
+    inca_dove = Species(common_name="Inca Dove", scientific_name="Columbina inca", is_rare=True)
+    db_session.add_all([cardinal, inca_dove])
+    db_session.commit()
+
+    t = datetime(2026, 7, 10, 10, 0, 0)
+    v = Visit(started_at=t, clip_path="clips/v.mp4")
+    db_session.add(v)
+    db_session.commit()
+
+    # Confident cardinal
+    d_card = Detection(
+        visit_id=v.id, species_id=cardinal.id, confidence=0.92,
+        sharpness=300.0, crop_area_px=1500, bbox=[0, 0, 10, 10], track_id=1,
+        crop_path="crops/card.jpg", raw_predictions=[], audio_confirmed=False, created_at=t,
+    )
+    # Low-confidence 1-off unconfirmed Inca Dove (e.g. 0.45)
+    d_inca = Detection(
+        visit_id=v.id, species_id=inca_dove.id, confidence=0.45,
+        sharpness=500.0, crop_area_px=1200, bbox=[0, 0, 10, 10], track_id=2,
+        crop_path="crops/inca.jpg", raw_predictions=[], audio_confirmed=False, created_at=t,
+    )
+    db_session.add_all([d_card, d_inca])
+    db_session.commit()
+
+    # In diversity mode, Inca Dove is suppressed because count=1, audio=False, conf < 0.60
+    res = client.get("/api/detections?diversity=true")
+    assert res.status_code == 200
+    items = res.json()
+    species_in_feed = [item["species"] for item in items]
+    assert "Northern Cardinal" in species_in_feed
+    assert "Inca Dove" not in species_in_feed
+
+    # But if user explicitly requests species_id=inca_dove.id, it is returned
+    res_direct = client.get(f"/api/detections?diversity=true&species_id={inca_dove.id}")
+    assert res_direct.status_code == 200
+    assert len(res_direct.json()) == 1
+
+
+def test_daily_story_filters_unconfirmed_low_confidence_rarity(client, db_session, monkeypatch):
+    """Daily story does not make a 1-off 0.45 unconfirmed rarity Hero of the Day or put it in highlights."""
+    monkeypatch.setattr(settings, "camera_timezone", "America/New_York")
+
+    cardinal = Species(common_name="Northern Cardinal", scientific_name="Cardinalis cardinalis", is_rare=False)
+    inca_dove = Species(common_name="Inca Dove", scientific_name="Columbina inca", is_rare=True)
+    db_session.add_all([cardinal, inca_dove])
+    db_session.commit()
+
+    t = datetime(2026, 7, 10, 10, 0, 0)
+    v = Visit(started_at=t, clip_path="clips/v.mp4")
+    db_session.add(v)
+    db_session.commit()
+
+    # Confident cardinal (conf 0.85, sharpness 300)
+    d_card = Detection(
+        visit_id=v.id, species_id=cardinal.id, confidence=0.85,
+        sharpness=300.0, crop_area_px=1500, bbox=[0, 0, 10, 10], track_id=1,
+        crop_path="crops/card.jpg", raw_predictions=[], audio_confirmed=False, created_at=t,
+    )
+    # 1-off unconfirmed Inca Dove (conf 0.45, high sharpness 900)
+    d_inca = Detection(
+        visit_id=v.id, species_id=inca_dove.id, confidence=0.45,
+        sharpness=900.0, crop_area_px=1200, bbox=[0, 0, 10, 10], track_id=2,
+        crop_path="crops/inca.jpg", raw_predictions=[], audio_confirmed=False, created_at=t,
+    )
+    db_session.add_all([d_card, d_inca])
+    db_session.commit()
+
+    res = client.get("/api/detections/daily_story?target_date=2026-07-10")
+    assert res.status_code == 200
+    data = res.json()
+
+    # Hero MUST be Northern Cardinal, not Inca Dove!
+    assert data["hero"]["species"] == "Northern Cardinal"
+
+    # Highlights should only contain Northern Cardinal, suppressing 1-off < 0.60 unconfirmed Inca Dove
+    highlight_species = [h["common_name"] for h in data["species_highlights"]]
+    assert "Northern Cardinal" in highlight_species
+    assert "Inca Dove" not in highlight_species
+

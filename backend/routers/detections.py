@@ -158,8 +158,18 @@ async def list_detections(
             .join(Visit, Detection.visit_id == Visit.id)
             .options(joinedload(Detection.species), joinedload(Detection.visit))
             .filter(ranked_sub.c.rn == 1)
-            .order_by(desc(Visit.started_at), desc(Detection.id))
         )
+        if species_id is None and species_name is None:
+            # Diversity-First feed guard: suppress 1-off unconfirmed sightings
+            # with low confidence (< 0.60) from dominating the feed
+            q = q.filter(
+                or_(
+                    ranked_sub.c.daily_count > 1,
+                    Detection.audio_confirmed.is_(True),
+                    Detection.confidence >= 0.60,
+                )
+            )
+        q = q.order_by(desc(Visit.started_at), desc(Detection.id))
     else:
         q = (
             db.query(Detection)
@@ -438,18 +448,35 @@ async def get_daily_story(
     def _score_det(d: Detection) -> float:
         conf = d.confidence or 0.0
         sharp_norm = min((d.sharpness or 0.0) / 1000.0, 1.0)
-        is_res = (d.species and d.species.common_name in resident_names)
-        rarity_bonus = 0.05 if is_res else 0.20
+        is_res = bool(d.species and d.species.common_name in resident_names)
+        # Rarity bonus is only earned by reliable sightings (high confidence or audio confirmed)
+        if not is_res and (conf >= 0.70 or d.audio_confirmed):
+            rarity_bonus = 0.20
+        elif is_res:
+            rarity_bonus = 0.05
+        else:
+            rarity_bonus = 0.0
         return conf * 0.40 + sharp_norm * 0.40 + rarity_bonus
 
-    hero_det = max(dets, key=_score_det)
+    # Eligible hero candidate pool: require confidence >= 0.60 or audio confirmation to be eligible
+    eligible_hero_dets = [
+        d for d in dets
+        if d.audio_confirmed or (d.confidence or 0.0) >= 0.60
+    ]
+    hero_det = max(eligible_hero_dets or dets, key=_score_det)
 
     highlights = []
     for sp_id, group in species_map.items():
         best = max(group, key=lambda d: (d.confidence, (d.sharpness or 0) * (d.crop_area_px or 0)))
+        sp_name = best.species.common_name if best.species else "Unknown"
+        is_res = sp_name in resident_names
+        is_audio = any(d.audio_confirmed for d in group)
+        # Guard against 1-off unconfirmed non-resident low confidence sightings in the highlights gallery
+        if not is_res and not is_audio and len(group) == 1 and (best.confidence or 0.0) < 0.60:
+            continue
         highlights.append({
             "species_id": sp_id,
-            "common_name": best.species.common_name if best.species else "Unknown",
+            "common_name": sp_name,
             "scientific_name": best.species.scientific_name if best.species else "",
             "count": len(group),
             "best_detection_id": best.id,
@@ -457,7 +484,7 @@ async def get_daily_story(
             "confidence": best.confidence,
             "sharpness": best.sharpness,
             "captured_at": (best.visit.started_at if best.visit else best.created_at).isoformat(),
-            "is_resident": (best.species.common_name in resident_names) if best.species else False,
+            "is_resident": is_res,
         })
 
     highlights.sort(key=lambda h: (h["is_resident"], -h["count"]))

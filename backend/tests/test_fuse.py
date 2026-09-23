@@ -153,3 +153,60 @@ def test_audio_boost_magnitude():
     # subjective but we encode the design intent.
     assert AUDIO_BOOST >= 2.0
     assert AUDIO_BOOST <= 5.0
+
+
+def test_is_regional_species():
+    from pipeline.fuse import is_regional_species
+
+    # Common Eastern NA backyard / Massachusetts species
+    assert is_regional_species("Northern Cardinal") is True
+    assert is_regional_species("Mourning Dove") is True
+    assert is_regional_species("Black-capped Chickadee") is True
+    assert is_regional_species("Blue Jay") is True
+    assert is_regional_species("Song Sparrow") is True
+
+    # Generic family labels
+    assert is_regional_species("Sparrow") is True
+    assert is_regional_species("Woodpecker") is True
+    assert is_regional_species("Hawk") is True
+
+    # Desert / Southwestern / Western birds not in regional yard baseline
+    assert is_regional_species("Inca Dove") is False
+    assert is_regional_species("White-winged Dove") is False
+    assert is_regional_species("Harris's Sparrow") is False
+    assert is_regional_species("Pyrrhuloxia") is False
+    assert is_regional_species("Phainopepla") is False
+    assert is_regional_species("Pelagic Cormorant") is False
+
+    # Edge cases
+    assert is_regional_species("") is False
+    assert is_regional_species(None) is False
+
+
+def test_out_of_range_downweight_allows_local_species_to_win(db, monkeypatch):
+    """When an out-of-range species (Inca Dove) leads visually over a local species (Mourning Dove),
+    the 20x vagrant penalty (0.05) lets the true local species win."""
+    monkeypatch.setattr("pipeline.fuse.settings.haikubox_api_key", "")
+    monkeypatch.setattr("pipeline.fuse.settings.haikubox_serial", "")
+
+    # Inca Dove @ 45% vs Mourning Dove @ 35%
+    fused = fuse([("Inca Dove", 0.45), ("Mourning Dove", 0.35), ("Rock Pigeon", 0.20)], db=db)
+    assert fused[0].species == "Mourning Dove"
+    assert fused[0].probability > 0.60
+    # Inca Dove is heavily penalized
+    inca = next(f for f in fused if f.species == "Inca Dove")
+    assert inca.probability < 0.10
+
+
+def test_out_of_range_audio_confirmed_wins(db, monkeypatch):
+    """If Haikubox confirms the rare visitor, it receives the audio boost and no vagrant penalty."""
+    monkeypatch.setattr("pipeline.fuse.settings.haikubox_api_key", "fake")
+    monkeypatch.setattr("pipeline.fuse.settings.haikubox_serial", "fake")
+    now = datetime(2026, 5, 1, 12, 0, 0)
+    db.add(HaikuboxDetection(species_common_name="Inca Dove", detected_at=now - timedelta(seconds=10)))
+    db.commit()
+
+    fused = fuse([("Inca Dove", 0.45), ("Mourning Dove", 0.35)], db=db, when=now)
+    assert fused[0].species == "Inca Dove"
+    assert fused[0].audio_confirmed is True
+
