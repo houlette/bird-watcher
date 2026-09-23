@@ -13,6 +13,7 @@ from pipeline.dimorphism import (
 def test_is_dimorphic_species():
     assert is_dimorphic_species("Northern Cardinal") is True
     assert is_dimorphic_species("House Finch") is True
+    assert is_dimorphic_species("House Sparrow") is True
     assert is_dimorphic_species("Downy Woodpecker") is True
     assert is_dimorphic_species("Hairy Woodpecker") is True
     assert is_dimorphic_species("Rose-breasted Grosbeak") is True
@@ -84,6 +85,26 @@ def test_female_woodpecker_synthetic():
     assert res.sex == "female"
     assert res.confidence >= 0.80
     assert res.method == "woodpecker_plain_head"
+
+
+def test_male_house_sparrow_synthetic():
+    # Synthetic male House Sparrow: buff body with prominent black throat bib
+    img = np.full((100, 100, 3), (120, 130, 140), dtype=np.uint8)
+    # Black bib on chest (y: 30 to 60, x: 35 to 65) -> 30x30 = 900 pixels of dark
+    img[30:60, 35:65] = (20, 20, 20)
+    res = classify_sex(img, "House Sparrow")
+    assert res.sex == "male"
+    assert res.confidence >= 0.70
+    assert res.method == "house_sparrow_black_bib"
+
+
+def test_female_house_sparrow_synthetic():
+    # Synthetic female House Sparrow: uniform plain buffy-gray, zero black bib
+    img = np.full((100, 100, 3), (120, 130, 140), dtype=np.uint8)
+    res = classify_sex(img, "House Sparrow")
+    assert res.sex == "female"
+    assert res.confidence >= 0.80
+    assert res.method == "house_sparrow_plain_buff"
 
 
 def test_monomorphic_species_returns_none():

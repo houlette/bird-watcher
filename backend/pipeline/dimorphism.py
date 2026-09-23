@@ -21,6 +21,7 @@ import numpy as np
 DIMORPHIC_SPECIES: frozenset[str] = frozenset({
     "Northern Cardinal",
     "House Finch",
+    "House Sparrow",
     "Downy Woodpecker",
     "Hairy Woodpecker",
     "Rose-breasted Grosbeak",
@@ -203,6 +204,61 @@ def _classify_grosbeak(img: np.ndarray) -> SexResult:
     return SexResult(sex=None, confidence=0.0, method="grosbeak_ambiguous", details=details)
 
 
+def _classify_house_sparrow(img: np.ndarray) -> SexResult:
+    """House Sparrow: Male has black throat bib and chestnut nape; female is plain buff-gray."""
+    h, w = img.shape[:2]
+    if h < 20 or w < 20:
+        return SexResult(sex=None, confidence=0.0, method="house_sparrow_too_small")
+
+    # Upper-mid chest area (15% to 75% height, 15% to 85% width)
+    chest = img[int(h * 0.15) : int(h * 0.75), int(w * 0.15) : int(w * 0.85)]
+    if chest.size == 0:
+        return SexResult(sex=None, confidence=0.0, method="house_sparrow_crop_empty")
+
+    hsv_chest = cv2.cvtColor(chest, cv2.COLOR_BGR2HSV)
+
+    # Black bib: low value in HSV and low RGB channels
+    dark_mask = (
+        (hsv_chest[:, :, 2] < 55)
+        & (chest[:, :, 0] < 65)
+        & (chest[:, :, 1] < 65)
+        & (chest[:, :, 2] < 70)
+    )
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(dark_mask.astype(np.uint8))
+    max_dark_cluster = int(max([s[cv2.CC_STAT_AREA] for i, s in enumerate(stats) if i > 0], default=0))
+    dark_pct = (max_dark_cluster / (h * w)) * 100.0
+
+    # Upper half head area for chestnut post-ocular / nape band
+    head = img[0 : int(h * 0.55), :]
+    hsv_head = cv2.cvtColor(head, cv2.COLOR_BGR2HSV)
+    chestnut_mask = (
+        (hsv_head[:, :, 0] >= 7)
+        & (hsv_head[:, :, 0] <= 24)
+        & (hsv_head[:, :, 1] >= 55)
+        & (hsv_head[:, :, 2] >= 45)
+        & (hsv_head[:, :, 2] <= 190)
+    )
+    num_c, _, c_stats, _ = cv2.connectedComponentsWithStats(chestnut_mask.astype(np.uint8))
+    max_chestnut_cluster = int(max([s[cv2.CC_STAT_AREA] for i, s in enumerate(c_stats) if i > 0], default=0))
+
+    details = {
+        "max_dark_cluster": max_dark_cluster,
+        "dark_pct": round(dark_pct, 2),
+        "max_chestnut_cluster": max_chestnut_cluster,
+    }
+
+    # Male: significant black bib cluster or combination of bib + chestnut
+    if max_dark_cluster >= 200 or dark_pct >= 2.2 or (max_dark_cluster >= 80 and max_chestnut_cluster >= 60):
+        conf = min(0.70 + (dark_pct / 5.0), 0.98)
+        return SexResult(sex="male", confidence=round(conf, 2), method="house_sparrow_black_bib", details=details)
+
+    # Female: clean buff/gray throat with no black bib and no chestnut
+    if max_dark_cluster <= 35 and dark_pct < 0.4 and max_chestnut_cluster <= 50:
+        return SexResult(sex="female", confidence=0.85, method="house_sparrow_plain_buff", details=details)
+
+    return SexResult(sex=None, confidence=0.0, method="house_sparrow_ambiguous", details=details)
+
+
 def classify_sex(crop: np.ndarray | None, species_name: str | None) -> SexResult:
     """Classify the sex of a detected bird from its crop if the species is sexually dimorphic.
 
@@ -218,6 +274,8 @@ def classify_sex(crop: np.ndarray | None, species_name: str | None) -> SexResult
         return _classify_cardinal(crop)
     elif norm == "house finch":
         return _classify_finch(crop)
+    elif norm == "house sparrow":
+        return _classify_house_sparrow(crop)
     elif norm in {"downy woodpecker", "hairy woodpecker"}:
         return _classify_woodpecker(crop)
     elif norm == "rose-breasted grosbeak":

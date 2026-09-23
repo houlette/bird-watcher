@@ -105,7 +105,7 @@ export function FeederScience() {
           </div>
 
           <div className="pt-2 border-t border-line/40 text-[11px] text-faint">
-            Classifies scarlet vs. olive in Cardinals, red bibs in Finches, and red nape spots in Woodpeckers.
+            Classifies scarlet vs. olive in Cardinals, red bibs in Finches, black bibs in House Sparrows, and red nape spots in Woodpeckers.
           </div>
         </section>
 
