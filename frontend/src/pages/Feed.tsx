@@ -55,6 +55,16 @@ function formatEncounterTime(first: Date, last: Date): string {
   return `${datePrefix}${tFirst} – ${tLast} (${formatDuration(diffMinutes)})`;
 }
 
+function formatSectionHeading(section: { isToday: boolean; daysAgo: number; date: Date }): string {
+  if (section.isToday) return "Today";
+  if (section.daysAgo === 1) return "Yesterday";
+  return section.date.toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+}
+
 type EncounterCard = {
   det: Detection;
   count: number;
@@ -292,16 +302,32 @@ export default function Feed({ surface = "feed" }: Props = {}) {
       }));
     }
     if (isDiversity) {
-      return rawDetections.map((det) => ({
-        det,
-        count: det.daily_count ?? 1,
-        label:
-          det.daily_count && det.daily_count > 1
-            ? `Best of ${det.daily_count} today`
-            : undefined,
-        timeRange: undefined,
-        allCrops: [det],
-      }));
+      const now = new Date();
+      const todayYear = now.getFullYear();
+      const todayMonth = now.getMonth();
+      const todayDate = now.getDate();
+
+      return rawDetections.map((det) => {
+        const ts = det.captured_at;
+        const d = new Date(ts.endsWith("Z") ? ts : ts + "Z");
+        const isToday =
+          d.getFullYear() === todayYear &&
+          d.getMonth() === todayMonth &&
+          d.getDate() === todayDate;
+
+        return {
+          det,
+          count: det.daily_count ?? 1,
+          label:
+            det.daily_count && det.daily_count > 1
+              ? isToday
+                ? `Best of ${det.daily_count} today`
+                : `Best of ${det.daily_count}`
+              : undefined,
+          timeRange: undefined,
+          allCrops: [det],
+        };
+      });
     }
     if (rollups) {
       return collapseEncounters(rawDetections, 15);
@@ -314,6 +340,45 @@ export default function Feed({ surface = "feed" }: Props = {}) {
       allCrops: [det],
     }));
   }, [rawDetections, isReview, isDiversity, rollups]);
+
+  const daySections = useMemo(() => {
+    const sections: {
+      dateKey: string;
+      date: Date;
+      isToday: boolean;
+      daysAgo: number;
+      cards: typeof cards;
+    }[] = [];
+    const byDate = new Map<string, typeof cards>();
+    const now = new Date();
+    const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    for (const card of cards) {
+      const ts = card.det.captured_at;
+      const d = new Date(ts.endsWith("Z") ? ts : ts + "Z");
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+      let group = byDate.get(key);
+      if (!group) {
+        group = [];
+        byDate.set(key, group);
+        const midnight = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+        const daysAgo = Math.max(
+          0,
+          Math.round((todayMidnight.getTime() - midnight.getTime()) / (24 * 3600 * 1000)),
+        );
+        sections.push({
+          dateKey: key,
+          date: d,
+          isToday: daysAgo === 0,
+          daysAgo,
+          cards: group,
+        });
+      }
+      group.push(card);
+    }
+    return sections;
+  }, [cards]);
 
   if (error) return <p className="text-rust mt-4">Failed to load detections.</p>;
 
@@ -366,18 +431,6 @@ export default function Feed({ surface = "feed" }: Props = {}) {
 
   return (
     <div>
-      {!isReview && (
-        <DailyStoryBulletin
-          selectedSpecies={filter.mode === "species" ? filter.name : undefined}
-          onSelectSpecies={(name) => {
-            if (name) {
-              setFilter({ mode: "species", name });
-            } else {
-              setFilter({ mode: "diversity" });
-            }
-          }}
-        />
-      )}
       {toolbar}
       {filter.mode === "nab" && (
         <div className="mt-3 mb-3 px-3.5 py-2.5 rounded-card border border-[color-mix(in_oklab,var(--rust)_35%,var(--line))] bg-[color-mix(in_oklab,var(--rust)_8%,var(--card))] text-sm text-ink">
@@ -390,43 +443,78 @@ export default function Feed({ surface = "feed" }: Props = {}) {
       {isLoading ? (
         <p className="text-muted mt-4">Loading…</p>
       ) : cards.length === 0 ? (
-        <div className="text-center py-14">
-          <p className="font-serif italic text-xl text-muted">
-            {filter.mode === "species"
-              ? `No matches for "${filter.name}".`
-              : filter.mode === "nab"
-                ? "No NAB labels to review."
+        <>
+          {!isReview && (
+            <DailyStoryBulletin
+              selectedSpecies={filter.mode === "species" ? filter.name : undefined}
+              onSelectSpecies={(name) => {
+                if (name) {
+                  setFilter({ mode: "species", name });
+                } else {
+                  setFilter({ mode: "diversity" });
+                }
+              }}
+            />
+          )}
+          <div className="text-center py-14">
+            <p className="font-serif italic text-xl text-muted">
+              {filter.mode === "species"
+                ? `No matches for "${filter.name}".`
+                : filter.mode === "nab"
+                  ? "No NAB labels to review."
+                  : isFiltered
+                    ? "No matches for this filter."
+                    : "No birds yet today."}
+            </p>
+            <p className="text-sm text-faint mt-1.5">
+              {filter.mode === "nab"
+                ? "If you mark a detection as 'Not a bird' in the feed, it will appear here for review."
                 : isFiltered
-                  ? "No matches for this filter."
-                  : "No birds yet today."}
-          </p>
-          <p className="text-sm text-faint mt-1.5">
-            {filter.mode === "nab"
-              ? "If you mark a detection as 'Not a bird' in the feed, it will appear here for review."
-              : isFiltered
-                ? "Try changing the filter at the top."
-                : "Once the camera fires a motion event, detections will appear here."}
-          </p>
-        </div>
+                  ? "Try changing the filter at the top."
+                  : "Once the camera fires a motion event, detections will appear here."}
+            </p>
+          </div>
+        </>
       ) : (
         <>
-          {/* Multi-column grid: shrinking each crop smooths over the feeder-cam's
-              motion blur / low resolution. */}
-          <div className="mt-3 grid gap-3.5 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-            {cards.map(({ det, count, label, timeRange, allCrops }) => (
-              <DetectionCard
-                key={det.id}
-                detection={det}
-                selected={batchMode ? selectedIds.has(det.id) : undefined}
-                onToggleSelect={batchMode ? () => toggleSelect(det.id) : undefined}
-                reviewMode={filter.mode === "awaiting_review"}
-                seriesCount={count}
-                seriesLabel={label}
-                timeRange={timeRange}
-                encounterCrops={allCrops}
-              />
-            ))}
-          </div>
+          {daySections.map((section, idx) => (
+            <section key={section.dateKey} className={idx > 0 ? "mt-8" : "mt-2"}>
+              {!isReview && (
+                <DailyStoryBulletin
+                  targetDate={section.isToday ? undefined : section.dateKey}
+                  defaultCollapsed={section.daysAgo > 1}
+                  selectedSpecies={filter.mode === "species" ? filter.name : undefined}
+                  onSelectSpecies={(name) => {
+                    if (name) {
+                      setFilter({ mode: "species", name });
+                    } else {
+                      setFilter({ mode: "diversity" });
+                    }
+                  }}
+                />
+              )}
+              {isReview && (
+                <div className="text-xs font-semibold text-faint uppercase tracking-wider mb-3">
+                  {formatSectionHeading(section)}
+                </div>
+              )}
+              <div className="grid gap-3.5 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+                {section.cards.map(({ det, count, label, timeRange, allCrops }) => (
+                  <DetectionCard
+                    key={det.id}
+                    detection={det}
+                    selected={batchMode ? selectedIds.has(det.id) : undefined}
+                    onToggleSelect={batchMode ? () => toggleSelect(det.id) : undefined}
+                    reviewMode={filter.mode === "awaiting_review"}
+                    seriesCount={count}
+                    seriesLabel={label}
+                    timeRange={timeRange}
+                    encounterCrops={allCrops}
+                  />
+                ))}
+              </div>
+            </section>
+          ))}
           {batchMode && (
             <BulkActionBar selectedIds={[...selectedIds]} onClear={exitBatchMode} />
           )}

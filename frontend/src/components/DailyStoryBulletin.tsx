@@ -5,21 +5,47 @@ import { fetchDailyStory, type DailyStory } from "../lib/api";
 import { ChevronIcon } from "./FieldIcons";
 
 type Props = {
+  targetDate?: string;
   selectedSpecies?: string;
   onSelectSpecies: (name: string | null) => void;
+  defaultCollapsed?: boolean;
 };
 
+function formatStoryHeading(isoDate: string, isToday: boolean): string {
+  if (isToday) return "Today's Yard Story";
+  try {
+    const [y, m, d] = isoDate.split("-").map(Number);
+    const dateObj = new Date(y, m - 1, d);
+    const now = new Date();
+    const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const diffDays = Math.round((todayMidnight.getTime() - dateObj.getTime()) / (24 * 3600 * 1000));
+    const formatted = dateObj.toLocaleDateString(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+    });
+    if (diffDays === 1) {
+      return `Yesterday's Yard Story · ${formatted}`;
+    }
+    return `Yard Story · ${formatted}`;
+  } catch {
+    return `Feeder Story · ${isoDate}`;
+  }
+}
+
 export default function DailyStoryBulletin({
+  targetDate,
   selectedSpecies,
   onSelectSpecies,
+  defaultCollapsed = false,
 }: Props) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
 
   const { data: story, isLoading, error } = useQuery<DailyStory>({
-    queryKey: ["daily_story"],
-    queryFn: () => fetchDailyStory(),
-    staleTime: 60_000,
-    refetchInterval: 60_000,
+    queryKey: ["daily_story", targetDate ?? "today"],
+    queryFn: () => fetchDailyStory(targetDate),
+    staleTime: targetDate ? Infinity : 60_000,
+    refetchInterval: targetDate ? false : 60_000,
   });
 
   if (isLoading || error || !story || !story.has_data || !story.hero) {
@@ -40,10 +66,10 @@ export default function DailyStoryBulletin({
           {story.is_today ? (
             <span className="fg-livedot" aria-hidden />
           ) : (
-            <span className="inline-block w-2 h-2 rounded-full bg-faint" aria-hidden />
+            <span className="inline-block w-2 h-2 rounded-full bg-leaf/40" aria-hidden />
           )}
           <span className="fg-overline">
-            {story.is_today ? "Today's Yard Story" : `Feeder Story · ${story.date}`}
+            {formatStoryHeading(story.date, story.is_today)}
           </span>
           {!story.is_today && story.fallback_date && (
             <span className="text-[11px] text-muted italic">
