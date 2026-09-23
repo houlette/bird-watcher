@@ -30,6 +30,8 @@ type DetectionCardProps = {
   // same visit (the "Best only" view) or a daily diversity rollup.
   seriesCount?: number;
   seriesLabel?: string;
+  timeRange?: string;
+  encounterCrops?: Detection[];
 };
 
 // Confidence → tier. Drives the ribbon under the crop and the dot in the
@@ -48,13 +50,22 @@ export default function DetectionCard({
   reviewMode = false,
   seriesCount = 1,
   seriesLabel,
+  timeRange,
+  encounterCrops,
 }: DetectionCardProps) {
+  const [selectedCrop, setSelectedCrop] = useState<Detection | null>(null);
+  const currentDet =
+    selectedCrop && encounterCrops?.some((c) => c.id === selectedCrop.id)
+      ? selectedCrop
+      : detection;
+
   const selectable = selected !== undefined && onToggleSelect !== undefined;
   const showToast = useToast();
   // Show CAPTURE time (when the camera saw the bird). The API tags
   // captured_at as naive UTC; append 'Z' so JS parses it as UTC and
   // toLocaleString converts to the viewer's zone.
-  const time = new Date(detection.captured_at + "Z").toLocaleString();
+  const captureTime = new Date(currentDet.captured_at + "Z").toLocaleString();
+  const displayTime = timeRange ?? captureTime;
   const [pickerOpen, setPickerOpen] = useState(false);
   const [zoomOpen, setZoomOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -182,9 +193,9 @@ export default function DetectionCard({
     };
   }, []);
 
-  const identified = detection.species !== null;
-  const pct = Math.round(detection.confidence * 100);
-  const tier = confTier(detection.confidence);
+  const identified = currentDet.species !== null;
+  const pct = Math.round(currentDet.confidence * 100);
+  const tier = confTier(currentDet.confidence);
 
   // Undo backs the toast shown after any correction/confirmation: delete
   // the Correction row that action created and restore the prior species.
@@ -211,7 +222,7 @@ export default function DetectionCard({
   };
 
   const correctionMutation = useMutation({
-    mutationFn: (species: string) => submitCorrection(detection.id, species),
+    mutationFn: (species: string) => submitCorrection(currentDet.id, species),
     onSuccess: (data, species) => {
       queryClient.invalidateQueries({ queryKey: ["detections"] });
       setPickerOpen(false);
@@ -226,9 +237,9 @@ export default function DetectionCard({
   });
 
   const isAwaitingClassifierReview =
-    reviewMode && detection.species !== null && detection.correction_source === null;
+    reviewMode && currentDet.species !== null && currentDet.correction_source === null;
   const confirmMutation = useMutation({
-    mutationFn: () => confirmClassifierLabel(detection.id),
+    mutationFn: () => confirmClassifierLabel(currentDet.id),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["detections"] });
       offerUndo(
@@ -277,14 +288,14 @@ export default function DetectionCard({
         onClick={selectable ? onToggleSelect : () => setZoomOpen(true)}
       >
         <img
-          src={detection.crop_url}
+          src={currentDet.crop_url}
           aria-hidden
           className="absolute inset-0 w-full h-full object-cover blur-2xl scale-110 opacity-30 saturate-[.85]"
           loading="lazy"
         />
         <img
-          src={detection.crop_url}
-          alt={detection.species ?? "bird"}
+          src={currentDet.crop_url}
+          alt={currentDet.species ?? "bird"}
           className="relative w-full h-full object-contain"
           loading="lazy"
         />
@@ -309,17 +320,17 @@ export default function DetectionCard({
       {/* Review mode: stack the proposed species' reference photo below the
           crop at the same size for a direct A/B compare. */}
       {isAwaitingClassifierReview &&
-        detection.reference_image_url && (
+        currentDet.reference_image_url && (
           <div className="relative w-full aspect-[4/3] overflow-hidden border-t border-line">
             <img
-              src={detection.reference_image_url}
+              src={currentDet.reference_image_url}
               aria-hidden
               className="absolute inset-0 w-full h-full object-cover blur-2xl scale-110 opacity-50"
               loading="lazy"
             />
             <img
-              src={detection.reference_image_url}
-              alt={detection.species ? `${detection.species} reference photo` : "reference"}
+              src={currentDet.reference_image_url}
+              alt={currentDet.species ? `${currentDet.species} reference photo` : "reference"}
               className="relative w-full h-full object-contain"
               loading="lazy"
               onError={(e) => {
@@ -337,14 +348,14 @@ export default function DetectionCard({
           <div className="min-w-0 flex-1">
             {/* Identified species link to their plate page (all sightings of
                 that species); sentinels and Unidentified stay plain text. */}
-            {identified && detection.species_id != null ? (
+            {identified && currentDet.species_id != null ? (
               <Link
-                to={`/species/${detection.species_id}`}
+                to={`/species/${currentDet.species_id}`}
                 className={`font-serif text-ink font-medium hover:text-leaf hover:underline underline-offset-2 transition-colors inline ${
                   compact ? "text-sm" : "text-[16px]"
                 }`}
               >
-                {detection.species}
+                {currentDet.species}
               </Link>
             ) : (
               <span
@@ -352,7 +363,7 @@ export default function DetectionCard({
                   identified ? "text-ink font-medium" : "text-muted italic"
                 } ${compact ? "text-sm" : "text-[16px]"}`}
               >
-                {detection.species ?? "Unidentified"}
+                {currentDet.species ?? "Unidentified"}
               </span>
             )}
           </div>
@@ -408,13 +419,56 @@ export default function DetectionCard({
               />
               {pct}%
             </span>
-          ) : detection.correction_source?.startsWith("llm-claude") ? (
+          ) : currentDet.correction_source?.startsWith("llm-claude") ? (
             <span className="fg-overline text-leaf" title="Labeled by Claude, not the on-device classifier">
               AI label
             </span>
           ) : null}
-          <span className="text-faint tnum">{time}</span>
+          <span className="text-faint tnum" title={`Captured: ${captureTime}`}>
+            {displayTime}
+          </span>
         </div>
+
+        {encounterCrops && encounterCrops.length > 1 && (
+          <div className="mt-2 pt-1.5 border-t border-line/60 flex items-center gap-1.5 overflow-x-auto py-0.5 scrollbar-none">
+            <span className="text-[10px] uppercase tracking-wider font-semibold text-faint shrink-0">
+              Shots:
+            </span>
+            {encounterCrops.slice(0, 5).map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedCrop(c);
+                }}
+                className={`relative w-6 h-6 rounded overflow-hidden border transition-all shrink-0 ${
+                  c.id === currentDet.id
+                    ? "border-leaf ring-1 ring-leaf scale-105"
+                    : "border-line opacity-60 hover:opacity-100 hover:border-leaf"
+                }`}
+                title={`${Math.round(c.confidence * 100)}% conf · ${new Date(
+                  c.captured_at + "Z"
+                ).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}`}
+              >
+                <img
+                  src={c.crop_url}
+                  alt=""
+                  className="w-full h-full object-cover"
+                  loading="lazy"
+                />
+              </button>
+            ))}
+            {encounterCrops.length > 5 && (
+              <span
+                className="text-[10px] font-semibold text-muted bg-panel px-1.5 py-0.5 rounded shrink-0 border border-line"
+                title={`${encounterCrops.length - 5} more shots in this encounter`}
+              >
+                +{encounterCrops.length - 5}
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Quick-review row: Confirm / NAB / Poor quality / Change.
             Four columns. Poor quality retires the crop from any review
@@ -528,7 +582,7 @@ export default function DetectionCard({
             </div>
 
             {/* Audio Confirmation */}
-            {detection.audio_confirmed && (
+            {currentDet.audio_confirmed && (
               <div className="flex items-center gap-2 text-leaf font-medium text-xs">
                 <AudioBadge />
                 <span className="text-[11px] text-muted">Heard by Haikubox within 90s</span>
@@ -536,13 +590,13 @@ export default function DetectionCard({
             )}
 
             {/* Enhancements / Computational Photography */}
-            {(detection.has_lucky || detection.has_sr || detection.has_sisr) && (
+            {(currentDet.has_lucky || currentDet.has_sr || currentDet.has_sisr) && (
               <div className="space-y-1">
                 <div className="text-[10px] font-semibold uppercase tracking-wider text-muted">
                   Enhancement
                 </div>
                 <div className="flex flex-col gap-1 text-[11px]">
-                  {detection.has_lucky && (
+                  {currentDet.has_lucky && (
                     <div className="flex items-center gap-1.5">
                       <span className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-800 dark:text-amber-300 border border-amber-600/25 dark:border-amber-500/35 bg-amber-500/10 leading-none shrink-0">
                         ★ lucky
@@ -550,7 +604,7 @@ export default function DetectionCard({
                       <span className="text-muted">Sharpest burst frame selected</span>
                     </div>
                   )}
-                  {detection.has_sr && (
+                  {currentDet.has_sr && (
                     <div className="flex items-center gap-1.5">
                       <span className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-purple-800 dark:text-purple-300 border border-purple-600/25 dark:border-purple-500/35 bg-purple-500/10 leading-none shrink-0">
                         2× sr
@@ -558,7 +612,7 @@ export default function DetectionCard({
                       <span className="text-muted">Multi-frame super-resolution</span>
                     </div>
                   )}
-                  {detection.has_sisr && (
+                  {currentDet.has_sisr && (
                     <div className="flex items-center gap-1.5">
                       <span className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-indigo-800 dark:text-indigo-300 border border-indigo-600/25 dark:border-indigo-500/35 bg-indigo-500/10 leading-none shrink-0">
                         2× neural
@@ -571,14 +625,14 @@ export default function DetectionCard({
             )}
 
             {/* Quality Metrics */}
-            {detection.crop_area_px != null &&
-              detection.brightness != null &&
-              detection.sharpness != null &&
+            {currentDet.crop_area_px != null &&
+              currentDet.brightness != null &&
+              currentDet.sharpness != null &&
               (() => {
-                const maxDim = Math.round(Math.sqrt(detection.crop_area_px!));
+                const maxDim = Math.round(Math.sqrt(currentDet.crop_area_px!));
                 const isSmall = maxDim < 80;
-                const isDark = detection.brightness! < 30;
-                const isBlurry = detection.sharpness! < 30;
+                const isDark = currentDet.brightness! < 30;
+                const isBlurry = currentDet.sharpness! < 30;
                 const anyBad = isSmall || isDark || isBlurry;
                 const cls = (bad: boolean) => (bad ? "text-rust font-semibold" : "text-ink");
                 return (
@@ -594,9 +648,9 @@ export default function DetectionCard({
                     <div className="flex items-center gap-x-2 text-[11px] tnum text-muted">
                       <span className={cls(isSmall)}>{maxDim}px</span>
                       <span className="text-line">·</span>
-                      <span className={cls(isDark)}>lum {Math.round(detection.brightness!)}</span>
+                      <span className={cls(isDark)}>lum {Math.round(currentDet.brightness!)}</span>
                       <span className="text-line">·</span>
-                      <span className={cls(isBlurry)}>shp {Math.round(detection.sharpness!)}</span>
+                      <span className={cls(isBlurry)}>shp {Math.round(currentDet.sharpness!)}</span>
                     </div>
                   </div>
                 );
@@ -604,8 +658,8 @@ export default function DetectionCard({
 
             {/* Alternative Predictions */}
             {(() => {
-              const alts = (detection.raw_predictions ?? [])
-                .filter((p) => p.species && p.species !== detection.species && p.p >= 0.02)
+              const alts = (currentDet.raw_predictions ?? [])
+                .filter((p) => p.species && p.species !== currentDet.species && p.p >= 0.02)
                 .slice(0, 3);
               if (alts.length === 0) return null;
               return (
@@ -628,31 +682,31 @@ export default function DetectionCard({
             })()}
 
             {/* AI Rationale / Provenance */}
-            {detection.correction_source === "llm-claude" && detection.correction_rationale && (
+            {currentDet.correction_source === "llm-claude" && currentDet.correction_rationale && (
               <div>
                 <div className="text-[10px] font-semibold uppercase tracking-wider text-muted mb-0.5">
                   <span className="text-leaf">AI Rationale</span>
                 </div>
                 <p className="text-[11px] text-ink italic leading-snug">
-                  {detection.correction_rationale}
+                  {currentDet.correction_rationale}
                 </p>
               </div>
             )}
 
             {/* NAB override filter score */}
-            {detection.nab_override_p != null && (
+            {currentDet.nab_override_p != null && (
               <div className="flex items-center justify-between text-[11px] text-muted">
                 <span>NAB filter score:</span>
                 <span className="text-rust font-semibold tnum">
-                  {Math.round(detection.nab_override_p * 100)}%
+                  {Math.round(currentDet.nab_override_p * 100)}%
                 </span>
               </div>
             )}
 
             {/* Footer with visit and track IDs */}
             <div className="text-[10px] text-faint flex justify-between items-center pt-1.5 border-t border-line/60 tnum">
-              <span>Visit #{detection.visit_id}</span>
-              <span>Track #{detection.track_id}</span>
+              <span>Visit #{currentDet.visit_id}</span>
+              <span>Track #{currentDet.track_id}</span>
             </div>
           </div>,
           document.body
@@ -660,24 +714,24 @@ export default function DetectionCard({
 
       <SpeciesPicker
         open={pickerOpen}
-        current={detection.species}
-        suggestions={detection.raw_predictions}
-        cropUrl={detection.crop_url}
+        current={currentDet.species}
+        suggestions={currentDet.raw_predictions}
+        cropUrl={currentDet.crop_url}
         onSelect={(name) => correctionMutation.mutate(name)}
         onCancel={() => setPickerOpen(false)}
       />
       {zoomOpen && (
         <ImageZoom
-          src={detection.crop_url}
-          alt={detection.species ?? "bird"}
-          detectionId={detection.id}
-          species={detection.species}
-          initialSharpness={detection.sharpness}
-          cropAreaPx={detection.crop_area_px}
-          brightness={detection.brightness}
-          hasLucky={detection.has_lucky}
-          hasSr={detection.has_sr}
-          hasSisr={detection.has_sisr}
+          src={currentDet.crop_url}
+          alt={currentDet.species ?? "bird"}
+          detectionId={currentDet.id}
+          species={currentDet.species}
+          initialSharpness={currentDet.sharpness}
+          cropAreaPx={currentDet.crop_area_px}
+          brightness={currentDet.brightness}
+          hasLucky={currentDet.has_lucky}
+          hasSr={currentDet.has_sr}
+          hasSisr={currentDet.has_sisr}
           onClose={() => setZoomOpen(false)}
         />
       )}
