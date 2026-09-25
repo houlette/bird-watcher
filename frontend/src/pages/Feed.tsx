@@ -265,11 +265,40 @@ export default function Feed({ surface = "feed" }: Props = {}) {
     },
   });
 
-  // Refresh the first page periodically so new detections appear at the top.
+  // Track today's calendar date so day rollovers in open tabs update immediately.
+  const [todayKey, setTodayKey] = useState(() => new Date().toDateString());
+
+  // Refresh the first page periodically so new detections appear at the top,
+  // and check for midnight calendar rollovers.
   useEffect(() => {
-    const id = setInterval(() => refetch(), 30_000);
+    const id = setInterval(() => {
+      const current = new Date().toDateString();
+      if (current !== todayKey) {
+        setTodayKey(current);
+      }
+      refetch();
+    }, 30_000);
     return () => clearInterval(id);
-  }, [refetch]);
+  }, [todayKey, refetch]);
+
+  // When returning to an open tab or focusing the window, check for day rollover and refetch.
+  useEffect(() => {
+    const checkRolloverAndRefetch = () => {
+      if (document.visibilityState === "visible") {
+        const current = new Date().toDateString();
+        if (current !== todayKey) {
+          setTodayKey(current);
+        }
+        refetch();
+      }
+    };
+    document.addEventListener("visibilitychange", checkRolloverAndRefetch);
+    window.addEventListener("focus", checkRolloverAndRefetch);
+    return () => {
+      document.removeEventListener("visibilitychange", checkRolloverAndRefetch);
+      window.removeEventListener("focus", checkRolloverAndRefetch);
+    };
+  }, [todayKey, refetch]);
 
   // Infinite-scroll sentinel.
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -339,7 +368,7 @@ export default function Feed({ surface = "feed" }: Props = {}) {
       timeRange: undefined,
       allCrops: [det],
     }));
-  }, [rawDetections, isReview, isDiversity, rollups]);
+  }, [rawDetections, isReview, isDiversity, rollups, todayKey]);
 
   const daySections = useMemo(() => {
     const sections: {
@@ -378,7 +407,7 @@ export default function Feed({ surface = "feed" }: Props = {}) {
       group.push(card);
     }
     return sections;
-  }, [cards]);
+  }, [cards, todayKey]);
 
   if (error) return <p className="text-rust mt-4">Failed to load detections.</p>;
 
@@ -481,6 +510,7 @@ export default function Feed({ surface = "feed" }: Props = {}) {
             <section key={section.dateKey} className={idx > 0 ? "mt-8" : "mt-2"}>
               {!isReview && (
                 <DailyStoryBulletin
+                  key={section.dateKey}
                   targetDate={section.isToday ? undefined : section.dateKey}
                   defaultCollapsed={section.daysAgo > 1}
                   selectedSpecies={filter.mode === "species" ? filter.name : undefined}

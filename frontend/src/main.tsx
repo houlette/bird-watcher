@@ -13,6 +13,20 @@ const queryClient = new QueryClient({
   },
 });
 
+// Auto-reload open tabs when a new service worker takes control after a deploy.
+// Avoid reloading on first visit when there was no previous controller.
+if ("serviceWorker" in navigator) {
+  let hadController = Boolean(navigator.serviceWorker.controller);
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (hadController && !refreshing) {
+      refreshing = true;
+      window.location.reload();
+    }
+    hadController = true;
+  });
+}
+
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>

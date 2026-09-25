@@ -44,8 +44,11 @@ export default function DailyStoryBulletin({
   const { data: story, isLoading, error } = useQuery<DailyStory>({
     queryKey: ["daily_story", targetDate ?? "today"],
     queryFn: () => fetchDailyStory(targetDate),
-    staleTime: targetDate ? Infinity : 60_000,
+    staleTime: targetDate ? 10 * 60_000 : 60_000,
     refetchInterval: targetDate ? false : 60_000,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+    retry: 2,
   });
 
   if (isLoading || error || !story || !story.has_data || !story.hero) {
